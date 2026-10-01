@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from .. import ffmpeg as ff
@@ -117,6 +117,27 @@ def _inside(path: Path, root: Path) -> bool:
         return True
     except (ValueError, OSError):
         return False
+
+
+LUT_MAX_BYTES = 8 * 1024 * 1024
+
+
+@router.get("/luts")
+def lut_text(request: Request, path: str):
+    """The text of a .cube LUT, so the browser preview can apply the same grade the render does. Only .cube files (the render
+    refuses anything else as a LUT) and only inside LUMIERE_FILE_ROOTS when that is set, so this cannot read arbitrary files."""
+    svc = services(request)
+    file = Path(path).expanduser()
+    if file.suffix.lower() != ".cube":
+        raise Refused("Only .cube LUT files can be read here.")
+    roots = list(svc.config.file_roots)
+    if roots and not any(_inside(file, r) for r in roots):
+        raise Refused("That file is outside the allowed folders (LUMIERE_FILE_ROOTS).")
+    if not file.is_file():
+        raise NotFound(f"There is no LUT at {file}.")
+    if file.stat().st_size > LUT_MAX_BYTES:
+        raise Refused("That LUT is too large to preview.")
+    return PlainTextResponse(file.read_text(encoding="utf-8", errors="replace"))
 
 
 @router.get("/fs")

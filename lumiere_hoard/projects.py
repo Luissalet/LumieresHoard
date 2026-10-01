@@ -72,9 +72,10 @@ def view(svc: "Services", project_id: str) -> dict[str, Any]:
     look = media_lookup(svc)
     used = {}
     for mid in sorted(p.media_ids()):
+        media_store.ensure_color_space(svc, mid)
         info = look(mid)
         if info:
-            used[mid] = {k: info[k] for k in ("id", "name", "kind", "duration_ms", "width", "height", "fps", "has_audio", "has_video", "missing", "proxy", "urls")}
+            used[mid] = {k: info[k] for k in ("id", "name", "kind", "duration_ms", "width", "height", "fps", "has_audio", "has_video", "missing", "proxy", "urls", "color_space")}
     can_undo = row["head"] > 1
     can_redo = svc.db.one("SELECT 1 FROM history WHERE project_id = ? AND seq > ?", (project_id, row["head"])) is not None
     return {**summary(svc, row), "doc": p.dump(), "media": used, "issues": validate(p, look), "can_undo": can_undo, "can_redo": can_redo,
