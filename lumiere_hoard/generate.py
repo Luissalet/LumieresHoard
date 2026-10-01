@@ -15,13 +15,26 @@ class GenerationFailed(LumiereError):
     code = "generation_failed"
 
 
+def _chat(svc: Any, messages: list[dict[str, str]], **kwargs: Any) -> Any:
+    """One call to the local model. When it fails (a server that was picked while the usual one was busy, a restart in
+    between), the model probes are forgotten and the call is tried once more against a fresh resolution."""
+    try:
+        return svc.link_sync.chat(messages, **kwargs)
+    except Exception:  # noqa: BLE001
+        forget = getattr(svc, "forget_model_probes", None)
+        if forget is None:
+            raise
+        forget()
+        return svc.link_sync.chat(messages, **kwargs)
+
+
 def chat_json(svc: Any, messages: list[dict[str, str]], parse: Callable[[Any, bool], Any], *, max_tokens: int,
               effort: Optional[str] = "off") -> tuple[Any, Optional[str]]:
     """Ask for JSON, parse it, retry once with the error. Returns (value, model name)."""
 
     def ask(msgs: list[dict[str, str]]) -> tuple[str, Optional[str]]:
         try:
-            result = svc.link_sync.chat(msgs, effort=effort, max_tokens=max_tokens, temperature=0.2)
+            result = _chat(svc, msgs, effort=effort, max_tokens=max_tokens, temperature=0.2)
         except Exception as error:  # noqa: BLE001
             raise ModelUnavailable(f"{type(error).__name__}: {str(error)[:200]}") from error
         return (getattr(result, "text", "") or "").strip(), getattr(result, "model", None)
@@ -67,7 +80,7 @@ def json_from_text(text: str) -> Any:
 
 def chat_text(svc: Any, messages: list[dict[str, str]], *, max_tokens: int = 1500, effort: Optional[str] = "off") -> tuple[str, Optional[str]]:
     try:
-        result = svc.link_sync.chat(messages, effort=effort, max_tokens=max_tokens, temperature=0.3)
+        result = _chat(svc, messages, effort=effort, max_tokens=max_tokens, temperature=0.3)
     except Exception as error:  # noqa: BLE001
         raise ModelUnavailable(f"{type(error).__name__}: {str(error)[:200]}") from error
     return (getattr(result, "text", "") or "").strip(), getattr(result, "model", None)

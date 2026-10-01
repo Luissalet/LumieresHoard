@@ -122,6 +122,12 @@ class Services:
         self._link = Link(link_config)
         return self._link.sync
 
+    def forget_model_probes(self) -> None:
+        """Drop Hoard Link's cached probes so the next call resolves the model again (used after a failed call)."""
+        cache = getattr(self._link, "_cache", None) if self._link is not None else None
+        if isinstance(cache, dict):
+            cache.clear()
+
     def tools(self) -> ff.Tools:
         if self._tools is None:
             self._tools = ff.discover(self.config.ffmpeg, self.config.ffprobe)

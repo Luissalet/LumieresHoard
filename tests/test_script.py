@@ -57,3 +57,27 @@ def test_best_mode_and_missing_segment():
     res = sc.assemble(sc.parse_script(SCRIPT), words, take="best")
     assert [m["segment"] for m in res["missing"]] == [3]
     assert res["segments"][1]["coverage"] >= 0.6
+
+
+def test_a_failed_model_call_is_retried_once_with_fresh_probes():
+    from lumiere_hoard import generate
+
+    calls = []
+
+    class Flaky:
+        def chat(self, messages, **kw):
+            calls.append(kw)
+            if len(calls) == 1:
+                raise RuntimeError("HTTP 404 from a server picked while the usual one was busy")
+            return type("R", (), {"text": "hola", "model": "m"})()
+
+    forgotten = []
+
+    class Svc:
+        link_sync = Flaky()
+
+        def forget_model_probes(self):
+            forgotten.append(1)
+
+    assert generate.chat_text(Svc(), [{"role": "user", "content": "x"}]) == ("hola", "m")
+    assert len(calls) == 2 and forgotten == [1]
