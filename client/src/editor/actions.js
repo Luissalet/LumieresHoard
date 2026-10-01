@@ -2,6 +2,10 @@ import { useCallback, useMemo } from "react";
 import { api } from "../api.js";
 import { clipEnd, findClip, frameMs } from "./time.js";
 
+// The clips copied with Ctrl+C / Ctrl+X: their full JSON, the kind of track they came from and that track's id.
+let clipboard = null;
+export const getClipboard = () => clipboard;
+
 // Timeline actions shared by the toolbar, the inspector and the keyboard.
 export function useActions(ed, { notify, fail, t, jobs }) {
   const { doc, edit, selection, setSelection, pb, reload, projectId } = ed;
@@ -77,7 +81,32 @@ export function useActions(ed, { notify, fail, t, jobs }) {
     } catch (e) { fail(e); }
   }, [selectedClips, projectId, notify, t, jobs, reload, fail]);
 
+  const copy = useCallback(() => {
+    if (!selectedClips.length) return false;
+    const sorted = [...selectedClips].sort((a, b) => a.clip.start - b.clip.start);
+    clipboard = { clips: JSON.parse(JSON.stringify(sorted.map((x) => x.clip))), kind: sorted[0].track.kind, track: sorted[0].track.id };
+    notify(t("copied_n", { n: clipboard.clips.length }), "ok");
+    return true;
+  }, [selectedClips, notify, t]);
+
+  const cut = useCallback(async () => {
+    if (!copy()) return null;
+    return remove(true);
+  }, [copy, remove]);
+
+  const paste = useCallback(async () => {
+    if (!clipboard) { notify(t("paste_empty"), "error"); return null; }
+    const sel = selection.track ? doc.tracks.find((tr) => tr.id === selection.track) : null;
+    const same = (tr) => tr && !tr.locked && tr.kind === clipboard.kind;
+    const target = same(sel) ? sel : same(doc.tracks.find((tr) => tr.id === clipboard.track)) ? doc.tracks.find((tr) => tr.id === clipboard.track) : doc.tracks.find((tr) => same(tr));
+    const op = { op: "insert_clips", clips: clipboard.clips, at: Math.round(pb.t), mode: "overwrite", ...(target ? { track: target.id } : {}) };
+    const res = await edit([op], t("lbl_paste"));
+    const ids = res?.results?.[0]?.clips;
+    if (ids?.length) { setSelection({ ids, track: null }); notify(t("pasted_n", { n: ids.length }), "ok"); }
+    return res;
+  }, [doc.tracks, selection.track, pb, edit, setSelection, notify, t]);
+
   const nudge = useCallback((frames) => pb.seek(pb.t + frames * frameMs(doc.canvas.fps)), [pb, doc.canvas.fps]);
 
-  return { selectedClips, addMedia, split, remove, duplicate, closeGaps, addMarker, detachAudio, freeze, stabilize, nudge };
+  return { selectedClips, addMedia, split, remove, duplicate, closeGaps, addMarker, detachAudio, freeze, stabilize, nudge, copy, cut, paste };
 }

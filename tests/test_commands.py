@@ -165,3 +165,39 @@ def test_model_failure_falls_back_to_rules(services, talk, proj):
     assert plan["source"] == "rules" and plan["steps"][0]["name"] == "remove_silences" and "Sin modelo" in plan["notes"]
     empty = plan_mod.create(services, proj, "hazlo bonito", use_model=False)
     assert not empty["steps"] and empty["notes"]
+
+
+def test_script_assemble_words_and_meaning(tmp_path, media_dir):
+    from lumiere_hoard import media as ms
+
+    answer = json.dumps({"parts": [{"segment": 1, "ranges": [[1, 1]]}, {"segment": 2, "ranges": [[3, 3]]}], "notes": "parte 3 no está"})
+    link = FakeLink(responder=lambda messages: answer)
+    svc = make_services(tmp_path, link=link)
+    svc.start()
+    try:
+        talk = ms.import_path(svc, str(media_dir / "talk.mp4"))["id"]
+        pid = store.create(svc, "Guion", preset="hd720", media=[talk])["id"]
+        words = [(200, 500, "uno"), (600, 900, "dos"), (1000, 1300, "tres"), (4000, 4300, "uno"), (4400, 4700, "dos"), (4800, 5100, "tres"),
+                 (6000, 6300, "cuatro"), (6400, 6700, "cinco"), (6800, 7100, "seis")]
+        fake_transcript(svc, talk, words)
+        t = ms.get_analysis(svc, talk, "transcript")
+        t["segments"] = [{"t0": 0, "t1": 150, "text": "vamos allá"}, {"t0": 200, "t1": 1300, "text": "uno dos tres"},
+                         {"t0": 3000, "t1": 3500, "text": "otra vez"}, {"t0": 4000, "t1": 7100, "text": "uno dos tres cuatro cinco seis"}]
+        ms.put_analysis(svc, talk, "transcript", t)
+        script = "## A\nUno dos tres.\n\n## B\nCuatro cinco seis.\n\n## C\nSiete ocho nueve."
+        res = commands.run(svc, pid, "script_assemble", {"media": talk, "script": script, "mode": "words"})
+        s = res["summary"]
+        assert s["mode"] == "words" and s["segments"] == 2 and [m["segment"] for m in s["missing"]] == [3]
+        clips = sorted(store.doc(svc, pid).main_track().clips, key=lambda c: c.start)
+        assert clips[0].src_in >= 3800  # the second (last) take of A
+        assert [m.label for m in store.doc(svc, pid).markers] == ["A", "B"]
+        with pytest.raises(Exception, match="word for word"):
+            commands.run(svc, pid, "script_assemble", {"media": talk, "script": "## X\nnada que ver con esto aquí.", "mode": "words"})
+        res = commands.run(svc, pid, "script_assemble", {"media": talk, "script": script, "mode": "meaning"})
+        assert res["summary"]["mode"] == "meaning" and res["summary"]["notes"] == "parte 3 no está"
+        clips = sorted(store.doc(svc, pid).main_track().clips, key=lambda c: c.start)
+        assert clips[0].src_in >= 150 and clips[0].src_out <= 3000 and len(link.calls) == 1
+        commands.run(svc, pid, "script_assemble", {"media": talk, "script": script, "mode": "meaning"}, preview=True)
+        assert len(link.calls) == 1  # cached
+    finally:
+        svc.stop()

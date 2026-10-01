@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import { go, useApp } from "../App.jsx";
-import { Bar, Icon, Spinner } from "../components/ui.jsx";
+import { Bar, Icon, Logo, Spinner } from "../components/ui.jsx";
 import JobsDrawer from "../components/JobsDrawer.jsx";
 import ShortcutsDialog from "../components/ShortcutsDialog.jsx";
 import { useActions } from "../editor/actions.js";
@@ -45,6 +45,7 @@ function TopBar({ ed, onExport, onJobs, onHelp }) {
   return (
     <div className="ed-top">
       <button type="button" className="btn btn-ghost btn-icon" onClick={() => go("")} title={t("back")} aria-label={t("back")}><Icon name="back" size={18} /></button>
+      <a href="#/" title="Lumière's Hoard" style={{ display: "flex" }}><Logo size={22} /></a>
       <input className="field" style={{ width: 220, background: "transparent", border: "1px solid transparent", fontWeight: 600, fontSize: 13.5 }} value={name} aria-label={t("project_name")} onChange={(e) => setName(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setName(view.name); e.target.blur(); } }} onFocus={(e) => e.target.select()} />
       <span style={{ width: 1, height: 20, background: "var(--line-2)", margin: "0 4px" }} />
       <button type="button" className="btn btn-ghost btn-icon" disabled={!view.can_undo} onClick={ed.undo} title={`${t("undo")}${view.undo_label ? `: ${view.undo_label}` : ""} (Ctrl+Z)`} aria-label={t("undo")}><Icon name="undo" size={17} /></button>
@@ -155,6 +156,9 @@ function EditorInner({ proj }) {
         if (k.toLowerCase() === "z") { stop(); if (e.shiftKey) cur.redo(); else cur.undo(); }
         else if (k.toLowerCase() === "y") { stop(); cur.redo(); }
         else if (k.toLowerCase() === "d") { stop(); a.duplicate(); }
+        else if (k.toLowerCase() === "c") { stop(); a.copy(); }
+        else if (k.toLowerCase() === "x") { stop(); a.cut(); }
+        else if (k.toLowerCase() === "v") { stop(); a.paste(); }
         else if (k.toLowerCase() === "e") { stop(); setExportOpen(true); }
         else if (k.toLowerCase() === "a") { stop(); setSelection({ ids: cur.doc.tracks.filter((tr) => !tr.locked).flatMap((tr) => tr.clips.map((c) => c.id)), track: null }); }
         return;

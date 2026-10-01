@@ -54,7 +54,7 @@ COMMAND_DOCS = {
     "beat_sync": "args {music: media id, source?: video media id, beats_per_cut?: 2, mode?: 'scenes'|'clips'} — rebuild the main track on the beat",
     "match_loudness": "args {target_lufs?: -16} — same loudness for every clip",
     "zoom_cuts": "args {scale?: 1.12, every?: 2} — punch in on every other clip so jump cuts look like camera changes",
-    "script_assemble": "args {media, script?: text, script_path?: file, take?: 'last'|'best'} — rough cut of a recording read from a script: one take per segment",
+    "script_assemble": "args {media, script?: text, script_path?: file, take?: 'last'|'best', mode?: 'auto'|'words'|'meaning'} — rough cut of a recording read from a script: one take per segment",
 }
 
 OP_DOCS = """Timeline operations (times in ms or '1:23.5'; clip / track / media ids from the context):

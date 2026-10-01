@@ -51,7 +51,7 @@ const es = {
   insp_clip: "Clip", insp_text_clip: "Clip de texto", insp_speed: "Velocidad", insp_audio: "Audio", insp_video: "Imagen", insp_crop: "Recorte", insp_transition: "Transición de entrada",
   insp_effects: "Efectos", insp_keyframes: "Animación (keyframes)", insp_actions: "Acciones", insp_selection_1: "1 clip seleccionado", insp_selection: "{n} clips seleccionados", insp_track: "Pista", insp_project: "Proyecto",
   insp_markers: "Marcadores ({n})", insp_text: "Texto", insp_text_style: "Estilo del texto", src_in: "Entrada del origen", src_out: "Salida del origen", reverse: "Invertir",
-  fade_in: "Fundido de entrada (ms)", fade_out: "Fundido de salida (ms)", fit_contain: "Ajustar (contener)", fit_cover: "Rellenar (recortar)", fit_fill: "Estirar", fit_none: "Tamaño original",
+  fade_in: "Fundido de entrada (ms)", fade_out: "Fundido de salida (ms)", fit_contain: "Ajustar (contener)", fit_cover: "Rellenar (recortar)", fit_blur: "Entero con fondo desenfocado", fit_fill: "Estirar", fit_none: "Tamaño original",
   scale: "Escala", rotation: "Rotación", opacity: "Opacidad", focus_x: "Foco X", focus_y: "Foco Y", reframed: "Con reencuadre automático",
   crop_left: "Izquierda", crop_top: "Arriba", crop_right: "Derecha", crop_bottom: "Abajo",
   tr_none: "Sin transición", fx_add: "Añadir efecto…", fx_no_params: "sin parámetros", kf_help: "Se crea un punto en el cabezal ({t} desde el inicio del clip).", kf_clear: "Quitar animación",
@@ -92,7 +92,7 @@ const es = {
   tool_fillers: "Quitar muletillas", tool_fillers_help: "Corta «eh», «mmm», «o sea» y repeticiones. Necesita la transcripción.", fillers_repeats: "Quitar palabras repetidas", fillers_strict: "Modo estricto",
   tool_scenes: "Cortar por escenas", tool_scenes_help: "Divide la línea de tiempo en los cambios de plano.", scenes_split: "Dividir", scenes_markers: "Solo marcar",
   tool_reframe: "Reencuadrar", tool_reframe_help: "Cambia la proporción y mantiene al sujeto en cuadro.", aspect: "Proporción",
-  reframe_auto: "Automático", reframe_track: "Seguir al sujeto", reframe_stable: "Plano fijo por escena", reframe_center: "Centrado",
+  reframe_auto: "Automático", reframe_track: "Seguir al sujeto", reframe_stable: "Plano fijo por escena", reframe_center: "Centrado", reframe_blur: "Desenfoque de fondo",
   tool_loudness: "Igualar volumen", tool_loudness_help: "Ajusta la ganancia de cada clip al mismo nivel de sonoridad.",
   tool_beat: "Cortar al ritmo", tool_beat_help: "Reconstruye la pista principal con cortes en los pulsos de la música.", beat_music: "Música", beat_clips: "Con los clips actuales", beat_scenes: "Con las escenas de un vídeo",
   beat_source: "Vídeo de origen", beats_per_cut: "Pulsos por corte",
@@ -112,7 +112,10 @@ const es = {
   export_start: "Exportar", export_previous: "Exportaciones anteriores", export_none: "Todavía no has exportado este proyecto.", export_gone: "ya no está",
   qc_ok: "Comprobación correcta", qc_problems: "Con problemas", reveal: "Mostrar en la carpeta", download: "Descargar",
   // shortcuts
-  key_del: "Supr", key_wheel: "rueda", key_drag: "arrastrar borde", sc_play: "Reproducir / pausa", sc_pause: "Pausa", sc_forward: "Reproducir (más rápido si se repite)", sc_back5: "Retroceder 5 s", sc_frame: "Un fotograma", sc_second: "Un segundo",
+copied_n: "{n} clips copiados", copied_n_1: "1 clip copiado", pasted_n: "{n} clips pegados", pasted_n_1: "1 clip pegado", paste_empty: "No hay nada copiado.", lbl_paste: "Pegar",
+  tool_script: "Montaje desde guion", tool_script_help: "Ordena una grabación con repeticiones según el guion: una toma por segmento, en el orden del guion.", script_recording: "Grabación", script_placeholder: "Pega aquí el guion (Markdown con ## secciones, JSON de plan o párrafos)…", script_load: "Cargar archivo…", script_take: "Toma", script_take_last: "Última toma buena", script_take_best: "La más completa", script_markers: "Marcadores por segmento", script_col_title: "Segmento", script_col_at: "En grabación", script_col_takes: "Tomas", script_col_cov: "Cobertura", script_col_cov_short: "Cob.", script_retakes_1: "1 repetición descartada", script_missing: "{n} segmentos sin encontrar", script_missing_1: "1 segmento sin encontrar", script_retakes: "{n} repeticiones descartadas", script_read_error: "No se pudo leer el archivo.",
+  tool_zoom: "Zoom en los cortes", tool_zoom_help: "Alterna encuadres entre cortes para que parezcan cambios de cámara.", zoom_scale: "Escala", zoom_every: "Cada N clips",
+  key_dragbody: "arrastrar clip", key_dragcut: "arrastrar corte", sc_clipboard: "Copiar / cortar / pegar clips", sc_slip: "Deslizar el contenido sin mover el clip", sc_roll: "Mover el corte entre dos clips", slip_tip: "Entrada {a} · salida {b}", lbl_slip: "Deslizar", lbl_roll: "Mover corte", hint_slip_roll: "Alt + arrastrar el clip: deslizar el contenido. Ctrl + arrastrar el borde entre dos clips: mover el corte.", chapters_copy: "Copiar capítulos para YouTube", chapters_copied: "{n} capítulos copiados", chapters_copied_1: "1 capítulo copiado", key_del: "Supr", key_wheel: "rueda", key_drag: "arrastrar borde", sc_play: "Reproducir / pausa", sc_pause: "Pausa", sc_forward: "Reproducir (más rápido si se repite)", sc_back5: "Retroceder 5 s", sc_frame: "Un fotograma", sc_second: "Un segundo",
   sc_cut_jump: "Corte anterior / siguiente", sc_ends: "Inicio / final", sc_split: "Dividir en el cabezal", sc_delete: "Borrar cerrando el hueco", sc_delete_gap: "Borrar sin cerrar el hueco",
   sc_duplicate: "Duplicar", sc_undo: "Deshacer", sc_redo: "Rehacer", sc_marks: "Marcar entrada / salida", sc_marker: "Añadir marcador", sc_zoom: "Zoom", sc_zoom_wheel: "Zoom con la rueda",
   sc_fit: "Ajustar zoom", sc_select_all: "Seleccionar todo", sc_deselect: "Quitar selección", sc_noripple: "Recortar sin mover el resto", sc_export: "Exportar", sc_help: "Esta ayuda",
@@ -168,7 +171,7 @@ const en = {
   insp_clip: "Clip", insp_text_clip: "Text clip", insp_speed: "Speed", insp_audio: "Audio", insp_video: "Picture", insp_crop: "Crop", insp_transition: "Incoming transition",
   insp_effects: "Effects", insp_keyframes: "Animation (keyframes)", insp_actions: "Actions", insp_selection_1: "1 clip selected", insp_selection: "{n} clips selected", insp_track: "Track", insp_project: "Project",
   insp_markers: "Markers ({n})", insp_text: "Text", insp_text_style: "Text style", src_in: "Source in", src_out: "Source out", reverse: "Reverse",
-  fade_in: "Fade in (ms)", fade_out: "Fade out (ms)", fit_contain: "Fit (contain)", fit_cover: "Fill (crop)", fit_fill: "Stretch", fit_none: "Original size",
+  fade_in: "Fade in (ms)", fade_out: "Fade out (ms)", fit_contain: "Fit (contain)", fit_cover: "Fill (crop)", fit_blur: "Whole frame, blurred fill", fit_fill: "Stretch", fit_none: "Original size",
   scale: "Scale", rotation: "Rotation", opacity: "Opacity", focus_x: "Focus X", focus_y: "Focus Y", reframed: "Automatic reframe applied",
   crop_left: "Left", crop_top: "Top", crop_right: "Right", crop_bottom: "Bottom",
   tr_none: "No transition", fx_add: "Add effect…", fx_no_params: "no parameters", kf_help: "Adds a point at the playhead ({t} from the clip start).", kf_clear: "Remove animation",
@@ -208,7 +211,7 @@ const en = {
   tool_fillers: "Remove filler words", tool_fillers_help: "Cuts «um», «uh», «you know» and repeats. Needs the transcript.", fillers_repeats: "Remove repeated words", fillers_strict: "Strict mode",
   tool_scenes: "Split by scenes", tool_scenes_help: "Splits the timeline at shot changes.", scenes_split: "Split", scenes_markers: "Only mark",
   tool_reframe: "Reframe", tool_reframe_help: "Changes the aspect ratio and keeps the subject in frame.", aspect: "Aspect ratio",
-  reframe_auto: "Automatic", reframe_track: "Follow the subject", reframe_stable: "Fixed shot per scene", reframe_center: "Centred",
+  reframe_auto: "Automatic", reframe_track: "Follow the subject", reframe_stable: "Fixed shot per scene", reframe_center: "Centred", reframe_blur: "Blurred background",
   tool_loudness: "Match loudness", tool_loudness_help: "Sets each clip's gain so they all sit at the same loudness.",
   tool_beat: "Cut to the beat", tool_beat_help: "Rebuilds the main track with cuts on the beats of the music.", beat_music: "Music", beat_clips: "With the current clips", beat_scenes: "With the scenes of a video",
   beat_source: "Source video", beats_per_cut: "Beats per cut",
@@ -224,7 +227,10 @@ const en = {
   export_srt: "Also save an .srt file", export_copy: "Fast cut without re-encoding", export_copy_help: "Joins the cuts without re-encoding: seconds, but each cut may start a few frames early and effects are not allowed.",
   export_start: "Export", export_previous: "Previous exports", export_none: "This project has not been exported yet.", export_gone: "gone",
   qc_ok: "Check passed", qc_problems: "Problems found", reveal: "Show in folder", download: "Download",
-  key_del: "Del", key_wheel: "wheel", key_drag: "drag edge", sc_play: "Play / pause", sc_pause: "Pause", sc_forward: "Play (faster when repeated)", sc_back5: "Back 5 s", sc_frame: "One frame", sc_second: "One second",
+copied_n: "{n} clips copied", copied_n_1: "1 clip copied", pasted_n: "{n} clips pasted", pasted_n_1: "1 clip pasted", paste_empty: "Nothing has been copied.", lbl_paste: "Paste",
+  tool_script: "Assemble from script", tool_script_help: "Orders a recording with retakes by the script: one take per segment, in script order.", script_recording: "Recording", script_placeholder: "Paste the script here (Markdown with ## sections, plan JSON or paragraphs)…", script_load: "Load file…", script_take: "Take", script_take_last: "Last good take", script_take_best: "Most complete", script_markers: "Marker per segment", script_col_title: "Segment", script_col_at: "In the recording", script_col_takes: "Takes", script_col_cov: "Coverage", script_col_cov_short: "Cov.", script_retakes_1: "1 retake dropped", script_missing: "{n} segments not found", script_missing_1: "1 segment not found", script_retakes: "{n} retakes dropped", script_read_error: "The file could not be read.",
+  tool_zoom: "Zoom on cuts", tool_zoom_help: "Alternates framings across cuts so they read as camera changes.", zoom_scale: "Scale", zoom_every: "Every N clips",
+  key_dragbody: "drag clip", key_dragcut: "drag cut", sc_clipboard: "Copy / cut / paste clips", sc_slip: "Slip the content without moving the clip", sc_roll: "Move the cut between two clips", slip_tip: "In {a} · out {b}", lbl_slip: "Slip", lbl_roll: "Roll cut", hint_slip_roll: "Alt + drag the clip: slip its content. Ctrl + drag the edge between two clips: roll the cut.", chapters_copy: "Copy chapters for YouTube", chapters_copied: "{n} chapters copied", chapters_copied_1: "1 chapter copied", key_del: "Del", key_wheel: "wheel", key_drag: "drag edge", sc_play: "Play / pause", sc_pause: "Pause", sc_forward: "Play (faster when repeated)", sc_back5: "Back 5 s", sc_frame: "One frame", sc_second: "One second",
   sc_cut_jump: "Previous / next cut", sc_ends: "Start / end", sc_split: "Split at playhead", sc_delete: "Delete closing the gap", sc_delete_gap: "Delete keeping the gap",
   sc_duplicate: "Duplicate", sc_undo: "Undo", sc_redo: "Redo", sc_marks: "Mark in / out", sc_marker: "Add marker", sc_zoom: "Zoom", sc_zoom_wheel: "Wheel zoom",
   sc_fit: "Fit zoom", sc_select_all: "Select all", sc_deselect: "Clear selection", sc_noripple: "Trim without moving the rest", sc_export: "Export", sc_help: "This help",
@@ -256,9 +262,9 @@ export function initialLang() {
     const saved = localStorage.getItem(KEY);
     if (saved === "es" || saved === "en") return saved;
   } catch {
-    // storage may be blocked; fall back to the browser language
+    // storage may be blocked; Spanish is the default
   }
-  return (navigator.language || "es").toLowerCase().startsWith("en") ? "en" : "es";
+  return "es";
 }
 
 export function saveLang(lang) {

@@ -252,10 +252,5 @@ export function Collapsible({ title, children, defaultOpen = false }) {
 }
 
 export function Logo({ size = 22 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <rect x="2" y="2" width="28" height="28" rx="7" fill="#161a20" stroke="#3ddc84" strokeWidth="2" />
-      <path d="M12 9.5v13l10.5-6.5z" fill="#3ddc84" />
-    </svg>
-  );
+  return <img src="/icon-192.png" width={size} height={size} alt="" style={{ borderRadius: Math.round(size / 5), display: "block" }} />;
 }

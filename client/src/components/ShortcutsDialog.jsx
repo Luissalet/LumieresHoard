@@ -8,7 +8,7 @@ const ROWS = [
   ["S / C", "sc_split"], ["{del} / ⌫", "sc_delete"], ["Shift + {del}", "sc_delete_gap"], ["Ctrl + D", "sc_duplicate"],
   ["Ctrl + Z", "sc_undo"], ["Ctrl + Shift + Z / Ctrl + Y", "sc_redo"], ["I / O", "sc_marks"], ["M", "sc_marker"],
   ["+ / −", "sc_zoom"], ["Ctrl + {wheel}", "sc_zoom_wheel"], ["\\", "sc_fit"], ["Ctrl + A", "sc_select_all"],
-  ["Esc", "sc_deselect"], ["Alt + {drag}", "sc_noripple"], ["Ctrl + E", "sc_export"], ["?", "sc_help"],
+  ["Esc", "sc_deselect"], ["Alt + {drag}", "sc_noripple"], ["Ctrl + C / X / V", "sc_clipboard"], ["Alt + {dragbody}", "sc_slip"], ["Ctrl + {dragcut}", "sc_roll"], ["Ctrl + E", "sc_export"], ["?", "sc_help"],
 ];
 
 export default function ShortcutsDialog({ onClose }) {
@@ -19,7 +19,7 @@ export default function ShortcutsDialog({ onClose }) {
         {ROWS.map(([k, label]) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
             <span className="muted" style={{ fontSize: 12.5 }}>{t(label)}</span>
-            <span style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{k.split(/( \+ | \/ )/).map((p, i) => (p.trim() === "+" || p.trim() === "/" ? <span key={i} className="dim">{p.trim()}</span> : p.split(" ").map((q, j) => <kbd key={`${i}-${j}`} className="kbd">{q === "{del}" ? t("key_del") : q === "{wheel}" ? t("key_wheel") : q === "{drag}" ? t("key_drag") : q}</kbd>)))}</span>
+            <span style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{k.split(/( \+ | \/ )/).map((p, i) => (p.trim() === "+" || p.trim() === "/" ? <span key={i} className="dim">{p.trim()}</span> : p.split(" ").map((q, j) => <kbd key={`${i}-${j}`} className="kbd">{/^\{\w+\}$/.test(q) ? t(`key_${q.slice(1, -1)}`) : q}</kbd>)))}</span>
           </div>
         ))}
       </div>

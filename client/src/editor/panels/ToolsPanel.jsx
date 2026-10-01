@@ -11,7 +11,7 @@ function Summary({ res }) {
   const { t } = useApp();
   if (!res) return null;
   const s = res.summary || {};
-  const rows = Object.entries(s).filter(([, v]) => v !== null && typeof v !== "object");
+  const rows = Array.isArray(s.chosen) ? [] : Object.entries(s).filter(([, v]) => v !== null && typeof v !== "object");
   return (
     <div style={{ marginTop: 8, padding: 8, background: "var(--field)", borderRadius: 6, fontSize: 12 }}>
       <b>{res.preview ? t("tool_preview_result") : t("tool_applied")}</b>
@@ -22,7 +22,7 @@ function Summary({ res }) {
   );
 }
 
-function ToolCard({ id, icon, title, help, children, run, canRun = true }) {
+function ToolCard({ id, icon, title, help, children, run, canRun = true, extra, defaultOpen = false }) {
   const { t, fail } = useApp();
   const [busy, setBusy] = useState(null);
   const [res, setRes] = useState(null);
@@ -33,7 +33,7 @@ function ToolCard({ id, icon, title, help, children, run, canRun = true }) {
     } catch (e) { fail(e); } finally { setBusy(null); }
   };
   return (
-    <details className="panel" style={{ marginBottom: 10 }} data-tool={id}>
+    <details className="panel" style={{ marginBottom: 10 }} data-tool={id} open={defaultOpen || undefined}>
       <summary style={{ padding: "9px 12px", display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
         <Icon name={icon} size={16} style={{ color: "var(--accent)" }} />{title}
       </summary>
@@ -45,8 +45,108 @@ function ToolCard({ id, icon, title, help, children, run, canRun = true }) {
           <button type="button" className="btn btn-sm btn-primary" disabled={!!busy || !canRun} onClick={() => go_(false)}>{busy === "apply" ? <Spinner /> : <Icon name="check" size={14} />}{t("apply")}</button>
         </div>
         <Summary res={res} />
+        {extra ? extra(res) : null}
       </div>
     </details>
+  );
+}
+
+function pct(v) {
+  const n = Number(v);
+  if (Number.isNaN(n)) return "";
+  return `${Math.round((n <= 1 ? n * 100 : n))}%`;
+}
+
+function ScriptResult({ res }) {
+  const { t } = useApp();
+  const s = res?.summary;
+  if (!s) return null;
+  const chosen = Array.isArray(s.chosen) ? s.chosen : [];
+  const missing = Array.isArray(s.missing) ? s.missing : [];
+  const cell = { padding: "3px 6px", borderBottom: "1px solid var(--line)", verticalAlign: "top" };
+  return (
+    <div style={{ marginTop: 8 }} data-testid="script-result">
+      {chosen.length ? (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, tableLayout: "fixed" }}>
+          <colgroup><col style={{ width: 20 }} /><col /><col style={{ width: 104 }} /><col style={{ width: 40 }} /><col style={{ width: 42 }} /></colgroup>
+          <thead>
+            <tr className="muted" style={{ textAlign: "left" }}>
+              <th style={cell}>#</th><th style={cell}>{t("script_col_title")}</th><th style={cell}>{t("script_col_at")}</th><th style={cell}>{t("script_col_takes")}</th><th style={cell} title={t("script_col_cov")}>{t("script_col_cov_short")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {chosen.map((c, i) => (
+              <tr key={i}>
+                <td style={cell} className="num">{c.segment}</td>
+                <td style={{ ...cell, wordBreak: "break-word" }}>{c.title}</td>
+                <td style={{ ...cell, whiteSpace: "nowrap" }} className="num">{c.at}</td>
+                <td style={cell} className="num">{c.takes}</td>
+                <td style={{ ...cell, color: Number(c.coverage) < 0.75 ? "var(--warn, #f5b700)" : "var(--accent)" }} className="num">{pct(c.coverage)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {missing.length ? (
+        <div style={{ marginTop: 6, fontSize: 12 }} data-testid="script-missing">
+          <b style={{ color: "#ffb4b4" }}>{t("script_missing", { n: missing.length })}</b>
+          <ul style={{ margin: "3px 0 0", paddingLeft: 18 }} className="muted">
+            {missing.map((m, i) => <li key={i}>{typeof m === "object" ? `${m.segment ?? ""} ${m.title ?? ""}`.trim() : String(m)}</li>)}
+          </ul>
+        </div>
+      ) : null}
+      {s.retakes !== undefined ? <div className="muted" style={{ marginTop: 6, fontSize: 11.5 }}>{t("script_retakes", { n: s.retakes })}{s.duration ? ` · ${s.duration}` : ""}</div> : null}
+    </div>
+  );
+}
+
+function ScriptTool({ videos }) {
+  const { t, fail } = useApp();
+  const ed = useEd();
+  const mainMedia = (() => {
+    const main = ed.doc.tracks.find((tr) => tr.role === "main") || ed.doc.tracks.find((tr) => tr.kind === "video");
+    const first = main?.clips.find((c) => c.type === "media");
+    return first?.media || "";
+  })();
+  const [mediaId, setMediaId] = useState("");
+  const [text, setText] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [take, setTake] = useState("last");
+  const [markers, setMarkers] = useState(true);
+  const fileRef = React.useRef(null);
+  const chosenMedia = mediaId || mainMedia || videos[0]?.id || "";
+  const load = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { setText(String(reader.result || "")); setFileName(file.name); };
+    reader.onerror = () => fail(new Error(t("script_read_error")));
+    reader.readAsText(file);
+  };
+  const waiting = ed.analysis;
+  return (
+    <ToolCard id="script_assemble" icon="clip" title={t("tool_script")} help={t("tool_script_help")} defaultOpen canRun={!!chosenMedia && !!text.trim()}
+      run={(preview) => ed.runCommand("script_assemble", { media: chosenMedia, script: text, take, markers }, { preview })}
+      extra={(res) => (<>
+        {waiting ? <div className="chip chip-info" style={{ marginTop: 8, height: "auto", padding: "4px 8px", whiteSpace: "normal" }}><Spinner /> {waiting.message || t("analysis_wait")}</div> : null}
+        <ScriptResult res={res} />
+      </>)}>
+      <Labeled label={t("script_recording")}>
+        <select className="field" value={chosenMedia} onChange={(e) => setMediaId(e.target.value)} data-testid="script-media">
+          {videos.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+      </Labeled>
+      <textarea className="field" style={{ width: "100%", minHeight: 96, resize: "vertical", height: "auto", fontFamily: "inherit", marginTop: 4 }} placeholder={t("script_placeholder")} value={text} onChange={(e) => { setText(e.target.value); setFileName(""); }} data-testid="script-text" />
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "6px 0" }}>
+        <button type="button" className="btn btn-sm" onClick={() => fileRef.current?.click()}><Icon name="upload" size={14} />{t("script_load")}</button>
+        {fileName ? <span className="muted ellipsis" style={{ fontSize: 11.5 }}>{fileName}</span> : null}
+        <input ref={fileRef} type="file" accept=".md,.txt,.json,text/plain,text/markdown,application/json" style={{ display: "none" }} data-testid="script-file" onChange={(e) => { load(e.target.files?.[0]); e.target.value = ""; }} />
+      </div>
+      <div className="muted" style={{ fontSize: 12, margin: "4px 0" }}>{t("script_take")}</div>
+      <Seg value={take} onChange={setTake} options={[{ value: "last", label: t("script_take_last") }, { value: "best", label: t("script_take_best") }]} />
+      <div style={{ height: 8 }} />
+      <Toggle checked={markers} onChange={setMarkers} label={t("script_markers")} />
+      {waiting ? null : <div style={{ height: 0 }} />}
+    </ToolCard>
   );
 }
 
@@ -117,6 +217,7 @@ export default function ToolsPanel() {
   const [scn, setScn] = useState({ mode: "split" });
   const [rf, setRf] = useState({ aspect: "9:16", mode: "auto" });
   const [ld, setLd] = useState({ target: -16 });
+  const [zc, setZc] = useState({ scale: 1.12, every: 2 });
   const [bs, setBs] = useState({ music: "", source: "", beats: 2, mode: "scenes" });
   const audios = (media || []).filter((m) => m.has_audio && m.kind === "audio");
   const videos = (media || []).filter((m) => m.kind === "video");
@@ -127,6 +228,8 @@ export default function ToolsPanel() {
       <PanelHead title={t("tab_tools")} />
       <div className="ed-panel-body">
         <Hint>{t("tools_help")}</Hint>
+
+        <ScriptTool videos={videos} />
 
         <ToolCard id="remove_silences" icon="waveform" title={t("tool_silences")} help={t("tool_silences_help")}
           run={cmd("remove_silences", { ...(sil.auto ? {} : { threshold_db: sil.threshold }), min_silence_ms: sil.min, margin_ms: sil.margin, mode: sil.mode, ...(sil.mode === "speed" ? { speed: sil.speed } : {}) })}>
@@ -152,9 +255,14 @@ export default function ToolsPanel() {
           <Labeled label={t("aspect")}><Seg value={rf.aspect} onChange={(v) => setRf({ ...rf, aspect: v })} options={["9:16", "1:1", "4:5", "16:9"].map((a) => ({ value: a, label: a }))} /></Labeled>
           <Labeled label={t("mode")}>
             <select className="field" value={rf.mode} onChange={(e) => setRf({ ...rf, mode: e.target.value })}>
-              {["auto", "track", "stable", "center"].map((m) => <option key={m} value={m}>{t(`reframe_${m}`)}</option>)}
+              {["auto", "track", "stable", "center", "blur"].map((m) => <option key={m} value={m}>{t(`reframe_${m}`)}</option>)}
             </select>
           </Labeled>
+        </ToolCard>
+
+        <ToolCard id="zoom_cuts" icon="crop" title={t("tool_zoom")} help={t("tool_zoom_help")} run={cmd("zoom_cuts", { scale: zc.scale, every: zc.every })}>
+          <SliderRow label={t("zoom_scale")} value={zc.scale} min={1.05} max={1.4} step={0.01} decimals={2} defaultValue={1.12} onChange={(v) => setZc({ ...zc, scale: v })} />
+          <Labeled label={t("zoom_every")}><NumInput value={zc.every} min={1} max={10} step={1} decimals={0} onCommit={(v) => setZc({ ...zc, every: Math.max(1, Math.round(v)) })} /></Labeled>
         </ToolCard>
 
         <ToolCard id="match_loudness" icon="volume" title={t("tool_loudness")} help={t("tool_loudness_help")} run={cmd("match_loudness", { target_lufs: ld.target })}>

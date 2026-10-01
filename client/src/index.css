@@ -203,7 +203,8 @@
   .tl-range { position: absolute; top: 0; height: 100%; background: #4aa3ff26; border-left: 1px solid #4aa3ff; border-right: 1px solid #4aa3ff; pointer-events: none; }
   .tl-marker { position: absolute; top: 0; bottom: 0; width: 12px; margin-left: -6px; cursor: pointer; }
   .tl-marker i { position: absolute; left: 1px; top: 2px; width: 10px; height: 12px; clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); }
-  .tl-marker span { position: absolute; left: 14px; top: 1px; font-size: 10px; color: #ddd; white-space: nowrap; }
+  .tl-marker span { position: absolute; left: 14px; top: 1px; font-size: 10px; color: #ddd; white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+  .tl-tip { position: fixed; z-index: 60; background: #000d; color: #fff; padding: 3px 7px; border-radius: 5px; font-size: 11.5px; pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .tl-rubber { position: absolute; border: 1px solid var(--accent); background: var(--accent-soft); z-index: 9; pointer-events: none; }
   .tl-trans { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, #ffffff55, transparent); pointer-events: none; }
 

@@ -3,7 +3,7 @@ import { useApp } from "../App.jsx";
 import { Icon } from "../components/ui.jsx";
 import { useEd } from "./EditorContext.js";
 import TimelineClip, { visibleRange } from "./TimelineClip.jsx";
-import { clamp, clipDur, clipEnd, fmtRuler, frameMs, rulerStep, trackRows } from "./time.js";
+import { clamp, clipDur, clipEnd, fmtMs, fmtRuler, frameMs, rulerStep, trackRows } from "./time.js";
 
 const HDR_W = 176;
 const ROW_H = { video: 52, audio: 44, text: 34 };
@@ -71,6 +71,7 @@ export default function Timeline() {
   const [pps, setPps] = useState(80);
   const [viewport, setViewport] = useState({ left: 0, w: 900, h: 300 });
   const [drag, setDrag] = useState(null);
+  const [tip, setTip] = useState(null);
   const [guide, setGuide] = useState(null);
   const [rubber, setRubber] = useState(null);
   const [dropLane, setDropLane] = useState(null);
@@ -250,6 +251,35 @@ export default function Timeline() {
     }
     if (!was) { ids = [clip.id]; setSelection({ ids, track: null }); }
     if (track.locked) return;
+    const clipMedia = clip.media ? view.media[clip.media] : null;
+    if (e.altKey && clip.type === "media" && clipMedia && clipMedia.kind !== "image") {
+      // Slip: the block stays, the source material slides under it.
+      const startX = e.clientX;
+      const sp = clip.speed || 1;
+      const mdur = clipMedia.duration_ms || 0;
+      let started = false;
+      let lastD = 0;
+      const clampD = (dMs) => {
+        const lo = -clip.src_in / sp;
+        const hi = mdur ? (mdur - clip.src_out) / sp : Infinity;
+        return Math.round(clamp(dMs, lo, hi));
+      };
+      const slipMove = (ev) => {
+        const dx = ev.clientX - startX;
+        if (!started && Math.abs(dx) < 3) return;
+        started = true;
+        lastD = clampD(-dx / live.current.ppm);
+        const patch = { src_in: Math.round(clip.src_in + lastD * sp), src_out: Math.round(clip.src_out + lastD * sp) };
+        setDrag({ kind: "slip", id: clip.id, patch, d: lastD });
+        setTip({ x: ev.clientX, y: ev.clientY, text: t("slip_tip", { a: fmtMs(patch.src_in), b: fmtMs(patch.src_out) }) });
+      };
+      gesture(slipMove, () => {
+        setTip(null);
+        if (!started || Math.abs(lastD) < 1) { setDrag(null); return; }
+        edit([{ op: "slip", clip: clip.id, delta: lastD }], t("lbl_slip")).finally(() => setDrag(null));
+      });
+      return;
+    }
     const movingIds = new Set(ids);
     const movers = [];
     for (const tr of d.tracks) for (const c of tr.clips) if (movingIds.has(c.id) && !tr.locked) movers.push({ clip: c, track: tr });
@@ -292,11 +322,57 @@ export default function Timeline() {
     });
   }, [edit, setSelection, snapTargets, snapDelta, laneAt, t]);
 
+  const startRoll = (e, left, right, track) => {
+    setSelection({ ids: [right.id], track: null });
+    const lm = view.media[left.media];
+    const rm = view.media[right.media];
+    const ls = left.speed || 1;
+    const rs = right.speed || 1;
+    let lo = -(clipDur(left) - MIN_CLIP);
+    let hi = clipDur(right) - MIN_CLIP;
+    if (lm && lm.kind !== "image" && lm.duration_ms) hi = Math.min(hi, (lm.duration_ms - left.src_out) / ls);
+    if (rm && rm.kind !== "image") lo = Math.max(lo, -right.src_in / rs);
+    const targets = snapTargets(new Set([left.id, right.id]));
+    const startX = e.clientX;
+    const cut = right.start;
+    let started = false;
+    let lastD = 0;
+    const move = (ev) => {
+      const dx = ev.clientX - startX;
+      if (!started && Math.abs(dx) < 3) return;
+      started = true;
+      let d0 = dx / live.current.ppm;
+      const s = snapDelta([cut + d0], targets);
+      d0 = clamp(d0 + s.delta, lo, hi);
+      setGuide(s.at);
+      lastD = Math.round(d0);
+      setDrag({ kind: "roll", left: left.id, right: right.id, d: lastD, cut, ls, rs, lm, rm });
+      setTip({ x: ev.clientX, y: ev.clientY, text: `${lastD >= 0 ? "+" : "−"}${fmtMs(Math.abs(lastD))}` });
+    };
+    gesture(move, () => {
+      setGuide(null);
+      setTip(null);
+      if (!started || Math.abs(lastD) < 1) { setDrag(null); return; }
+      edit([{ op: "roll", clip: right.id, delta: lastD }], t("lbl_roll")).finally(() => setDrag(null));
+    });
+  };
+
   const onEdgeDown = useCallback((e, clip, track, side) => {
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
     if (track.locked) return;
+    if (e.ctrlKey || e.metaKey) {
+      // Roll: the cut between two touching clips moves; both change, nothing else shifts.
+      const sorted = [...track.clips].sort((a, b) => a.start - b.start);
+      const i = sorted.findIndex((c) => c.id === clip.id);
+      const left = side === "l" ? sorted[i - 1] : clip;
+      const right = side === "l" ? clip : sorted[i + 1];
+      if (left && right && Math.abs(clipEnd(left) - right.start) <= 1 && left.type === "media" && right.type === "media") {
+        startRoll(e, left, right, track);
+        return;
+      }
+    }
     const { selection: sel } = live.current;
     if (!(sel.ids.length === 1 && sel.ids[0] === clip.id)) setSelection({ ids: [clip.id], track: null });
     const media = clip.media ? view.media[clip.media] : null;
@@ -335,7 +411,7 @@ export default function Timeline() {
       setDrag({ ...last, committing: true });
       edit(ops, t("lbl_trim")).finally(() => setDrag(null));
     });
-  }, [edit, setSelection, snapTargets, snapDelta, view.media, t]);
+  }, [edit, setSelection, snapTargets, snapDelta, view.media, t]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ------------------------------------------------------------ rubber band on empty lane space
   const onLaneDown = (e) => {
@@ -405,6 +481,16 @@ export default function Timeline() {
         const found = clipIndex.get(id);
         if (!found) continue;
         map.set(id, { start: found.c.start + drag.dMs, dur: clipDur(found.c), trackId: id === drag.primary && drag.trackId ? drag.trackId : found.tr.id, dragging: true });
+      }
+    } else if (drag.kind === "slip") {
+      const found = clipIndex.get(drag.id);
+      if (found) map.set(drag.id, { start: found.c.start, dur: clipDur(found.c), trackId: found.tr.id, dragging: true, patch: drag.patch });
+    } else if (drag.kind === "roll") {
+      const l = clipIndex.get(drag.left);
+      const r = clipIndex.get(drag.right);
+      if (l && r) {
+        map.set(l.c.id, { start: l.c.start, dur: clipDur(l.c) + drag.d, trackId: l.tr.id, dragging: true, patch: { src_out: Math.round(l.c.src_out + drag.d * drag.ls) } });
+        map.set(r.c.id, { start: r.c.start + drag.d, dur: clipDur(r.c) - drag.d, trackId: r.tr.id, dragging: true, patch: { src_in: Math.round(r.c.src_in + drag.d * drag.rs) } });
       }
     } else {
       const tr = doc.tracks.find((x) => x.id === drag.trackId);
@@ -540,10 +626,11 @@ export default function Timeline() {
                     const [vl, vr] = visibleRange(x, w, viewport.left - HDR_W, viewport.w);
                     const media = clip.media ? view.media[clip.media] : null;
                     const ti = clip.transition_in;
+                    const shown = g?.patch ? { ...clip, ...g.patch } : clip;
                     return (
                       <TimelineClip
                         key={clip.id}
-                        clip={clip}
+                        clip={shown}
                         track={own}
                         media={media}
                         info={clip.media ? ed.mediaInfo[clip.media] : null}
@@ -570,6 +657,7 @@ export default function Timeline() {
           {rows.length === 0 ? <div className="muted" style={{ position: "absolute", top: TOP_H + 20, left: HDR_W + 20 }}>{t("timeline_empty")}</div> : null}
           <div ref={playheadRef} className="tl-playhead" style={{ left: 0 }} data-testid="playhead" />
           {guide !== null ? <div className="tl-guide" style={{ left: HDR_W + guide * ppm }} /> : null}
+          {tip ? <div className="tl-tip" style={{ left: tip.x + 14, top: tip.y - 30 }}>{tip.text}</div> : null}
           {rubber ? <div className="tl-rubber" style={{ left: rubber.x, top: rubber.y, width: rubber.w, height: rubber.h }} /> : null}
         </div>
       </div>

@@ -40,7 +40,8 @@ export function placement(clip, media, boxW, boxH, k) {
     const w = cw * k;
     const h = ch * k;
     Object.assign(geo, { x: (boxW - w) / 2, y: (boxH - h) / 2, w, h });
-  } else if (fit === "contain") {
+  } else if (fit === "contain" || fit === "blur") {
+    geo.blur = fit === "blur";
     const ratio = cw / ch;
     let w = boxW;
     let h = w / ratio;
@@ -117,6 +118,7 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
   const root = useRef(null);
   const xf = useRef(null);
   const el = useRef(null);
+  const bgc = useRef(null);
   const state = useRef({});
   const forced = useRef(false);
   const isAudio = track.kind === "audio";
@@ -127,6 +129,23 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
 
   const live = { clip, track, media, next, geo, box, k, dur, isAudio, isImage, projectMuted };
   state.current = live;
+
+  // fit=blur: a tiny canvas copy of the picture, cover-fitted and blurred by CSS, drawn behind the contained picture.
+  const drawBg = () => {
+    const cv = bgc.current;
+    const m = el.current;
+    if (!cv || !m) return;
+    const sw = m.videoWidth || m.naturalWidth;
+    const sh = m.videoHeight || m.naturalHeight;
+    if (!sw || !sh || (m.readyState !== undefined && m.readyState < 2 && !m.naturalWidth)) return;
+    const cw = cv.width;
+    const ch = cv.height;
+    const ratio = cw / ch;
+    let w = sw;
+    let h = sw / ratio;
+    if (h > sh) { h = sh; w = sh * ratio; }
+    try { cv.getContext("2d").drawImage(m, (sw - w) / 2, (sh - h) / 2, w, h, 0, 0, cw, ch); } catch { /* frame not decodable yet */ }
+  };
 
   const apply = (t, playing) => {
     const s = state.current;
@@ -174,6 +193,7 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
           media_el.style.left = `${-cx - g.l * g.fullW}px`;
           media_el.style.top = `${-cy - g.tp * g.fullH}px`;
         }
+        if (g.blur) drawBg();
       }
     }
     // ----- sound and time
@@ -218,6 +238,13 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
 
   useEffect(() => pb.subscribe(apply), [pb]); // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => { apply(pb.t, pb.playing); });
+  useEffect(() => {
+    const m = el.current;
+    if (!m || !geo.blur) return undefined;
+    const events = ["seeked", "loadeddata", "load"];
+    events.forEach((e) => m.addEventListener(e, drawBg));
+    return () => events.forEach((e) => m.removeEventListener(e, drawBg));
+  }, [geo.blur, src]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (isAudio) {
     return <audio ref={el} src={src} preload="auto" style={{ display: "none" }} />;
@@ -237,6 +264,11 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
   return (
     <div ref={root} style={{ position: "absolute", inset: 0, zIndex: z, display: "none", willChange: "opacity, transform" }}>
       <div ref={xf} style={{ position: "absolute", inset: 0, transformOrigin: "50% 50%", willChange: "transform, opacity" }}>
+        {geo.blur ? (
+          <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+            <canvas ref={bgc} width={Math.max(8, Math.round(box.w / 10))} height={Math.max(8, Math.round(box.h / 10))} data-blur-bg="1" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", transform: "scale(1.12)", filter: "blur(24px) brightness(0.9)" }} />
+          </div>
+        ) : null}
         <div style={{ position: "absolute", left: geo.x, top: geo.y, width: geo.w, height: geo.h, overflow: "hidden" }}>
           {isImage
             ? <img ref={el} src={src} alt="" style={mediaStyle} draggable={false} />

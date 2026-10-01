@@ -497,10 +497,58 @@ def zoom_cuts(svc: "Services", p: Project, *, scale: float = 1.12, every: int = 
 
 # ---------------------------------------------------------------- script assembly
 
+def _meaning_alignment(svc: "Services", media: str, segments: list, transcript: dict[str, Any]) -> dict[str, Any]:
+    """Ask the local model which sentences of a free talk deliver each script part (cached per script text)."""
+    import hashlib
+
+    from .generate import chat_json
+
+    sents = [s for s in transcript.get("segments") or [] if s.get("text")]
+    if not sents:
+        raise LumiereError("The transcript has no sentences.")
+    key = hashlib.sha1(("\n".join(s.text for s in segments) + f"|{len(sents)}").encode()).hexdigest()
+    cached = media_store.get_analysis(svc, media, "script_align")
+    if cached and cached.get("key") == key:
+        return cached
+    lines = [f"{i}\t{ms_to_tc(s['t0'])}\t{s['text']}" for i, s in enumerate(sents)]
+    script_lines = [f"{seg.index + 1}. {seg.title}: {seg.text}" for seg in segments]
+    system = ("You align a talk recorded in front of a camera to the script it follows freely. For each script part, give the sentence "
+              "ranges of the recording that deliver it, in the order to play them. When a part was attempted several times, keep only the "
+              "last attempt that reaches its end. Leave out false starts, comments to the camera crew or to oneself ('vamos allá', 'otra "
+              "vez', 'qué nervios'), and anything that belongs to no part. A part that was never said gets no ranges. Answer JSON only: "
+              '{"parts": [{"segment": 1, "ranges": [[first_sentence, last_sentence], ...]}], "notes": ""}')
+    user = "SCRIPT\n" + "\n".join(script_lines) + "\n\nRECORDING (index, time, sentence)\n" + "\n".join(lines)
+    if len(user) > 60000:
+        raise LumiereError("The recording is too long for the model to align at once; cut it into parts first.")
+
+    def parse(data: Any, strict: bool) -> dict[str, Any]:
+        parts = data.get("parts") if isinstance(data, dict) else None
+        if not isinstance(parts, list):
+            raise ValueError("missing parts")
+        out = []
+        for part in parts:
+            seg = int(part.get("segment"))
+            ranges = []
+            for r in part.get("ranges") or []:
+                x, y = int(r[0]), int(r[1])
+                if not (0 <= x <= y < len(sents)):
+                    raise ValueError(f"sentence range {r} out of bounds")
+                ranges.append([x, y])
+            out.append({"segment": seg, "ranges": ranges})
+        return {"parts": out, "notes": str(data.get("notes") or "")}
+
+    result, model = chat_json(svc, [{"role": "system", "content": system}, {"role": "user", "content": user}], parse, max_tokens=3000, effort="low")
+    result.update({"key": key, "model": model, "sentences": [[s["t0"], s["t1"]] for s in sents]})
+    media_store.put_analysis(svc, media, "script_align", result, {"segments": len(segments)})
+    return result
+
+
 def script_assemble(svc: "Services", p: Project, *, media: str, script: str = "", script_path: str = "", take: str = "last",
-                    min_coverage: float = 0.6, markers: bool = True) -> tuple[Project, dict[str, Any]]:
-    """Rough cut from a script: the recording of someone reading it (with retakes) becomes the main track, one take per
-    script segment in script order, with a chapter marker per segment. take: last | best."""
+                    min_coverage: float = 0.6, markers: bool = True, mode: str = "auto") -> tuple[Project, dict[str, Any]]:
+    """Rough cut from a script: the recording becomes the main track, one take per script segment in script order, with a
+    chapter marker per segment. mode words: matches the script word for word (teleprompter readings, retakes); meaning: the
+    local model finds each part in a talk that follows the script freely; auto: words, then meaning when words find too little.
+    take: last | best (words mode)."""
     from pathlib import Path
 
     from .analysis import script as script_an
@@ -514,12 +562,52 @@ def script_assemble(svc: "Services", p: Project, *, media: str, script: str = ""
     segments = script_an.parse_script(script)
     if not segments:
         raise LumiereError("The script has no text: paste it (Markdown with ## sections, a plan JSON or paragraphs).")
-    words = _need(svc, [media], "transcript", "Assembling from the script")[media]["words"]
+    transcript = _need(svc, [media], "transcript", "Assembling from the script")[media]
+    words = transcript["words"]
     if not words:
         raise LumiereError("The transcript of that recording is empty: is there speech in it?")
-    res = script_an.assemble(segments, words, take="best" if take == "best" else "last", min_coverage=min_coverage)
-    if not res["segments"]:
-        raise LumiereError("No segment of the script was found in the recording. Is it the right file, and the right language?")
+    items: list[dict[str, Any]] = []
+    used_mode = "words"
+    missing: list[dict[str, Any]] = []
+    notes = ""
+    res = script_an.assemble(segments, words, take="best" if take == "best" else "last", min_coverage=min_coverage) if mode != "meaning" else None
+    if res is not None and (mode == "words" or len(res["segments"]) * 2 > len(segments)):
+        if not res["segments"]:
+            best = 0.0
+            tokens = [speech.norm(w["text"]) for w in words]
+            for seg in segments[:12]:
+                for t in script_an.find_takes(seg, words, tokens, min_coverage=0.0, max_takes=1):
+                    best = max(best, t["coverage"])
+            raise LumiereError(f"No segment of the script was found word for word in the recording (best match {round(best * 100)}% of a "
+                               "segment's words). This mode is for recordings read from the script or a teleprompter; for a talk that "
+                               "follows the script freely use mode='meaning' (the local model finds each part).", code="script_not_found")
+        for s in res["segments"]:
+            items.append({"segment": s["segment"], "title": s["title"], "ranges": [[s["src_in"], s["src_out"]]], "takes": s["takes"],
+                          "coverage": s["coverage"]})
+        missing = res["missing"]
+    else:
+        used_mode = "meaning"
+        align = _meaning_alignment(svc, media, segments, transcript)
+        sents = align["sentences"]
+        by_seg = {part["segment"]: part["ranges"] for part in align["parts"]}
+        notes = align.get("notes", "")
+        for seg in segments:
+            ranges = by_seg.get(seg.index + 1) or []
+            if not ranges:
+                missing.append({"segment": seg.index + 1, "title": seg.title, "text": seg.text[:120]})
+                continue
+            src = []
+            for x, y in ranges:
+                a = max(0, sents[x][0] - 150)
+                b = sents[y][1] + 250
+                if x > 0:
+                    a = max(a, sents[x - 1][1])
+                if y + 1 < len(sents):
+                    b = min(b, max(sents[y + 1][0], sents[y][1]))
+                src.append([a, b])
+            items.append({"segment": seg.index + 1, "title": seg.title, "ranges": src, "takes": None, "coverage": None})
+    if not items:
+        raise LumiereError("No part of the script was found in the recording.", code="script_not_found")
     main = p.main_track()
     ops: list[dict[str, Any]] = []
     if main is not None and main.clips:
@@ -527,19 +615,20 @@ def script_assemble(svc: "Services", p: Project, *, media: str, script: str = ""
     ops.append({"op": "marker_delete", "kind": "chapter"})
     p = _apply(svc, p, ops)
     main = p.main_track()
-    p = _apply(svc, p, [{"op": "sequence", "track": main.id if main else None,
-                         "items": [{"media": media, "src_in": s["src_in"], "src_out": s["src_out"], "label": s["title"][:120]} for s in res["segments"]]}])
+    seq = [{"media": media, "src_in": a, "src_out": b, "label": it["title"][:120]} for it in items for a, b in it["ranges"]]
+    p = _apply(svc, p, [{"op": "sequence", "track": main.id if main else None, "items": seq}])
     if markers:
         cursor = 0
         mops = []
-        for s in res["segments"]:
-            mops.append({"op": "marker_add", "t": cursor, "label": s["title"][:120], "kind": "chapter", "color": "#7FE3A0"})
-            cursor += s["src_out"] - s["src_in"]
+        for it in items:
+            mops.append({"op": "marker_add", "t": cursor, "label": it["title"][:120], "kind": "chapter", "color": "#7FE3A0"})
+            cursor += sum(b - a for a, b in it["ranges"])
         p = _apply(svc, p, mops)
-    summary = {"segments": len(res["segments"]), "of": res["total_segments"], "missing": res["missing"],
-               "retakes": sum(max(0, s["takes"] - 1) for s in res["segments"]), "duration": ms_to_tc(p.duration),
-               "chosen": [{"segment": s["segment"], "title": s["title"], "at": f"{ms_to_tc(s['src_in'])}–{ms_to_tc(s['src_out'])}", "takes": s["takes"],
-                           "coverage": s["coverage"]} for s in res["segments"]]}
+    summary = {"mode": used_mode, "segments": len(items), "of": len(segments), "missing": missing, "duration": ms_to_tc(p.duration), "notes": notes,
+               "retakes": sum(max(0, (it["takes"] or 1) - 1) for it in items),
+               "chosen": [{"segment": it["segment"], "title": it["title"],
+                           "at": ", ".join(f"{ms_to_tc(a)}–{ms_to_tc(b)}" for a, b in it["ranges"]), "takes": it["takes"],
+                           "coverage": it["coverage"]} for it in items]}
     return p, summary
 
 

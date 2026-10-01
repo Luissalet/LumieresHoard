@@ -52,6 +52,32 @@ function ColorInput({ value, onChange, disabled }) {
 }
 
 // ------------------------------------------------------------------ effects
+function tcYoutube(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+async function copyChapters(markers, notify, t) {
+  const lines = markers.filter((m) => m.kind === "chapter").sort((a, b) => a.t - b.t).map((m) => `${tcYoutube(m.t)} ${m.label || t("marker_kind_chapter")}`);
+  const text = lines.join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;left:-9999px;top:0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch { /* clipboard blocked */ }
+    ta.remove();
+  }
+  window.__lastCopied = text;
+  notify(t("chapters_copied", { n: lines.length }), "ok");
+}
+
 function EffectsSection({ clip, ids }) {
   const { t, presets } = useApp();
   const ed = useEd();
@@ -230,9 +256,9 @@ function ClipInspector({ clip, track, media }) {
       {!isText ? (
         <Sec title={t("insp_speed")}>
           <Row label={t("speed")}>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <NumInput width={64} value={clip.speed} min={0.1} max={16} step={0.25} decimals={2} onCommit={(v) => ed.edit([{ op: "speed", clip: clip.id, speed: v }], t("lbl_speed"))} />
-              {[0.5, 1, 2].map((v) => <button key={v} type="button" className={`btn btn-sm ${clip.speed === v ? "btn-on" : ""}`} onClick={() => ed.edit([{ op: "speed", clip: clip.id, speed: v }], t("lbl_speed"))}>{v}×</button>)}
+            <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "nowrap" }}>
+              <NumInput width={50} value={clip.speed} min={0.1} max={16} step={0.25} decimals={2} onCommit={(v) => ed.edit([{ op: "speed", clip: clip.id, speed: v }], t("lbl_speed"))} />
+              {[0.5, 1, 2].map((v) => <button key={v} type="button" className={`btn btn-sm ${clip.speed === v ? "btn-on" : ""}`} style={{ padding: "0 7px" }} onClick={() => ed.edit([{ op: "speed", clip: clip.id, speed: v }], t("lbl_speed"))}>{v}×</button>)}
             </div>
           </Row>
           {!isImage ? <Row label={t("reverse")}><Toggle checked={clip.reverse} onChange={(v) => setProps({ reverse: v }, t("lbl_reverse"))} label="" /></Row> : null}
@@ -260,7 +286,7 @@ function ClipInspector({ clip, track, media }) {
             {!isText ? (
               <Row label={t("fit")}>
                 <select className="field" value={tf.fit} onChange={(e) => ed.edit([{ op: "set", clip: clip.id, props: { transform: { fit: e.target.value } }, ripple: false }], t("lbl_transform"))}>
-                  {["contain", "cover", "fill", "none"].map((f) => <option key={f} value={f}>{t(`fit_${f}`)}</option>)}
+                  {["contain", "cover", "blur", "fill", "none"].map((f) => <option key={f} value={f}>{t(`fit_${f}`)}</option>)}
                 </select>
               </Row>
             ) : null}
@@ -377,7 +403,7 @@ function TrackInspector({ track }) {
 
 // ------------------------------------------------------------------ project
 function ProjectInspector() {
-  const { t, presets } = useApp();
+  const { t, presets, notify } = useApp();
   const ed = useEd();
   const { doc } = ed;
   const c = doc.canvas;
@@ -411,6 +437,9 @@ function ProjectInspector() {
             <button type="button" className="btn btn-ghost btn-icon btn-sm" aria-label={t("remove")} onClick={() => ed.edit([{ op: "marker_delete", id: m.id }], t("lbl_marker_del"))}><Icon name="x" size={12} /></button>
           </div>
         ))}
+        {doc.markers.some((m) => m.kind === "chapter") ? (
+          <button type="button" className="btn btn-sm" style={{ marginTop: 4 }} data-testid="copy-chapters" onClick={() => copyChapters(doc.markers, notify, t)}><Icon name="copy" size={14} />{t("chapters_copy")}</button>
+        ) : null}
         <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
           <button type="button" className="btn btn-sm" onClick={() => ed.actions.addMarker()}><Icon name="marker" size={14} />{t("marker_add")}</button>
           {doc.markers.length ? <ConfirmButton label={t("markers_clear")} confirmLabel={t("confirm_delete")} cancelLabel={t("cancel")} onConfirm={() => ed.edit([{ op: "marker_delete", kind: "note" }, { op: "marker_delete", kind: "beat" }, { op: "marker_delete", kind: "scene" }, { op: "marker_delete", kind: "highlight" }, { op: "marker_delete", kind: "chapter" }], t("lbl_marker_del"))} /> : null}
