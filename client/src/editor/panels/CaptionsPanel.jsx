@@ -53,7 +53,7 @@ export default function CaptionsPanel() {
           <Toggle checked={cap.enabled} disabled={busy} onChange={(v) => enable(v)} label={cap.enabled ? t("captions_on") : t("captions_off")} />
         </div>
         {cap.enabled && missing.length ? (
-          <div style={{ padding: 10, background: "#3a2f10", border: "1px solid #5c4a14", borderRadius: 8, marginBottom: 12, fontSize: 12.5 }}>
+          <div style={{ padding: 10, background: "color-mix(in srgb, var(--warn) 16%, var(--panel))", border: "1px solid color-mix(in srgb, var(--warn) 45%, var(--panel))", borderRadius: 8, marginBottom: 12, fontSize: 12.5 }}>
             {t("captions_missing", { n: missing.length })}
             <div style={{ marginTop: 8 }}><button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={transcribe}><Icon name="mic" size={14} />{t("transcribe")}</button></div>
           </div>
@@ -62,7 +62,7 @@ export default function CaptionsPanel() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
           {Object.keys(STYLES).map((s) => (
             <button key={s} type="button" className="tile" aria-pressed={cap.style === s && cap.enabled} disabled={busy} onClick={() => (cap.enabled ? setCap({}, s) : enable(true, s))} style={{ textAlign: "center" }}>
-              <div style={{ background: "#0b0d11", borderRadius: 6, padding: "10px 4px", fontSize: 15, minHeight: 40 }}><span style={STYLES[s]}>{t("captions_sample")}</span></div>
+              <div style={{ background: "var(--sunken)", borderRadius: 6, padding: "10px 4px", fontSize: 15, minHeight: 40 }}><span style={STYLES[s]}>{t("captions_sample")}</span></div>
               <div style={{ fontSize: 11.5, marginTop: 5 }}>{t(`capstyle_${s}`)}</div>
             </button>
           ))}

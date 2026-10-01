@@ -118,7 +118,7 @@ function ScriptResult({ res }) {
       ) : null}
       {missing.length ? (
         <div style={{ marginTop: 6, fontSize: 12 }} data-testid="script-missing">
-          <b style={{ color: "#ffb4b4" }}>{t("script_missing", { n: missing.length })}</b>
+          <b style={{ color: "var(--danger-ink)" }}>{t("script_missing", { n: missing.length })}</b>
           <ul style={{ margin: "3px 0 0", paddingLeft: 18 }} className="muted">
             {missing.map((m, i) => <li key={i}>{typeof m === "object" ? `${m.segment ?? ""} ${m.title ?? ""}`.trim() : String(m)}</li>)}
           </ul>

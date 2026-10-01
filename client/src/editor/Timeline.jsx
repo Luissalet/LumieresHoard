@@ -15,7 +15,7 @@ const MAX_PPS = 1600;
 const SNAP_PX = 8;
 const MIN_CLIP = 80;
 
-const MARKER_COLORS = { note: "#F5B700", beat: "#c77dff", scene: "#3BA4F5", highlight: "#3ddc84", chapter: "#ff8a5c" };
+const MARKER_COLORS = { note: "#F5B700", beat: "#c77dff", scene: "#3BA4F5", highlight: "var(--ok)", chapter: "#ff8a5c" };
 
 function trimCalc(clip, side, d, mediaDur, isLen, ripple) {
   const s = clip.speed || 1;
@@ -582,7 +582,7 @@ export default function Timeline() {
                   <span key={ms} className="num" style={{ position: "absolute", left: ms * ppm + 4, top: 3, fontSize: 10.5, color: "var(--muted)", pointerEvents: "none" }}>{fmtRuler(ms, step)}</span>
                 ))}
               </div>
-              <div style={{ position: "relative", height: MARK_H, width: laneW, background: "#101319", borderBottom: "1px solid var(--line)" }}>
+              <div style={{ position: "relative", height: MARK_H, width: laneW, background: "var(--sunken)", borderBottom: "1px solid var(--line)" }}>
                 {doc.markers.map((m) => (
                   <div
                     key={m.id}

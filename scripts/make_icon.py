@@ -2,7 +2,7 @@
 
     python scripts/make_icon.py [--family <Icons folder>] [--src path/to/dragon-src.png] [--preview out.png]
 
-Lumiere's Hoard is a local video editor; its icon is the family dragon in emerald with a gold clapperboard.
+Lumiere's Hoard is a local video editor; its icon is the family dragon in orchid with a gold clapperboard.
 
 Method (the family recipe):
 1. the family's finished icons are the source (the default when the shared Icons folder is next to this repository,
@@ -11,7 +11,7 @@ Method (the family recipe):
    glyph does not cover it (brightness matched between icons, each weighted by its distance to its own glyph so the
    seams fade). No pixel of the dragon is guessed, so there are no inpainting smudges where the body passes behind the
    glyph. A single sibling still works with --src <sibling>/app-icon.png (glyph area inpainted, may smudge);
-2. the dragon is recoloured by luminance with a dark-to-light emerald ramp (#12462A to #7FE3A0, a colour no sibling
+2. the dragon is recoloured by luminance with a dark-to-light orchid ramp (#4A0A52 to #F57AF8, a colour no sibling
    uses); the eye keeps a light colour; the background becomes the family's flat dark navy (the black rounded-square
    corners disappear);
 3. a gold vector clapperboard (film slate, about 380 px wide) is composed at (627, 768): a slate body with a play
@@ -36,9 +36,9 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 SIZE = 1254
 BACKGROUND = (1, 11, 27)  # the family's flat dark navy
-RAMP_DARK = np.array([0x12, 0x46, 0x2A], dtype=np.float32)
-RAMP_LIGHT = np.array([0x7F, 0xE3, 0xA0], dtype=np.float32)
-EYE_COLOR = np.array([0xEC, 0xFF, 0xF3], dtype=np.float32)
+RAMP_DARK = np.array([0x4A, 0x0A, 0x52], dtype=np.float32)
+RAMP_LIGHT = np.array([0xF5, 0x7A, 0xF8], dtype=np.float32)
+EYE_COLOR = np.array([0xFF, 0xEE, 0xFD], dtype=np.float32)
 GOLD_TOP = (0xF8, 0xD8, 0x8C)
 GOLD_BOTTOM = (0xE0, 0xA2, 0x42)
 OUTLINE = (6, 10, 24)

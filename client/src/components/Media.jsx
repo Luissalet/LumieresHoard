@@ -65,7 +65,7 @@ export function MediaThumb({ m, onAdd, onClick, draggable = true, selected, chil
       }}
     >
       {m.urls?.poster ? <img src={m.urls.poster} alt="" loading="lazy" /> : (
-        <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--dim)", background: m.kind === "audio" ? "#12261f" : "#0b0d11" }}>
+        <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--dim)", background: m.kind === "audio" ? "color-mix(in srgb, var(--clip-audio) 28%, var(--sunken))" : "var(--sunken)" }}>
           <Icon name={kindIcon} size={26} />
         </div>
       )}
@@ -106,7 +106,7 @@ export function DropUpload({ children, onUploaded, style }) {
     >
       {children}
       {over ? (
-        <div style={{ position: "absolute", inset: 0, background: "#3ddc8422", border: "2px dashed var(--accent)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none", zIndex: 5, color: "var(--accent)", fontWeight: 600 }}>
+        <div style={{ position: "absolute", inset: 0, background: "var(--accent-soft)", border: "2px dashed var(--accent)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none", zIndex: 5, color: "var(--accent)", fontWeight: 600 }}>
           <Icon name="upload" size={20} />&nbsp;{app.t("drop_files")}
         </div>
       ) : null}

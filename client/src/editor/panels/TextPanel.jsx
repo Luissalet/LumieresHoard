@@ -29,7 +29,7 @@ export default function TextPanel() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           {Object.keys(SAMPLES).map((key) => (
             <button key={key} type="button" className="tile" style={{ minHeight: 84, display: "flex", flexDirection: "column", justifyContent: "space-between" }} onClick={() => add(key)}>
-              <div style={{ background: "#0b0d11", borderRadius: 6, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 52, padding: 6, textAlign: "center" }}>
+              <div style={{ background: "var(--sunken)", borderRadius: 6, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 52, padding: 6, textAlign: "center" }}>
                 <span style={SAMPLES[key].css}>{t(SAMPLES[key].text)}</span>
               </div>
               <span style={{ fontSize: 12, marginTop: 6 }}>{t(`text_preset_${key}`)}</span>

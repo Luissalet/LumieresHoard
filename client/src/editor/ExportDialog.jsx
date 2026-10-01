@@ -26,7 +26,7 @@ function Result({ r }) {
         {r.width ? <span className="chip">{r.width}×{r.height}</span> : null}
         {r.duration_ms ? <span className="chip">{fmtMs(r.duration_ms).replace(/\.\d+$/, "")}</span> : null}
       </div>
-      {(qc.problems || []).length ? <ul style={{ margin: "0 0 10px", paddingLeft: 18, color: "#ffb4b4", fontSize: 12.5 }}>{qc.problems.map((p, i) => <li key={i}>{typeof p === "string" ? p : JSON.stringify(p)}</li>)}</ul> : null}
+      {(qc.problems || []).length ? <ul style={{ margin: "0 0 10px", paddingLeft: 18, color: "var(--danger-ink)", fontSize: 12.5 }}>{qc.problems.map((p, i) => <li key={i}>{typeof p === "string" ? p : JSON.stringify(p)}</li>)}</ul> : null}
       <div style={{ display: "flex", gap: 8 }}>
         <button type="button" className="btn" onClick={reveal}><Icon name="folder" size={14} />{t("reveal")}</button>
         <a className="btn" href={api.renderUrl(r.id, true)}><Icon name="download" size={14} />{t("download")}</a>

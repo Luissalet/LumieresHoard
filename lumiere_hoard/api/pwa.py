@@ -19,8 +19,8 @@ _MANIFEST = {
     "short_name": "Lumière",
     "start_url": "/",
     "display": "standalone",
-    "background_color": "#0d1117",
-    "theme_color": "#14202b",
+    "background_color": "#1c141c",
+    "theme_color": "#241b25",
     "lang": "es",
     "icons": [
         {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},

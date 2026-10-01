@@ -204,12 +204,12 @@ export default function TextView() {
         <span className="muted" style={{ fontSize: 11.5 }}>{range ? t("text_selected", { n: range[1] - range[0] + 1 }) : t("text_hint")}</span>
       </div>
       {missing.length ? (
-        <div style={{ padding: "8px 12px", background: "#3a2f10", borderBottom: "1px solid #5c4a14", display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ padding: "8px 12px", background: "color-mix(in srgb, var(--warn) 16%, var(--panel))", borderBottom: "1px solid color-mix(in srgb, var(--warn) 45%, var(--panel))", display: "flex", gap: 10, alignItems: "center" }}>
           <span style={{ flex: 1, fontSize: 12.5 }}>{t("text_missing", { n: missing.length })}</span>
           <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={transcribe}><Icon name="mic" size={14} />{t("transcribe")}</button>
         </div>
       ) : null}
-      <div ref={box} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "10px 18px 24px", fontSize: 15, lineHeight: 1.95, background: "#12151a", userSelect: "none" }} data-testid="textview">
+      <div ref={box} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "10px 18px 24px", fontSize: 15, lineHeight: 1.95, background: "var(--sunken)", userSelect: "none" }} data-testid="textview">
         {!transcript ? <Spinner /> : words.length === 0 ? <div className="muted" style={{ padding: 20 }}>{missing.length ? t("text_none_missing") : t("text_none")}</div> : paragraphs.map((p, pi) => {
           const first = p.items[0];
           const last = p.items[p.items.length - 1];
