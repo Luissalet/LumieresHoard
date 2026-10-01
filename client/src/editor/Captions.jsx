@@ -9,7 +9,8 @@ export function groupWords(words, cap) {
     const gap = cur.length ? w.t - cur[cur.length - 1].t1 : 0;
     const endsSentence = cur.length && /[.?!…]$/.test(cur[cur.length - 1].text);
     const newLen = chars + text.length + (cur.length ? 1 : 0);
-    if (cur.length && (cur.length >= cap.max_words || newLen > cap.max_chars || endsSentence || gap > 800)) {
+    const speakerChange = cur.length && cap.speaker_labels && cap.speaker_labels !== "off" && cur[cur.length - 1].speaker_name !== w.speaker_name;
+    if (cur.length && (cur.length >= cap.max_words || newLen > cap.max_chars || endsSentence || gap > 800 || speakerChange)) {
       groups.push(cur);
       cur = [];
       chars = 0;
@@ -26,7 +27,8 @@ const BASE = { clean: 0.045, bold: 0.058, karaoke: 0.055, pop: 0.062, boxed: 0.0
 // The caption line under the playhead, drawn like the render does (group of words, active word highlighted).
 export default function Captions({ doc, words, box, k, pb }) {
   const cap = doc.captions;
-  const groups = useMemo(() => groupWords(words || [], cap), [words, cap.max_words, cap.max_chars]); // eslint-disable-line react-hooks/exhaustive-deps
+  const groups = useMemo(() => groupWords(words || [], cap), [words, cap.max_words, cap.max_chars, cap.speaker_labels]); // eslint-disable-line react-hooks/exhaustive-deps
+  const manySpeakers = useMemo(() => new Set((words || []).map((w) => w.speaker_name).filter(Boolean)).size > 1, [words]);
   const [pos, setPos] = useState({ g: -1, w: -1 });
   const ref = useRef({ groups });
   ref.current = { groups };
@@ -68,6 +70,10 @@ export default function Captions({ doc, words, box, k, pb }) {
       : cap.position === "bottom" ? { bottom: box.h * 0.06 }
         : { bottom: box.h * (portrait ? 0.22 : 0.11) };
   const boxed = cap.style === "boxed";
+  const labels = cap.speaker_labels || "off";
+  const speaker = grp[0].speaker_name;
+  const tint = (labels === "color" || labels === "both") && grp[0].speaker_color ? grp[0].speaker_color : null;
+  const prefix = (labels === "prefix" || labels === "both") && manySpeakers && speaker ? `${speaker}: ` : "";
   return (
     <div style={{ position: "absolute", left: box.w * 0.06, right: box.w * 0.06, zIndex: 9000, textAlign: "center", pointerEvents: "none", ...place }}>
       <span
@@ -78,7 +84,7 @@ export default function Captions({ doc, words, box, k, pb }) {
           lineHeight: 1.15,
           fontWeight: cap.style === "clean" || cap.style === "minimal" ? 500 : 800,
           textTransform: cap.uppercase ? "uppercase" : "none",
-          color: cap.color,
+          color: tint || cap.color,
           background: boxed ? "rgba(0,0,0,0.68)" : undefined,
           padding: boxed ? `${size * 0.18}px ${size * 0.4}px` : undefined,
           borderRadius: boxed ? size * 0.25 : undefined,
@@ -87,12 +93,13 @@ export default function Captions({ doc, words, box, k, pb }) {
           textShadow: cap.style === "clean" || cap.style === "minimal" ? `0 ${size * 0.05}px ${size * 0.18}px #000c` : undefined,
         }}
       >
+        {prefix ? <span style={{ marginRight: "0.28em" }}>{cap.uppercase ? prefix.toUpperCase() : prefix}</span> : null}
         {grp.map((w, i) => {
           const active = i === pos.w;
           const spoken = i <= pos.w;
           const hl = (cap.style === "pop" && active) || (cap.style === "karaoke" && spoken);
           return (
-            <span key={w.id + i} style={{ color: hl ? cap.highlight : cap.color, display: "inline-block", transform: cap.style === "pop" && active ? "scale(1.14)" : undefined, marginRight: i < grp.length - 1 ? "0.28em" : 0, transition: "transform 0.08s" }}>
+            <span key={w.id + i} style={{ color: hl ? cap.highlight : tint || cap.color, display: "inline-block", transform: cap.style === "pop" && active ? "scale(1.14)" : undefined, marginRight: i < grp.length - 1 ? "0.28em" : 0, transition: "transform 0.08s" }}>
               {w.text}
             </span>
           );

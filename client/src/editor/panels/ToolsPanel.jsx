@@ -5,6 +5,7 @@ import { Icon, NumInput, Seg, SliderRow, Spinner, Toggle } from "../../component
 import { useMediaLibrary } from "../../components/Media.jsx";
 import { useEd } from "../EditorContext.js";
 import { fmtMs } from "../time.js";
+import MulticamTool from "./MulticamTool.jsx";
 import { Hint, PanelHead } from "./Shared.jsx";
 
 const secs = (ms) => `${(Number(ms || 0) / 1000).toFixed(1)}`;
@@ -270,6 +271,8 @@ export default function ToolsPanel() {
       <PanelHead title={t("tab_tools")} />
       <div className="ed-panel-body">
         <Hint>{t("tools_help")}</Hint>
+
+        <MulticamTool />
 
         <ScriptTool videos={videos} />
 

@@ -20,26 +20,33 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("lumiere.analyze")
 
-KINDS = ("scenes", "beats", "loudness", "motion", "focus", "transcript")
-LABELS = {"scenes": "Escenas", "beats": "Ritmo", "loudness": "Sonoridad", "motion": "Movimiento", "focus": "Encuadre", "transcript": "Transcripción"}
+KINDS = ("scenes", "beats", "loudness", "motion", "focus", "transcript", "speakers")
+LABELS = {"scenes": "Escenas", "beats": "Ritmo", "loudness": "Sonoridad", "motion": "Movimiento", "focus": "Encuadre", "transcript": "Transcripción", "speakers": "Hablantes"}
 
 
-def schedule(svc: "Services", media_id: str, kinds: list[str], *, force: bool = False, language: str = "", model: str = "") -> list[dict[str, Any]]:
+def schedule(svc: "Services", media_id: str, kinds: list[str], *, force: bool = False, language: str = "", model: str = "",
+             num_speakers: Optional[int] = None, speakers: bool = False, engine: str = "") -> list[dict[str, Any]]:
     info = media_store.get(svc, media_id)
     jobs = []
     for kind in kinds:
         if kind not in KINDS:
             raise LumiereError(f"Unknown analysis {kind!r}. Known: {', '.join(KINDS)}.")
-        if kind in ("beats", "loudness", "transcript") and not info["has_audio"]:
+        if kind in ("beats", "loudness", "transcript", "speakers") and not info["has_audio"]:
             raise LumiereError(f"{info['name']} has no sound: {kind} needs audio.")
         if kind in ("scenes", "motion", "focus") and not info["has_video"]:
             raise LumiereError(f"{info['name']} has no picture: {kind} needs video.")
-        if not force and media_store.get_analysis(svc, media_id, kind) is not None:
+        cached = media_store.get_analysis(svc, media_id, kind)
+        if kind == "speakers" and cached is not None and num_speakers and cached.get("requested") != num_speakers:
+            force = True  # a different number of speakers asked for: separate again
+        if not force and cached is not None:
             jobs.append({"kind": kind, "state": "cached"})
             continue
         params: dict[str, Any] = {"media": media_id, "kind": kind}
-        if kind == "transcript":
-            params.update({"language": language, "model": model})
+        if kind == "speakers":
+            params.update({"num_speakers": num_speakers, "language": language, "model": model, "engine": engine or "auto"})
+            job = svc.jobs.submit("diarize", params, label=f"Hablantes · {clip(info['name'], 60)}", media_id=media_id)
+        elif kind == "transcript":
+            params.update({"language": language, "model": model, "speakers": speakers, "num_speakers": num_speakers, "engine": engine or "auto"})
             job = svc.jobs.submit("transcribe", params, label=f"Transcribir {clip(info['name'], 60)}", media_id=media_id)
         else:
             job = svc.jobs.submit("analyze", params, label=f"{LABELS[kind]} · {clip(info['name'], 60)}", media_id=media_id)
@@ -113,7 +120,13 @@ def transcribe_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
     ctx.check()
     media_store.put_analysis(svc, mid, "transcript", result, {"model": result["model"], "language": result["language"]})
     svc.emit("lumiere.media.transcribed", {"id": mid, "words": len(result["words"]), "language": result["language"]})
-    return {"words": len(result["words"]), "language": result["language"], "model": result["model"], "device": result["device"]}
+    out = {"words": len(result["words"]), "language": result["language"], "model": result["model"], "device": result["device"]}
+    if ctx.params.get("speakers") and result["words"]:
+        from . import speakers as speakers_mod
+
+        found = speakers_mod.diarize(svc, mid, num_speakers=ctx.params.get("num_speakers"), engine_name=ctx.params.get("engine") or "auto", handle=ctx.handle())
+        out["speakers"] = len(found["speakers"])
+    return out
 
 
 def summarize(kind: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -129,7 +142,9 @@ def summarize(kind: str, result: dict[str, Any]) -> dict[str, Any]:
     if kind == "focus":
         return {"samples": len(result.get("samples", [])), "faces": result.get("faces")}
     if kind == "transcript":
-        return {"words": len(result.get("words", [])), "language": result.get("language")}
+        return {"words": len(result.get("words", [])), "language": result.get("language"), "speakers": len(result.get("speakers") or {}) or None}
+    if kind == "speakers":
+        return {"speakers": result.get("speakers"), "method": result.get("method")}
     return {}
 
 

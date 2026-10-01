@@ -54,6 +54,10 @@ COMMAND_DOCS = {
     "beat_sync": "args {music: media id, source?: video media id, beats_per_cut?: 2, mode?: 'scenes'|'clips'} — rebuild the main track on the beat",
     "match_loudness": "args {target_lufs?: -16} — same loudness for every clip",
     "zoom_cuts": "args {scale?: 1.12, every?: 2} — punch in on every other clip so jump cuts look like camera changes",
+    "speaker_cut": "args {speakers: [names or ids like 'S1'], media?, keep?: false} — remove (or keep only) what the given speakers say (needs media_analyze kinds=['speakers'])",
+    "multicam_create": "args {media: [2+ media ids recorded at the same time], name?, offsets?: {media: ms}, master?, angle?} — sync them by audio and build a multicam group",
+    "multicam_resync": "args {group?, offsets?: {media: start_ms}} — measure the group's sync again or set an angle's offset by hand",
+    "multicam_auto": "args {group?, mode?: 'loudness'|'speakers', min_shot_ms?: 2000, hysteresis_db?: 4, wide?: angle} — cut between the cameras by who is speaking",
     "script_assemble": "args {media, script?: text, script_path?: file, take?: 'last'|'best', mode?: 'auto'|'words'|'meaning'} — rough cut of a recording read from a script: one take per segment",
 }
 
@@ -72,6 +76,9 @@ speed_ramp {clip, preset?: speed_up|slow_down|ease_in_out|hit|clear, speed?, at?
 mask {clip | clips, shape?: rectangle|rounded|ellipse, x?, y?, w?, h? (fractions of the clip's picture), radius?, feather?, invert?, remove?}
 add_sequence {project (prj_...: another project used as one clip), at?, track?, src_in?, src_out?}
 unnest {clip} (a sequence clip: its clips come back onto this timeline)
+multicam_create {angles: [{media, start?, label?}], name?, master?, angle?, at?}  (build a group from synced recordings; the sound is one continuous master)
+multicam_switch {angle, at?, end?}  or  {angle, clip}  or  {cuts: [[ms, angle], ...]}  (show another camera for a range; angle = 1-based number, label or media id)
+multicam_set {group?, offsets?: {angle: start_ms}, master?, name?, release?}  (fix an angle's sync by hand, change the master sound, dissolve the group)
 Transitions: """ + ", ".join(TRANSITIONS) + """
 Effects (filter_add type): eq{brightness, contrast, saturation, gamma}, grayscale, sepia, vintage, warm{amount}, cool{amount}, contrast_pop{amount},
 vignette{strength}, blur{radius}, sharpen{amount}, denoise{strength}, pixelate{size}, chromakey{color, similarity, blend}, hflip, vflip, lut{file},
@@ -110,6 +117,9 @@ def context(svc: "Services", project_id: str, budget: int = 9000) -> str:
             lines.append(desc)
         if len(t["clips"]) > 60:
             lines.append(f"  … {len(t['clips']) - 60} more clips")
+    for g in p.multicams:
+        lines.append(f"Multicam group {g.id} «{g.name}»: " + "; ".join(f"angle {i + 1} {a.label} = media {a.media}{' (sound only)' if a.audio_only else ''}"
+                                                                   for i, a in enumerate(g.angles)) + f"; master sound = angle {g.master + 1}.")
     lines.append(f"Captions: {'on, ' + p.captions.style if p.captions.enabled else 'off'}.")
     used = p.media_ids()
     lines.append("Media on the timeline:")

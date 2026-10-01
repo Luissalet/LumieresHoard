@@ -286,12 +286,17 @@ def outline(svc: "Services", project_id: str) -> dict[str, Any]:
                 item["effects"] = [f.type for f in c.filters]
             if c.transition_in:
                 item["transition"] = f"{c.transition_in.type} {c.transition_in.dur}ms"
+            if c.multicam:
+                item["multicam"] = c.multicam
             clips.append(item)
         tracks.append({"id": t.id, "kind": t.kind, "role": t.role, "name": t.name, "muted": t.muted, "hidden": t.hidden, "locked": t.locked,
                        "clips": clips})
     return {"project": project_id, "canvas": p.canvas.model_dump(), "duration": ms_to_tc(p.duration), "duration_ms": p.duration,
             "length_mode": p.length_mode, "tracks": tracks, "markers": [m.model_dump() for m in p.markers[:200]],
-            "captions": p.captions.model_dump(), "issues": validate(p, look)}
+            "captions": p.captions.model_dump(), "issues": validate(p, look),
+            **({"multicams": [{"id": g.id, "name": g.name, "master": g.master + 1,
+                               "angles": [{"n": i + 1, "media": a.media, "label": a.label, "start_ms": a.start, "audio_only": a.audio_only}
+                                          for i, a in enumerate(g.angles)]} for g in p.multicams]} if p.multicams else {})}
 
 
 def nest(svc: "Services", project_id: str, clip_ids: list[str], name: str = "", *, actor: str = "ui") -> dict[str, Any]:

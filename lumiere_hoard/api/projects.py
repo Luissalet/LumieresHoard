@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
-from .. import commands, derive
+from .. import commands, derive, multicam
 from .. import plan as plan_mod
 from .. import projects as store
 from ..render import runner
@@ -68,6 +68,12 @@ class RenderBody(BaseModel):
     lufs: Any = "default"
     subtitles: bool = False
     mode: str = "render"
+
+
+class MulticamSyncBody(BaseModel):
+    media: list[str] = Field(..., min_length=2, max_length=12)
+    reference: Optional[str] = None
+    offsets: dict[str, float] = Field(default_factory=dict)
 
 
 class FreezeBody(BaseModel):
@@ -180,6 +186,26 @@ def text_cut(request: Request, project_id: str, body: TextCutBody):
     except commands.NeedsAnalysis as need:
         return {"done": False, "needs": need.jobs, "message": str(need)}
     return {**res, "done": True, "view": store.view(svc, project_id)}
+
+
+@router.post("/multicam/sync")
+def multicam_sync(request: Request, body: MulticamSyncBody):
+    """Measure the offsets of recordings of one event (nothing is edited): the 'Crear multicámara' dialog shows this before building the group."""
+    return tool(request, "multicam_sync", media=body.media, reference=body.reference, offsets=body.offsets)
+
+
+@router.get("/projects/{project_id}/multicam")
+def multicam_view(request: Request, project_id: str, group: Optional[str] = None):
+    svc = services(request)
+    return multicam.view(store.doc(svc, project_id), group)
+
+
+@router.get("/projects/{project_id}/multicam/frame")
+def multicam_frame(request: Request, project_id: str, angle: str, t: int = 0, group: Optional[str] = None, width: int = 240):
+    """Thumbnail of one angle at the moment of the event the timeline shows at ``t`` (server-made JPEG)."""
+    svc = services(request)
+    path = multicam.angle_frame(svc, store.doc(svc, project_id), group=group, angle=angle, t=t, width=width)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/projects/{project_id}/frame")

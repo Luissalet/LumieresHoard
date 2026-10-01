@@ -10,7 +10,7 @@ from fastapi import APIRouter, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from .. import analyze, commands
+from .. import analyze, commands, speakers as speakers_mod
 from .. import media as media_store
 from ..errors import LumiereError, NotFound
 from .deps import services, tool
@@ -33,6 +33,22 @@ class AnalyzeBody(BaseModel):
     kinds: list[str]
     force: bool = False
     language: str = ""
+    num_speakers: Optional[int] = Field(None, ge=1, le=12)
+    speakers: bool = False
+    engine: str = Field("auto", pattern="^(auto|builtin|embeddings)$")
+
+
+class SpeakersBody(BaseModel):
+    action: str = Field(..., pattern="^(diarize|rename|assign|merge|clear)$")
+    num_speakers: Optional[int] = Field(None, ge=1, le=12)
+    engine: str = Field("auto", pattern="^(auto|builtin|embeddings)$")
+    names: dict[str, str] = Field(default_factory=dict)
+    speaker: str = ""
+    word_ids: list[str] = Field(default_factory=list)
+    from_ms: Optional[int] = None
+    to_ms: Optional[int] = None
+    source: str = ""
+    into: str = ""
 
 
 class WordsBody(BaseModel):
@@ -144,7 +160,30 @@ def fix_words(request: Request, media_id: str, body: WordsBody):
 
 @router.post("/{media_id}/analyze")
 def run_analyze(request: Request, media_id: str, body: AnalyzeBody):
-    return {"jobs": analyze.schedule(services(request), media_id, body.kinds, force=body.force, language=body.language)}
+    return {"jobs": analyze.schedule(services(request), media_id, body.kinds, force=body.force, language=body.language,
+                                     num_speakers=body.num_speakers, speakers=body.speakers, engine=body.engine)}
+
+
+@router.get("/{media_id}/speakers")
+def get_speakers(request: Request, media_id: str):
+    """Speakers of the transcript; before there is a transcript, an empty answer (with the engine status) instead of an error."""
+    svc = services(request)
+    try:
+        return speakers_mod.summary(svc, media_id)
+    except LumiereError as error:
+        if error.code != "no_transcript":
+            raise
+        return {"media": media_id, "diarized": False, "speakers": [], "turns": 0, "turns_list": [], "transcribed": False, "status": speakers_mod.status()}
+
+
+@router.post("/{media_id}/speakers")
+def edit_speakers(request: Request, media_id: str, body: SpeakersBody):
+    return tool(request, "speakers_edit", media=media_id, **body.model_dump(exclude_none=True))
+
+
+@router.get("/{media_id}/frame")
+def media_frame(request: Request, media_id: str, t: int = 0, width: int = 240):
+    return _file(media_store.frame_path(services(request), media_id, t, width), "image/jpeg")
 
 
 @router.get("/{media_id}/analysis/{kind}")
