@@ -28,10 +28,11 @@ same contract as the rest without touching their existing endpoints.
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ._hubclient import fetch, hub_url
 
