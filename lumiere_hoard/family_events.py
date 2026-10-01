@@ -34,6 +34,7 @@ EMITS: dict[str, tuple[str, str]] = {
                             "id, project, preset, path, duration_ms, width, height, bytes, seconds, ok (quality check), problems[], lufs?, variant? (16x9...), job"),
     "lumiere.render.failed": ("an export did not finish", "job, project, preset, error"),
     "lumiere.media.transcribed": ("a transcription finished", "id (media), name, words, language, duration_ms, model, job"),
+    "lumiere.media.speakers": ("the voices of a transcript were separated", "id (media), speakers, method"),
     "lumiere.media.transcription_failed": ("a transcription failed", "job, id (media), error"),
     "lumiere.subtitles.translated": ("subtitles were translated into a language", "project, language, cues, fallback (cues left untranslated)"),
     "lumiere.media.received": ("media arrived from another app and was imported", "id, name, kind, source, project?, existing"),
