@@ -175,6 +175,8 @@ class Clip(Strict):
     reframe: Optional[Reframe] = None
     mask: Optional[Mask] = None
     color: Optional[str] = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
+    slot: Optional[str] = Field(None, min_length=1, max_length=40, pattern=r"^[A-Za-z0-9_\-]+$",
+                                description="Template slot name (intro, main, outro...): the clip a project made from this template fills with other media.")
     multicam: Optional[str] = Field(None, description="Id of the multicam group this clip belongs to (its picture is an angle, or it is the group's master sound).")
     _seg_cache: Any = PrivateAttr(default=None)
 

@@ -328,6 +328,8 @@ class MaskOp(OpBase):
     invert: Optional[bool] = None
     enabled: Optional[bool] = None
     remove: bool = Field(False, description="Remove the mask and its keyframes.")
+
+
 class MulticamCreate(OpBase):
     op: Literal["multicam_create"]
     angles: list[dict[str, Any]] = Field(..., min_length=2, max_length=12, description="[{media, start?, label?}]: start = group time (ms) at which that media's own time 0 happened (multicam_sync finds it).")
@@ -359,10 +361,34 @@ class MulticamSet(OpBase):
     release: bool = Field(False, description="Dissolve the group: its clips become ordinary clips.")
 
 
+class AddOverlay(OpBase):
+    op: Literal["add_overlay"]
+    media: str
+    start: Time = Field(..., description="Timeline ms where the overlay (b-roll) starts.")
+    length: Time = Field(..., description="How long it covers; a shorter media covers less.")
+    src_in: Optional[Time] = Field(None, description="Where in the media it starts (default 0).")
+    track: Optional[str] = Field(None, description="A video track; omitted = the first overlay track that is free there, or a new 'B-roll' track on top.")
+    fit: Literal["contain", "cover", "fill", "none", "blur"] = "cover"
+    mute: bool = True
+    fade_in: int = Field(0, ge=0, le=5000)
+    fade_out: int = Field(0, ge=0, le=5000)
+
+
+class FillSlot(OpBase):
+    op: Literal["fill_slot"]
+    slot: str = Field(..., min_length=1, max_length=40, description="The slot name on a clip (set it with set {props: {slot: 'intro'}}).")
+    media: str
+    src_in: Optional[Time] = None
+    src_out: Optional[Time] = None
+    length: Optional[Time] = Field(None, description="Images, or a shorter stay for a slot that keeps its length.")
+    rule: Literal["auto", "keep", "full"] = Field("auto", description="full: the clip takes the media's whole length and what follows moves; keep: the slot's length "
+                                                  "(shorter when the media is); auto: full for slots named main*, keep for the rest.")
+
+
 Op = Union[AddMedia, AddText, Split, Trim, Move, Delete, DeleteRange, CutSource, KeepSource, SetClip, Speed, TransitionOp, FilterAdd,
            FilterRemove, TrackAdd, TrackSet, TrackDelete, CanvasOp, MarkerAdd, MarkerDelete, CaptionsOp, Duplicate, DetachAudio, CloseGaps,
            ReplaceMedia, Sequence, KeyframesOp, Slip, Roll, InsertClips, Notes, SpeedRamp, AddSequence, Unnest, MaskOp, MulticamCreate,
-           MulticamSwitch, MulticamSet]
+           MulticamSwitch, MulticamSet, AddOverlay, FillSlot]
 _ADAPTER = TypeAdapter(Op)
 OP_MODELS: dict[str, type[BaseModel]] = {m.model_fields["op"].annotation.__args__[0]: m for m in Op.__args__}  # type: ignore[union-attr]
 OP_NAMES = sorted(OP_MODELS)
@@ -877,7 +903,7 @@ def _keep_source(ctx: Ctx, o: KeepSource) -> dict:
 
 _SETTABLE = {"label", "mute", "volume_db", "fade_in", "fade_out", "audio_fade_in", "audio_fade_out", "transform", "crop", "text", "style", "color",
              "speed", "reverse", "audio_stream", "keyframes", "filters", "reframe", "transition_in", "start", "src_in", "src_out", "length",
-             "speed_keys", "mask"}
+             "speed_keys", "mask", "slot"}
 _MERGED = {"transform": Transform, "crop": Crop, "style": TextStyle, "mask": Mask}
 
 
@@ -888,6 +914,10 @@ def _set(ctx: Ctx, o: SetClip) -> dict:
     if unknown:
         raise LumiereError(f"Not settable: {', '.join(sorted(unknown))}. Settable: {', '.join(sorted(_SETTABLE))}.")
     old_end = c.end
+    if o.props.get("slot"):
+        taken = next((x for _, x in ctx.p.all_clips() if x.slot == o.props["slot"] and x.id != c.id), None)
+        if taken is not None:
+            raise LumiereError(f"The slot {o.props['slot']!r} is already on clip {taken.id}; a slot names one clip.")
     data = c.model_dump()
     for key, value in o.props.items():
         if key in _MERGED and isinstance(value, dict):
@@ -1523,6 +1553,8 @@ def nest_plan(p: Project, clip_ids: list[str]) -> tuple[Project, dict[str, Any]]
     if keep_transition and not any(o.id not in chosen and o.end > first_on_dest.start and o.start < first_on_dest.start for o in dest.clips):
         keep_transition = None
     return nested, {"start": start, "end": end, "length": end - start, "track": dest.id, "transition_in": keep_transition}
+
+
 # ------------------------------------------------------------------ multicam
 
 def _angle_ref(g: Multicam, ref: Any, *, video: bool = False) -> int:
@@ -1773,6 +1805,121 @@ def _prune_multicams(p: Project) -> None:
     p.multicams = [g for g in p.multicams if g.id in alive]
 
 
+def _overlay_track(ctx: Ctx, wanted: Optional[str], start: int, end: int) -> Track:
+    """The video track an overlay goes on: the one asked for, else the first non-main video track with nothing in [start, end),
+    else a new 'B-roll' track on top of the others."""
+    p = ctx.p
+    if wanted:
+        t = p.track(wanted)
+        if t.kind != "video":
+            raise LumiereError("An overlay goes on a video track.")
+        _unlocked(t)
+        return t
+    main = p.main_track()
+    for t in p.tracks:
+        if t.kind == "video" and t is not main and t.role != "main" and not t.locked and not any(c.start < end and c.end > start for c in t.clips):
+            return t
+    if len(p.tracks) >= 24:
+        raise LumiereError("24 tracks at most.")
+    t = Track(kind="video", name="B-roll", role="overlay")
+    p.tracks.append(t)
+    return t
+
+
+def _add_overlay(ctx: Ctx, o: AddOverlay) -> dict:
+    info = ctx.media(o.media)
+    if not (info.get("has_video") or info.get("kind") == "image"):
+        raise LumiereError(f"{info.get('name')} has no picture: it cannot be an overlay.")
+    start = ctx.snap(max(0, _t(o.start)))
+    length = int(_t(o.length) or 0)
+    if length < MIN_CLIP_MS:
+        raise LumiereError("An overlay needs a length of at least 40 ms.")
+    if info.get("kind") == "image":
+        a, b = 0, length
+    else:
+        a = max(0, _t(o.src_in) or 0)
+        dur = int(info.get("duration_ms") or 0)
+        b = a + (min(length, dur - a) if dur else length)
+        if b - a < MIN_CLIP_MS:
+            raise LumiereError(f"Nothing left of {info.get('name')} after {a} ms for an overlay.")
+    track = _overlay_track(ctx, o.track, start, start + (b - a))
+    clip = Clip(media=o.media, start=start, src_in=a, src_out=b, mute=o.mute, label=str(info.get("name") or "")[:120], fade_in=o.fade_in, fade_out=o.fade_out)
+    clip.transform.fit = o.fit
+    _clear_range(track, clip.start, clip.end)
+    track.clips.append(clip)
+    return {"clip": clip.id, "track": track.id, "start": clip.start, "end": clip.end, "short_by": max(0, length - (b - a))}
+
+
+def _slot_clip(p: Project, slot: str) -> tuple[Track, Clip]:
+    hits = sorted(((t, c) for t, c in p.all_clips() if c.slot == slot), key=lambda tc: tc[1].start)
+    if not hits:
+        known = sorted({c.slot for _, c in p.all_clips() if c.slot})
+        raise NotFound(f"No clip has the slot {slot!r}. " + (f"Slots here: {', '.join(known)}." if known else "This project has no slots (mark a clip with set {props: {slot: 'name'}})."))
+    return hits[0]
+
+
+def _fill_slot(ctx: Ctx, o: FillSlot) -> dict:
+    """Replace the media of the clip that carries a slot, keeping its look (effects, transform, fades, speed). The new clip takes the
+    slot's length (``keep``: shorter if the media is) or the media's whole length (``full``, the rule for slots named main*); on the
+    main track, and whenever the length changes under ``full``, the clips and markers that follow move with it, and background
+    music that ran to the end of the edit is stretched to the new end when its file is long enough."""
+    p = ctx.p
+    track, c = _slot_clip(p, o.slot)
+    _unlocked(track)
+    if c.type != "media":
+        raise LumiereError(f"The slot {o.slot!r} is a title: change its text with set {{props: {{text: ...}}}}.")
+    info = ctx.media(o.media)
+    if track.kind == "video" and not (info.get("has_video") or info.get("kind") == "image"):
+        raise LumiereError(f"{info.get('name')} has no picture: the slot {o.slot!r} is on a video track.")
+    if track.kind == "audio" and not info.get("has_audio"):
+        raise LumiereError(f"{info.get('name')} has no sound: the slot {o.slot!r} is on an audio track.")
+    full = o.rule == "full" or (o.rule == "auto" and o.slot.lower().startswith("main"))
+    old_start, old_end, old_total = c.start, c.end, p.duration
+    want = _t(o.length)
+    if info.get("kind") == "image":
+        span = int(round((want if want is not None else (c.duration if not full else 4000)) * c.speed))
+        a, b = 0, span
+    else:
+        dur = int(info.get("duration_ms") or 0)
+        a = max(0, _t(o.src_in) or 0)
+        if o.src_out is not None:
+            b = _t(o.src_out)
+        elif full and want is None:
+            b = dur
+        else:
+            b = a + int(round((want if want is not None else c.duration) * c.speed))
+        if dur:
+            b = min(b, dur)
+        if b - a < MIN_CLIP_MS:
+            raise LumiereError(f"Empty or too short source range [{a}, {b}] for the {dur} ms media {info.get('name')}.")
+    c.media, c.src_in, c.src_out, c.reframe, c.audio_stream = o.media, a, b, None, 0
+    c.label = str(info.get("name") or c.label)[:120]
+    delta = c.end - old_end
+    if delta and (full or track.role == "main"):
+        for t in p.tracks:
+            _shift(t, old_end, delta, exclude={c.id})
+        for m in p.markers:
+            if m.t >= old_end:
+                m.t = max(0, m.t + delta)
+        _stretch_music(ctx, old_total)
+    return {"clip": c.id, "slot": o.slot, "media": o.media, "start": c.start, "end": c.end, "delta_ms": delta, "rule": "full" if full else "keep"}
+
+
+def _stretch_music(ctx: Ctx, old_total: int) -> None:
+    """After the main track changed length: music that ran to the old end follows the new end (never past its file)."""
+    p = ctx.p
+    main = p.main_track()
+    new_total = max((x.end for x in main.clips), default=0) if main else 0
+    for t in p.tracks:
+        if t.kind != "audio" or t.role != "music":
+            continue
+        for m in t.clips:
+            if m.type != "media" or m.end < old_total - 60 or m.end >= new_total:
+                continue
+            dur = int((ctx.media_lookup(m.media) or {}).get("duration_ms") or 0)
+            m.src_out = min(dur, m.src_out + int(round((new_total - m.end) * m.speed))) if dur else m.src_out
+
+
 HANDLERS: dict[str, Callable[[Ctx, Any], dict]] = {
     "add_media": _add_media, "add_text": _add_text, "split": _split, "trim": _trim, "move": _move, "delete": _delete,
     "delete_range": _delete_range, "cut_source": _cut_source, "keep_source": _keep_source, "set": _set, "speed": _speed,
@@ -1782,6 +1929,7 @@ HANDLERS: dict[str, Callable[[Ctx, Any], dict]] = {
     "sequence": _sequence, "keyframes": _keyframes, "slip": _slip, "roll": _roll, "insert_clips": _insert_clips, "notes": _notes,
     "speed_ramp": _speed_ramp, "add_sequence": _add_sequence, "unnest": _unnest, "mask": _mask,
     "multicam_create": _multicam_create, "multicam_switch": _multicam_switch, "multicam_set": _multicam_set,
+    "add_overlay": _add_overlay, "fill_slot": _fill_slot,
 }
 
 

@@ -3,7 +3,7 @@ import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import { Field, Icon, Spinner, Toggle } from "../components/ui.jsx";
 
-const KEYS = ["whisper_model", "whisper_device", "transcript_language", "hwdec", "export_folder", "auto_transcribe", "model", "default_export"];
+const KEYS = ["whisper_model", "whisper_device", "transcript_language", "hwdec", "export_folder", "auto_transcribe", "model", "default_export", "face_detector"];
 
 function Stat({ label, value, tone }) {
   return (
@@ -91,6 +91,12 @@ export default function Settings() {
               <input className="field" value={draft.export_folder} placeholder={t("set_export_folder_ph")} onChange={(e) => set("export_folder", e.target.value)} />
             </Field>
 
+            <Field label={t("set_face_detector")} help={t("set_face_detector_help")}>
+              <select className="field" value={draft.face_detector || "auto"} onChange={(e) => set("face_detector", e.target.value)} data-testid="face-detector">
+                {["auto", "yunet", "haar", "saliency"].map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </Field>
+
             <h3 style={{ fontSize: 13.5, margin: "10px 0 12px" }}>{t("settings_model")}</h3>
             <Field label={t("set_model")} help={t("set_model_help")}>
               <input className="field" value={draft.model} placeholder="auto" onChange={(e) => set("model", e.target.value)} />
@@ -110,6 +116,7 @@ export default function Settings() {
                 <Stat label={t("status_libass")} value={yn(ff.libass)} tone={ff.libass ? "ok" : "warn"} />
                 <Stat label={t("status_vidstab")} value={yn(ff.vidstab)} />
                 <Stat label={t("status_speech")} value={speech.available ? `${speech.engine}${speech.cuda_devices ? ` · GPU ×${speech.cuda_devices}` : " · CPU"}` : t("status_unavailable")} tone={speech.available ? "ok" : "warn"} />
+                <Stat label={t("status_faces")} value={status.faces ? `${status.faces.active}${status.faces.yunet?.downloaded ? "" : status.faces.preferred !== "saliency" ? ` (${t("status_faces_pending")})` : ""}` : "—"} tone={status.faces?.active === "yunet" ? "ok" : undefined} />
                 <Stat label={t("status_model")} value={llm ? (llm.state === "ready" || llm.model ? `${llm.provider || ""} ${llm.model || ""}`.trim() : t("status_unavailable")) : "—"} tone={llm?.model ? "ok" : "warn"} />
                 {llm && !llm.model && llm.reason ? <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>{llm.reason}</div> : null}
                 <Stat label={t("status_encoder")} value={settings.encoder} />

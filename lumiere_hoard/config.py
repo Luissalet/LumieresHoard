@@ -64,6 +64,11 @@ class Config:
         return self.data_dir / "cache"
 
     @property
+    def models_dir(self) -> Path:
+        """Small model files fetched on first use (the face detector); safe to delete, fetched again when needed."""
+        return self.data_dir / "models"
+
+    @property
     def uploads_dir(self) -> Path:
         return self.data_dir / "uploads"
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from . import media as media_store
@@ -132,6 +133,16 @@ def _label(svc: "Services", project_id: str, seq: int) -> Optional[str]:
     return row["label"] if row else None
 
 
+def _insert(svc: "Services", name: str, p: Project, *, template: bool = False, label: str = "Crear") -> str:
+    pid = new_id("prj")
+    now = time.time()
+    with svc.db.transaction() as conn:
+        conn.execute("INSERT INTO projects(id, name, doc, rev, head, is_template, created_ts, updated_ts) VALUES (?, ?, ?, 1, 1, ?, ?, ?)",
+                     (pid, clip(name or "Proyecto", 120), dumps(p.dump()), int(template), now, now))
+        conn.execute("INSERT INTO history(project_id, seq, label, actor, doc, ts) VALUES (?, 1, ?, 'ui', ?, ?)", (pid, label, dumps(p.dump()), now))
+    return pid
+
+
 def create(svc: "Services", name: str, *, preset: Optional[str] = None, width: Optional[int] = None, height: Optional[int] = None,
            fps: Optional[float] = None, media: Optional[list[str]] = None, template: bool = False, from_project: Optional[str] = None) -> dict[str, Any]:
     if from_project:
@@ -141,16 +152,119 @@ def create(svc: "Services", name: str, *, preset: Optional[str] = None, width: O
         if preset and spec is None:
             raise LumiereError(f"Unknown preset {preset!r}. Known: {', '.join(PRESETS)}.")
         p = new_project(width or spec["width"], height or spec["height"], fps or spec["fps"])
-    pid = new_id("prj")
-    now = time.time()
-    with svc.db.transaction() as conn:
-        conn.execute("INSERT INTO projects(id, name, doc, rev, head, is_template, created_ts, updated_ts) VALUES (?, ?, ?, 1, 1, ?, ?, ?)",
-                     (pid, clip(name or "Proyecto", 120), dumps(p.dump()), int(template), now, now))
-        conn.execute("INSERT INTO history(project_id, seq, label, actor, doc, ts) VALUES (?, 1, ?, 'ui', ?, ?)", (pid, "Crear", dumps(p.dump()), now))
+    pid = _insert(svc, name, p, template=template)
     if media:
         edit(svc, pid, [{"op": "add_media", "media": m} for m in media], label="Añadir medios")
     svc.emit("lumiere.project.created", {"id": pid, "name": clip(name, 80)})
     return view(svc, pid)
+
+
+# ---------------------------------------------------------------- templates with media slots
+
+def slot_rule(slot: str) -> str:
+    """full: the slot's clip takes its media's whole length and what follows moves (slots named main*); keep: the slot's own length."""
+    return "full" if slot.lower().startswith("main") else "keep"
+
+
+def template_slots(svc: "Services", p: Project) -> list[dict[str, Any]]:
+    look = media_lookup(svc)
+    rows = []
+    for t, c in p.all_clips():
+        if not c.slot:
+            continue
+        info = look(c.media) if c.media else None
+        rows.append({"slot": c.slot, "clip": c.id, "track": t.id, "track_role": t.role, "track_kind": t.kind, "type": c.type, "start_ms": c.start,
+                     "length_ms": c.duration, "media": c.media, "name": (info or {}).get("name") or (c.text[:40] if c.type == "text" else ""),
+                     "rule": slot_rule(c.slot)})
+    return sorted(rows, key=lambda r: r["start_ms"])
+
+
+def template_info(svc: "Services", template: str) -> dict[str, Any]:
+    row = _template_row(svc, template)
+    p = load(json.loads(row["doc"]))
+    return {**summary(svc, row), "slots": template_slots(svc, p)}
+
+
+def list_templates(svc: "Services") -> list[dict[str, Any]]:
+    return [template_info(svc, r["id"]) for r in svc.db.query("SELECT id FROM projects WHERE is_template = 1 ORDER BY updated_ts DESC")]
+
+
+def _template_row(svc: "Services", ref: str):
+    """A template by id or by name (a project that has slots also works, so a project can be reused without saving a template)."""
+    row = svc.db.one("SELECT * FROM projects WHERE id = ?", (ref,))
+    if row is None:
+        rows = [r for r in svc.db.query("SELECT * FROM projects WHERE is_template = 1") if r["name"].strip().lower() == ref.strip().lower()]
+        if len(rows) > 1:
+            raise LumiereError(f"{len(rows)} templates are called {ref!r}: use the id ({', '.join(r['id'] for r in rows)}).")
+        row = rows[0] if rows else None
+    if row is None:
+        names = [f"{r['name']} ({r['id']})" for r in svc.db.query("SELECT id, name FROM projects WHERE is_template = 1 LIMIT 20")]
+        raise NotFound(f"No template {ref!r}." + (f" Templates: {', '.join(names)}." if names else " Save one first (template_save)."))
+    return row
+
+
+def save_template(svc: "Services", project_id: str, name: str, slots: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    """Copy a project as a template. ``slots`` maps clip ids to slot names (intro, main, outro...) on top of the slots the clips
+    already carry; the copy keeps everything else (titles, captions style, music, effects, the sample media in each slot, so the
+    template also renders as is). The original project is not touched."""
+    current = doc(svc, project_id)
+    ops = [{"op": "set", "clip": cid, "props": {"slot": (slot or None)}, "ripple": False} for cid, slot in (slots or {}).items()]
+    if ops:
+        current, _ = apply_ops(current, ops, media_lookup(svc))
+    if not template_slots(svc, current):
+        raise LumiereError("A template needs at least one slot: say which clips are replaceable, e.g. slots {'<clip id>': 'main', '<clip id>': 'intro'}.")
+    pid = _insert(svc, name, current, template=True, label="Plantilla")
+    svc.emit("lumiere.project.created", {"id": pid, "name": clip(name, 80)})
+    return template_info(svc, pid)
+
+
+def resolve_media(svc: "Services", ref: str) -> str:
+    """A library media from its id or its name (exact, then the file name, then a name that contains the text when only one does)."""
+    ref = (ref or "").strip()
+    if not ref:
+        raise LumiereError("Name the media for each slot (its id or its name in the library).")
+    if media_store.lookup(svc, ref):
+        return ref
+    items = media_store.list_media(svc, limit=500)
+    low = ref.lower()
+    stem = lambda m: Path(m["path"]).stem.lower()  # noqa: E731
+    for test in (lambda m: m["name"].lower() == low or Path(m["path"]).name.lower() == low, lambda m: stem(m) == low,
+                 lambda m: low in m["name"].lower() or low in Path(m["path"]).name.lower()):
+        hits = [m for m in items if test(m)]
+        if len(hits) == 1:
+            return hits[0]["id"]
+        if len(hits) > 1:
+            raise LumiereError(f"{len(hits)} media match {ref!r}: " + ", ".join(f"{m['name']} ({m['id']})" for m in hits[:8]) + ". Use the id.")
+    raise NotFound(f"No media called {ref!r} in the library (media_list shows them; media_import adds a file).")
+
+
+def create_from_template(svc: "Services", name: str, template: str, slots: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """A new project from a template with its slots filled: ``slots`` maps a slot name to a media (id or name), or to
+    {media, src_in?, src_out?, length?}. Everything outside the slots stays; slots left out keep the template's sample media and
+    are listed in ``unfilled``. A slot named main* takes its media's whole length and the rest of the edit moves; the others keep
+    their length (shorter when the media is)."""
+    row = _template_row(svc, template)
+    p = load(json.loads(row["doc"]))
+    known = template_slots(svc, p)
+    names = [r["slot"] for r in known]
+    if not names:
+        raise LumiereError(f"{row['name']!r} has no slots; mark clips with set {{props: {{slot: 'name'}}}} or save it again as a template with slots.")
+    wanted = dict(slots or {})
+    unknown = sorted(set(wanted) - set(names))
+    if unknown:
+        raise LumiereError(f"Unknown slot {', '.join(repr(u) for u in unknown)}. This template has: {', '.join(names)}.")
+    ops = []
+    for r in known:  # in timeline order, so errors read naturally
+        if r["slot"] not in wanted:
+            continue
+        spec = wanted[r["slot"]]
+        spec = {"media": spec} if isinstance(spec, str) else dict(spec)
+        spec["media"] = resolve_media(svc, str(spec.get("media", "")))
+        ops.append({"op": "fill_slot", "slot": r["slot"], **{k: v for k, v in spec.items() if k in ("media", "src_in", "src_out", "length", "rule")}})
+    new, results = apply_ops(p, ops, media_lookup(svc)) if ops else (p, [])
+    pid = _insert(svc, name or f"{row['name']} (nuevo)", new, label=f"Desde plantilla «{clip(row['name'], 60)}»")
+    svc.emit("lumiere.project.created", {"id": pid, "name": clip(name, 80)})
+    return {**view(svc, pid), "template": row["id"], "filled": results, "unfilled": [n for n in names if n not in wanted]}
 
 
 def rename(svc: "Services", project_id: str, name: str) -> dict[str, Any]:
@@ -210,7 +324,7 @@ def describe(ops: list[dict[str, Any]]) -> str:
              "captions": "Subtítulos", "duplicate": "Duplicar", "detach_audio": "Separar audio", "close_gaps": "Cerrar huecos",
              "replace_media": "Sustituir medio", "sequence": "Secuencia", "keyframes": "Animación", "slip": "Deslizar contenido", "roll": "Mover corte",
              "insert_clips": "Pegar", "notes": "Notas", "speed_ramp": "Curva de velocidad", "add_sequence": "Añadir secuencia",
-             "unnest": "Desanidar", "mask": "Máscara"}
+             "unnest": "Desanidar", "mask": "Máscara", "add_overlay": "Superponer plano", "fill_slot": "Rellenar hueco"}
     first = names.get(str(ops[0].get("op")), str(ops[0].get("op")))
     return first if len(ops) == 1 else f"{first} (+{len(ops) - 1})"
 
@@ -326,16 +440,6 @@ def nest(svc: "Services", project_id: str, clip_ids: list[str], name: str = "", 
     svc.emit("lumiere.project.created", {"id": new_pid, "name": clip(title, 80)})
     return {"project": project_id, "rev": rev, "sequence": new_pid, "name": title, "clip": seq.id, "track": where["track"],
             "start": where["start"], "end": where["end"], "moved": len(set(clip_ids))}
-
-
-def _insert(svc: "Services", name: str, p: Project, label: str = "Crear") -> str:
-    pid = new_id("prj")
-    now = time.time()
-    with svc.db.transaction() as conn:
-        conn.execute("INSERT INTO projects(id, name, doc, rev, head, is_template, created_ts, updated_ts) VALUES (?, ?, ?, 1, 1, 0, ?, ?)",
-                     (pid, clip(name or "Secuencia", 120), dumps(p.dump()), now, now))
-        conn.execute("INSERT INTO history(project_id, seq, label, actor, doc, ts) VALUES (?, 1, ?, 'ui', ?, ?)", (pid, label, dumps(p.dump()), now))
-    return pid
 
 
 def used_by(svc: "Services", project_id: str) -> list[dict[str, Any]]:

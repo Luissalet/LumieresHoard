@@ -12,6 +12,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from ..ffmpeg import NO_WINDOW, Cancelled, RunHandle, Tools
+from . import faces
 
 
 def _hsv(frame: np.ndarray) -> np.ndarray:
@@ -110,21 +111,6 @@ def motion_per_second(tools: Tools, path: Path, *, src_w: int, src_h: int, durat
 
 # ---------------------------------------------------------------- reframing
 
-def _face_detector():
-    try:
-        import cv2  # type: ignore
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        front = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        profile = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
-        if front.empty():
-            return None
-        return cv2, front, profile
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def _saliency(frame: np.ndarray, prev: Optional[np.ndarray]) -> tuple[float, float, float]:
     """(x, y, confidence) of where the eye goes: motion first, detail second, a pull to the centre."""
     g = frame.mean(axis=2) if frame.ndim == 3 else frame.astype(np.float32)
@@ -150,39 +136,38 @@ def _saliency(frame: np.ndarray, prev: Optional[np.ndarray]) -> tuple[float, flo
 
 
 def focus_track(tools: Tools, path: Path, *, src_w: int, src_h: int, duration_ms: int, start_ms: int = 0, fps: float = 3.0,
-                progress: Optional[Callable[[float], None]] = None, handle: Optional[RunHandle] = None) -> dict[str, Any]:
-    """Raw focus samples: [[src_ms, x, y, weight, kind]] with kind 'face' or 'saliency'."""
-    det = _face_detector()
+                progress: Optional[Callable[[float], None]] = None, handle: Optional[RunHandle] = None,
+                detector: Optional[faces.FaceDetector] = None, detector_info: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Raw focus samples: [[src_ms, x, y, weight, kind]] with kind 1 for a face and 0 for saliency (motion and detail). The
+    result names the detector that ran (``yunet``, ``haar`` or ``saliency``) and why a better one did not."""
     samples: list[list[float]] = []
     prev_gray = None
-    width = 320
+    width = 416 if detector is not None and detector.name == "yunet" else 320
+    seen_faces = 0
     for i, frame in read_frames(tools, path, width=width, fps=fps, gray=False, src_w=src_w, src_h=src_h, start_ms=start_ms,
                                 duration_ms=duration_ms, handle=handle):
         t = start_ms + int(round(i / fps * 1000))
-        h = frame.shape[0]
-        found = False
-        if det is not None:
-            cv2, front, profile = det
-            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-            faces = list(front.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5, minSize=(max(14, h // 18), max(14, h // 18))))
-            if not faces:
-                faces = list(profile.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5, minSize=(max(14, h // 18), max(14, h // 18))))
-            if faces:
-                # the biggest face leads; others pull a little
-                faces.sort(key=lambda f: -f[2] * f[3])
-                fx, fy, fw, fh = faces[0]
-                samples.append([t, (fx + fw / 2) / width, (fy + fh * 0.45) / h, float(fw * fh) / (width * h) * 40, 1])
-                found = True
-        if not found:
+        h, w = frame.shape[:2]
+        found = detector.detect(frame) if detector is not None else []
+        if found:
+            # the biggest face leads
+            fx, fy, fw, fh, score = found[0]
+            samples.append([t, min(1.0, max(0.0, (fx + fw / 2) / w)), min(1.0, max(0.0, (fy + fh * 0.45) / h)),
+                            float(fw * fh) / (w * h) * 40 * max(0.3, min(1.0, score)), 1])
+            seen_faces += 1
+            prev_gray = frame.mean(axis=2)
+        else:
             g = frame.mean(axis=2)
             x, y, conf = _saliency(frame, prev_gray)
             samples.append([t, x, y, conf * 0.5, 0])
             prev_gray = g
-        else:
-            prev_gray = frame.mean(axis=2)
         if progress and duration_ms and i % 15 == 0:
             progress(min(0.99, i / fps * 1000 / max(1, duration_ms)))
-    return {"samples": samples, "faces": det is not None, "fps": fps}
+    info = dict(detector_info or {})
+    name = detector.name if detector is not None else "saliency"
+    info["detector"] = name
+    return {"samples": samples, "faces": detector is not None, "fps": fps, "detector": name, "face_samples": seen_faces,
+            "detector_info": info}
 
 
 def smooth_path(samples: list[list[float]], cuts: list[int], *, aspect_in: float, aspect_out: float, mode: str = "auto",

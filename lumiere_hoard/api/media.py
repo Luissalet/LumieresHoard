@@ -27,6 +27,7 @@ class ImportBody(BaseModel):
 class PatchBody(BaseModel):
     name: Optional[str] = Field(None, max_length=200)
     relink: Optional[str] = Field(None, max_length=2000)
+    tags: Optional[list[str]] = Field(None, max_length=30)
 
 
 class AnalyzeBody(BaseModel):
@@ -94,6 +95,8 @@ def patch_media(request: Request, media_id: str, body: PatchBody):
         media_store.relink(svc, media_id, body.relink)
     if body.name:
         media_store.rename(svc, media_id, body.name)
+    if body.tags is not None:
+        media_store.set_tags(svc, media_id, body.tags)
     return media_store.get(svc, media_id)
 
 
@@ -200,8 +203,8 @@ def silences(request: Request, media_id: str, threshold_db: Optional[float] = No
 
 
 @router.get("/{media_id}/highlights")
-def highlights(request: Request, media_id: str, count: int = 5, length_s: float = 30):
-    return commands.highlights(services(request), media_id, count=count, length_ms=int(length_s * 1000))
+def highlights(request: Request, media_id: str, count: int = 5, length_s: float = 30, mode: str = "signals"):
+    return commands.highlights(services(request), media_id, count=count, length_ms=int(length_s * 1000), mode=mode)
 
 
 class ShortBody(BaseModel):

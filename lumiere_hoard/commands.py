@@ -330,7 +330,15 @@ def reframe(svc: "Services", p: Project, *, aspect: str = "9:16", mode: str = "a
         changed += 1
     p = _apply(svc, p, ops)
     faces = any(found[m].get("faces") for m in found) if found else False
-    return p, {"canvas": f"{size['width']}x{size['height']}", "clips": changed, "mode": mode, "detector": "faces+saliency" if faces else "saliency"}
+    names = sorted({found[m].get("detector") or ("faces" if found[m].get("faces") else "saliency") for m in found}) if found else []
+    summary = {"canvas": f"{size['width']}x{size['height']}", "clips": changed, "mode": mode, "detector": "faces+saliency" if faces else "saliency"}
+    if any(n not in ("faces", "saliency") for n in names):  # analyses made since face detectors are named say which one ran
+        summary["face_detector"] = ", ".join(names)
+        summary["detector"] = ("+".join(n for n in names if n != "saliency") + "+saliency") if faces else "saliency"
+    notes = sorted({str(found[m].get("detector_info", {}).get("reason")) for m in found if found[m].get("detector_info", {}).get("reason")})
+    if notes:
+        summary["detector_note"] = "; ".join(notes)
+    return p, summary
 
 
 # ---------------------------------------------------------------- captions
@@ -420,9 +428,15 @@ def beat_sync(svc: "Services", p: Project, *, music: str, source: Optional[str] 
 # ---------------------------------------------------------------- highlights
 
 def highlights(svc: "Services", media: str, *, count: int = 5, length_ms: int = 30000, min_gap_ms: int = 20000,
-               use_transcript: bool = True) -> dict[str, Any]:
+               use_transcript: bool = True, mode: str = "signals") -> dict[str, Any]:
     """The most eventful windows of a long video: loud moments and sudden peaks in the sound, lots of motion, many scene
-    changes, and (with a transcript) dense speech with exclamations. Returns ranked windows with the reasons."""
+    changes, and (with a transcript) dense speech with exclamations. Returns ranked windows with the reasons.
+
+    mode='model' also reads the transcript with the local model, which marks the moments that stand on their own (a hook, a
+    punchline, a complete thought); those and the sound/motion windows are merged into one ranked list. Without a transcript
+    or a reachable model the result is the signals-only list, with ``model.reason`` saying why."""
+    if mode not in ("signals", "model"):
+        raise LumiereError("mode must be 'signals' or 'model'.")
     info = media_store.get(svc, media)
     dur = info["duration_ms"]
     secs = max(1, dur // 1000)
@@ -456,7 +470,7 @@ def highlights(svc: "Services", media: str, *, count: int = 5, length_ms: int = 
             if i < secs:
                 score[i] += 0.5
                 reasons[i].append("cut")
-    tr = media_store.get_analysis(svc, media, "transcript") if use_transcript else None
+    tr = media_store.get_analysis(svc, media, "transcript") if (use_transcript or mode == "model") else None
     if tr:
         for w in tr["words"]:
             i = w["t0"] // 1000
@@ -464,15 +478,39 @@ def highlights(svc: "Services", media: str, *, count: int = 5, length_ms: int = 
                 score[i] += 0.08 + (0.6 if w["text"].endswith("!") else 0)
                 if w["text"].endswith("!"):
                     reasons[i].append("exclamation")
+    meta: Optional[dict[str, Any]] = None
+    moments: list[dict[str, Any]] = []
+    if mode == "model":
+        if tr is None and info["has_audio"]:
+            analyze.schedule(svc, media, ["transcript"])
+        moments, meta = _model_moments(svc, media, tr, length_ms)
     win = max(3, length_ms // 1000)
     if secs <= win:
-        return {"media": media, "highlights": [{"start_ms": 0, "end_ms": dur, "score": 0, "reasons": []}], "signals": _signals(levels, motion, sc, tr)}
-    kernel = np.ones(win) / win
-    smooth = np.convolve(score, kernel, mode="valid")
-    picked: list[dict[str, Any]] = []
-    order = np.argsort(-smooth)
+        out = {"media": media, "highlights": [{"start_ms": 0, "end_ms": dur, "score": 0, "reasons": []}], "signals": _signals(levels, motion, sc, tr)}
+        if meta is not None:
+            out["model"] = meta
+        return out
+    smooth = np.convolve(score, np.ones(win) / win, mode="valid")
     gap = max(win, min_gap_ms // 1000)
-    for i in order:
+    picked = _signal_windows(smooth, reasons, win, gap, count * (2 if moments else 1), tr, dur, length_ms)
+    picked = _merge_moments(picked, moments, score, reasons, smooth, count, dur) if moments else picked[:count]
+    for x in picked:
+        x.pop("_i", None)
+        x["range"] = f"{ms_to_tc(x['start_ms'])}–{ms_to_tc(x['end_ms'])}"
+    signals = _signals(levels, motion, sc, tr)
+    if meta is not None and meta.get("used"):
+        signals.append("model")
+    out = {"media": media, "highlights": picked, "signals": signals}
+    if meta is not None:
+        out["model"] = meta
+    return out
+
+
+def _signal_windows(smooth: np.ndarray, reasons: list[list[str]], win: int, gap: int, count: int, tr: Optional[dict[str, Any]], dur: int,
+                    length_ms: int) -> list[dict[str, Any]]:
+    """The best ``count`` windows of the sound/motion/cut/speech score, at least ``gap`` seconds apart."""
+    picked: list[dict[str, Any]] = []
+    for i in np.argsort(-smooth):
         if len(picked) >= count:
             break
         if any(abs(int(i) - p["_i"]) < gap for p in picked):
@@ -490,10 +528,118 @@ def highlights(svc: "Services", media: str, *, count: int = 5, length_ms: int = 
                     start = b["t0"] - 150
         picked.append({"_i": int(i), "start_ms": max(0, start), "end_ms": min(dur, start + length_ms), "score": round(float(smooth[i]), 3),
                        "reasons": sorted(rs, key=lambda k: -rs[k])[:4]})
-    for x in picked:
-        x.pop("_i")
-        x["range"] = f"{ms_to_tc(x['start_ms'])}–{ms_to_tc(x['end_ms'])}"
-    return {"media": media, "highlights": picked, "signals": _signals(levels, motion, sc, tr)}
+    return picked
+
+
+def _model_moments(svc: "Services", media: str, tr: Optional[dict[str, Any]], length_ms: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Moments the local model says stand on their own, as [{start_ms, end_ms, strength, kind, why}], and a note on what happened.
+    The model's sentence ranges are cached per transcript, so asking again (or for another length or count) does not read it again;
+    the time window of each (widened to stand alone, at least min(8 s, the clip length)) is worked out on every call."""
+    import hashlib
+
+    from .analysis import moments as mo
+    from .errors import ModelUnavailable
+    from .generate import chat_text
+
+    meta: dict[str, Any] = {"requested": True, "used": False}
+    if not tr or not tr.get("words"):
+        meta["reason"] = "no transcript yet (queued): the sound and motion signals were used"
+        return [], meta
+    sents = mo.sentences_of(tr)
+    if not sents:
+        meta["reason"] = "the transcript has no sentences"
+        return [], meta
+    key = hashlib.sha1(("v1|" + "\n".join(f"{s['t0']}:{s['text']}" for s in sents)).encode()).hexdigest()
+    cached = media_store.get_analysis(svc, media, "highlights_llm")
+    min_ms = min(8000, max(2000, int(length_ms)))
+
+    def windows(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
+        for m in raw:
+            a, b = mo.moment_window(sents, m["first"], m["last"], min_ms=min_ms)
+            out.append({"start_ms": a, "end_ms": b, "strength": m["strength"], "kind": m["kind"], "why": m["why"]})
+        return out
+
+    if cached and cached.get("key") == key:
+        meta.update(used=bool(cached["moments"]), model=cached.get("model"), moments=len(cached["moments"]), chunks=cached.get("chunks"), cached=True)
+        if not cached["moments"]:
+            meta["reason"] = "the model found no moment that stands on its own"
+        return windows(cached["moments"]), meta
+    chunks = mo.chunks_of(sents)
+    meta["truncated"] = len(chunks) > mo.MAX_CHUNKS
+    found: list[dict[str, Any]] = []
+    model_name: Optional[str] = None
+    bad = 0
+    asked = 0
+    for chunk in chunks[: mo.MAX_CHUNKS]:
+        try:
+            text, model_name = chat_text(svc, mo.prompt_for(chunk, n=3), max_tokens=500, effort="off")
+        except ModelUnavailable as error:
+            if not asked:
+                meta["reason"] = f"the local model is not reachable ({str(error)[:120]}): the sound and motion signals were used"
+                return [], meta
+            meta["partial"] = True
+            break
+        asked += 1
+        try:
+            found += mo.parse_answer(text, {s["i"] for s in chunk})
+        except ValueError:
+            bad += 1
+    if not found:
+        meta["reason"] = ("the model did not answer in the expected form" if bad else "the model found no moment that stands on its own") + \
+            ": the sound and motion signals were used"
+        return [], meta
+    found.sort(key=lambda m: (m["first"], -m["strength"]))
+    merged: list[dict[str, Any]] = []
+    for m in found:  # chunks overlap by a couple of sentences: keep the stronger of two moments that share sentences
+        if merged and m["first"] <= merged[-1]["last"]:
+            if m["strength"] > merged[-1]["strength"]:
+                merged[-1] = m
+            continue
+        merged.append(m)
+    media_store.put_analysis(svc, media, "highlights_llm", {"key": key, "model": model_name, "moments": merged, "chunks": asked}, {"moments": len(merged)})
+    meta.update(used=True, model=model_name, moments=len(merged), chunks=asked, cached=False)
+    if bad:
+        meta["bad_chunks"] = bad
+    return windows(merged), meta
+
+
+def _merge_moments(windows: list[dict[str, Any]], moments: list[dict[str, Any]], score: np.ndarray, reasons: list[list[str]], smooth: np.ndarray,
+                   count: int, dur: int) -> list[dict[str, Any]]:
+    """One ranked list from the model's moments and the sound/motion windows. A moment's rank is mostly the model's strength
+    (65%) plus how eventful its own seconds are (35%); a window that no moment covers ranks on its signals alone (up to 35%),
+    so strong moments lead and the loudest uncovered window can still beat a weak one."""
+    ref = max(float(smooth.max()) if smooth.size else 0.0, 1e-6)
+    secs = score.size
+    cands: list[dict[str, Any]] = []
+    for m in moments:
+        a, b = int(m["start_ms"]), min(int(m["end_ms"]), dur)
+        lo = min(secs - 1, a // 1000)
+        hi = min(secs, max(lo + 1, -(-b // 1000)))
+        seg = score[lo:hi]
+        norm = float(np.clip((seg.mean() if seg.size else 0.0) / ref, 0, 1))
+        rs: dict[str, int] = {}
+        for r in reasons[lo:hi]:
+            for x in r:
+                rs[x] = rs.get(x, 0) + 1
+        loud = [k for k in sorted(rs, key=lambda k: -rs[k]) if rs[k] >= 2][:2]
+        cands.append({"start_ms": a, "end_ms": b, "score": round(0.35 * norm + 0.65 * m["strength"] / 5, 3), "reasons": [m["kind"], *loud],
+                      "source": "both" if loud else "model", "why": m["why"], "strength": m["strength"]})
+    for w in windows:
+        half = 0.5 * (w["end_ms"] - w["start_ms"])
+        if any(min(w["end_ms"], c["end_ms"]) - max(w["start_ms"], c["start_ms"]) > half for c in cands):
+            continue  # a moment already covers most of this window
+        cands.append({"start_ms": w["start_ms"], "end_ms": w["end_ms"], "score": round(0.35 * float(np.clip(w["score"] / ref, 0, 1)), 3),
+                      "reasons": w["reasons"], "source": "signals"})
+    cands.sort(key=lambda c: -c["score"])
+    picked: list[dict[str, Any]] = []
+    for c in cands:
+        if len(picked) >= count:
+            break
+        if any(min(c["end_ms"], p["end_ms"]) - max(c["start_ms"], p["start_ms"]) > 0 for p in picked):
+            continue
+        picked.append(c)
+    return picked
 
 
 def _signals(levels, motion, scenes, tr) -> list[str]:
@@ -725,6 +871,58 @@ def script_assemble(svc: "Services", p: Project, *, media: str, script: str = ""
     return p, summary
 
 
+# ---------------------------------------------------------------- background music
+
+def music_add(svc: "Services", p: Project, *, path: str = "", media: str = "", start_ms: Optional[int] = None, volume_db: float = -8.0,
+              duck: bool = True, fade_in_ms: int = 600, fade_out_ms: int = 2500, replace: bool = True) -> tuple[Project, dict[str, Any]]:
+    """Put a track under the whole edit on the music track: it starts on its first beat (or at ``start_ms``), is trimmed to the
+    length of the edit, fades in and out, and ducks under speech. ``path`` is imported into the library when it is not there
+    (nothing is copied); ``media`` is a library audio. ``replace`` clears the music track first."""
+    from pathlib import Path
+
+    from . import music
+
+    if not path and not media:
+        raise LumiereError("Give the audio file (path) or a library audio (media).")
+    if media:
+        info = media_store.get(svc, media)
+        file = Path(info["path"])
+    else:
+        file = Path(path).expanduser()
+        info = media_store.import_path(svc, str(file))
+        media = info["id"]
+        file = Path(info["path"])
+    if not info["has_audio"]:
+        raise LumiereError(f"{info['name']} has no sound.")
+    total = p.duration
+    if total <= 0:
+        raise LumiereError("The project is empty: there is nothing to put music under.")
+    grid = music.analyze_track(svc, file)
+    src_in = int(grid["first_beat_ms"] if start_ms is None else start_ms)
+    avail = int(info["duration_ms"])
+    if src_in >= avail - 500:
+        src_in = 0
+    src_out = min(avail, src_in + total)
+    length = src_out - src_in
+    music_track = next((t for t in p.tracks if t.kind == "audio" and t.role == "music"), None)
+    ops: list[dict[str, Any]] = []
+    if music_track is None:
+        ops.append({"op": "track_add", "kind": "audio", "name": "Música", "role": "music", "id": "trk_music"})
+        track_id = "trk_music"
+    else:
+        track_id = music_track.id
+        if replace and music_track.clips:
+            ops.append({"op": "delete", "clips": [c.id for c in music_track.clips], "ripple": False})
+    ops.append({"op": "add_media", "media": media, "track": track_id, "at": 0, "src_in": src_in, "src_out": src_out, "mode": "overwrite"})
+    p = _apply(svc, p, ops)
+    new_clip = next(c for c in p.track(track_id).clips if c.media == media and c.start == 0)
+    p = _apply(svc, p, [
+        {"op": "set", "clip": new_clip.id, "props": {"audio_fade_in": min(fade_in_ms, length // 4), "audio_fade_out": min(fade_out_ms, length // 3)}, "ripple": False},
+        {"op": "track_set", "track": track_id, "props": {"duck": duck, "volume_db": volume_db}}])
+    return p, {"track": track_id, "media": media, "name": info["name"], "bpm": grid["bpm"], "starts_at": ms_to_tc(src_in), "length": ms_to_tc(length),
+               "ends_early_ms": max(0, total - length), "ducking": duck, "volume_db": volume_db}
+
+
 # ---------------------------------------------------------------- registry
 
 def short_from_range(svc: "Services", media: str, start_ms: int, end_ms: int, *, name: str, preset: str = "reels", reframe_mode: str = "auto",
@@ -763,7 +961,7 @@ COMMANDS: dict[str, Callable[..., tuple[Project, dict[str, Any]]]] = {
     "reframe": reframe, "captions": captions, "beat_sync": beat_sync, "match_loudness": match_loudness, "script_assemble": script_assemble,
     "zoom_cuts": zoom_cuts, "speaker_cut": speaker_cut,
     "multicam_create": _multicam_command("multicam_create"), "multicam_resync": _multicam_command("multicam_resync"),
-    "multicam_auto": _multicam_command("multicam_auto"),
+    "multicam_auto": _multicam_command("multicam_auto"), "music_add": music_add,
 }
 
 
@@ -782,6 +980,7 @@ def run(svc: "Services", project_id: str, name: str, args: dict[str, Any], *, ac
     label = {"remove_silences": "Quitar silencios", "remove_fillers": "Quitar muletillas", "cut_words": "Editar por texto",
              "split_scenes": "Cortar por escenas", "reframe": "Reencuadre", "captions": "Subtítulos", "beat_sync": "Corte al ritmo",
              "match_loudness": "Igualar volumen", "script_assemble": "Montaje desde guion", "zoom_cuts": "Zoom en los cortes", "speaker_cut": "Cortar por hablante",
-             "multicam_create": "Crear multicámara", "multicam_resync": "Resincronizar multicámara", "multicam_auto": "Cambio automático de cámara"}[name]
+             "multicam_create": "Crear multicámara", "multicam_resync": "Resincronizar multicámara", "multicam_auto": "Cambio automático de cámara",
+             "music_add": "Música de fondo"}[name]
     rev = project_store.save(svc, project_id, new, label, actor)
     return {"project": project_id, "rev": rev, "summary": summary, "duration": ms_to_tc(new.duration), "duration_ms": new.duration}

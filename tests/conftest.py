@@ -109,10 +109,15 @@ def fake_transcriber(path, **kw):
     return {"language": kw.get("language") or "es", "language_p": 1.0, "model": "fake", "device": "cpu", "words": [], "segments": []}
 
 
+def offline_fetch(url, dest):
+    raise OSError("offline in tests")
+
+
 def make_services(tmp_path: Path, *, link: Any = None, inline: bool = True, **config_overrides) -> Services:
     svc = Services(make_config(tmp_path, **config_overrides), link=link if link is not None else FakeLink(available=False), emit_fn=Recorder(),
                    inline_jobs=inline)
     svc.transcriber = fake_transcriber
+    svc.model_fetch = offline_fetch  # the face detector model is never downloaded by accident; tests that want it say so
     return svc
 
 

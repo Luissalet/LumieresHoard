@@ -17,6 +17,7 @@ from . import speakers as speakers_mod
 from . import ffmpeg as ff
 from . import media as media_store
 from . import plan as plan_mod
+from .analysis import faces
 from .config import Config
 from .db import Database
 from .errors import LumiereError
@@ -37,6 +38,7 @@ SETTINGS = {
     "default_export": "final",
     "export_folder": "",         # empty = data/renders
     "auto_transcribe": "off",    # on: transcribe every imported media with speech
+    "face_detector": "auto",     # auto | yunet | haar | saliency: who finds the subject when reframing
 }
 
 
@@ -79,6 +81,7 @@ class Services:
         from .analysis import speech
 
         self.transcriber: Callable[..., dict[str, Any]] = speech.transcribe  # tests replace it
+        self.model_fetch: Callable[[str, Path], None] = faces.download  # downloads small model files; tests replace it
         self.jobs = JobQueue(self.db, config.workers, on_done=self._job_done, run_inline=inline_jobs)
         self.jobs.register("prepare", lambda ctx: media_store.prepare_job(self, ctx))
         self.jobs.register("analyze", lambda ctx: analyze.analyze_job(self, ctx))
@@ -162,7 +165,7 @@ class Services:
         unknown = set(patch) - set(SETTINGS)
         if unknown:
             raise LumiereError(f"Unknown settings: {', '.join(sorted(unknown))}.")
-        choices = {"whisper_device": ("auto", "cuda", "cpu"), "hwdec": ("auto", "on", "off"), "auto_transcribe": ("on", "off"),
+        choices = {"whisper_device": ("auto", "cuda", "cpu"), "hwdec": ("auto", "on", "off"), "auto_transcribe": ("on", "off"), "face_detector": faces.CHOICES,
                    "default_export": tuple(runner.EXPORTS)}
         for key, value in patch.items():
             value = "" if value is None else str(value).strip()
@@ -203,7 +206,9 @@ class Services:
         except LumiereError as error:
             ffinfo = {"error": str(error)}
         return {"service": SERVICE, "version": __version__, "counts": self.counts(), "model": model, "ffmpeg": ffinfo,
-                "speech": speech.engine_status(), "speakers": speakers_mod.status(), "family": family.status(), "uptime_s": int(time.time() - self.started_at),
+                "speech": speech.engine_status(), "speakers": speakers_mod.status(),
+                "faces": faces.status(self.config.models_dir, prefer=self.db.get_setting("face_detector", "auto") or "auto"),
+                "family": family.status(), "uptime_s": int(time.time() - self.started_at),
                 "data_dir": str(self.config.data_dir) if self.config.data_dir_configured else "data", "schema": self.db.schema_version()}
 
     # ------------------------------------------------------------ renders
