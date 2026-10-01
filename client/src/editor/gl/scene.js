@@ -2,6 +2,7 @@
 // A port of render/compiler.py (pieces_in, clip_chain, _fit_chain, _focus_exprs, _position, the xfade branch of chunk_graph):
 // the same rounding to even sizes, the same crop / fit rules, the same keyframe maths, the same piece boundaries.
 import { AUDIO_FX, FX_DEFAULTS } from "../fxspec.js";
+import { hasRamp, rampSegments, srcAt } from "../time.js";
 import { clamp, even, evenCeil, hexToRgb, kfRender, pyRound, snap2 } from "./mathx.js";
 
 export const XFADE_ID = {
@@ -10,11 +11,21 @@ export const XFADE_ID = {
   radial: 16, smooth_left: 17, smooth_right: 18, blur: 19,
 };
 
-export const clipDurMs = (c) => (c.type === "text" ? c.length : pyRound((c.src_out - c.src_in) / (c.speed || 1)));
-export const srcAtMs = (c, t) => {
-  const off = (t - c.start) * (c.speed || 1);
-  return c.reverse ? c.src_out - off : c.src_in + off;
+// Length of a clip on the timeline, as the render rounds it (Clip.duration): with a speed curve it is the sum over its constant-speed steps.
+export const clipDurMs = (c) => {
+  if (c.type === "text") return c.length;
+  if (hasRamp(c)) return pyRound(rampSegments(c.src_in, c.src_out, c.speed_keys).reduce((s, [x, y, v]) => s + (y - x) / v, 0));
+  return pyRound((c.src_out - c.src_in) / (c.speed || 1));
 };
+// Source time shown at timeline time t: the same function the CSS preview seeks with (time.js), speed curves and reverse included.
+export const srcAtMs = (c, t) => srcAt(c, t);
+
+// Where to seek a <video> so it shows the source frame the render puts on the output frame at time A. The render retimes the
+// source frames (setpts) and then the fps filter gives output slot A the last frame that lands before A + half a frame, so the
+// frame is the one at or before the source time of A + 0.5 / fps (this only differs from the source time of A when the clip
+// plays faster or slower than 1x; for a reversed clip it comes out the same way). A millisecond below it keeps a frame that
+// lands exactly on the boundary out, as the filter does.
+export const frameSrcMs = (clip, A, fps) => srcAtMs(clip, A + 500 / fps) - 1;
 
 // The output the render uses for a frame of `width` pixels (render_frame): even sizes, factor = output / canvas.
 export function outputSize(canvas, width) {
@@ -129,6 +140,28 @@ function effectList(clip, factor) {
   return out;
 }
 
+// Shape mask (compiler.mask_alpha_expr) in the pixels of the clip's own picture, w x h: centre, half sizes, soft edge width
+// and corner radius, with the animated values (mask_x / mask_y / mask_w / mask_h / mask_feather) read at clip-local time.
+function maskFor(clip, local, w, h) {
+  const m = clip.mask;
+  if (!m || m.enabled === false) return null;
+  const kf = clip.keyframes || {};
+  const val = (name, dflt) => kfRender(kf[`mask_${name}`], local, m[name] ?? dflt);
+  const rx = Math.max(0.5, (val("w", 0.8) * w) / 2);
+  const ry = Math.max(0.5, (val("h", 0.8) * h) / 2);
+  const shape = m.shape || "ellipse";
+  return {
+    cx: val("x", 0.5) * w,
+    cy: val("y", 0.5) * h,
+    rx,
+    ry,
+    feather: Math.max(1, val("feather", 0) * Math.min(w, h)),
+    radius: shape === "rounded" ? (m.radius ?? 0.2) * 2 * Math.min(rx, ry) : 0,
+    invert: !!m.invert,
+    ellipse: shape === "ellipse",
+  };
+}
+
 // ---------------------------------------------------------------- one clip at one instant
 
 // clip_chain + _position for the clip shown at frame time A. `fades` is false inside transitions.
@@ -139,7 +172,8 @@ export function layerFor(clip, media, out, A, { fades = true, pieceEndsAtClipEnd
   const local = A - clip.start;
   const scaleKeys = kf.scale && kf.scale.length;
   const boxScale = scaleKeys ? 1 : tf.scale;
-  const srcMs = srcAtMs(clip, A);
+  const srcMs = frameSrcMs(clip, A, out.fps);
+  const focusMs = srcAtMs(clip, A);
 
   // ----- fit
   let w;
@@ -163,7 +197,7 @@ export function layerFor(clip, media, out, A, { fades = true, pieceEndsAtClipEnd
     const fc = fitChain(clip, media, out, boxScale, tf.fit);
     w = fc.w;
     h = fc.h;
-    layer.fit = { mode: tf.fit, win: sourceWindow(fc, focusAtPath(clip, srcMs)), fg: [0, 0, 1, 1] };
+    layer.fit = { mode: tf.fit, win: sourceWindow(fc, focusAtPath(clip, focusMs)), fg: [0, 0, 1, 1] };
   }
   layer.fit.zoom = scaleKeys ? clamp(Math.max(1, kfRender(kf.scale, local, 1)), 1, 10) : 1;
   layer.fitW = w;
@@ -181,6 +215,7 @@ export function layerFor(clip, media, out, A, { fades = true, pieceEndsAtClipEnd
   }
   layer.w = w;
   layer.h = h;
+  layer.mask = maskFor(clip, local, w, h);
 
   // ----- rotation (the layer grows to hold it)
   const rotKeys = kf.rotation && kf.rotation.length;
@@ -226,7 +261,7 @@ function piecesAt(doc, A, frameMs) {
   const out = [];
   for (const track of doc.tracks) {
     if (track.kind !== "video" || track.hidden) continue;
-    const clips = track.clips.filter((c) => c.type === "media").sort((a, b) => a.start - b.start);
+    const clips = track.clips.filter((c) => c.type === "media" || c.type === "sequence").sort((a, b) => a.start - b.start);
     clips.forEach((c, i) => {
       const nxt = clips[i + 1] || null;
       const cEnd = c.start + clipDurMs(c);
@@ -251,6 +286,9 @@ function piecesAt(doc, A, frameMs) {
     .map((x) => x.p);
 }
 
+// A nested sequence is a video once its intermediate is rendered; before that the DOM draws its poster (layers.jsx), not the GL.
+export const drawable = (m) => !!m && (m.kind !== "sequence" || !!m.urls?.play);
+
 // Everything to draw at time `tMs` (ms on the timeline), at the output size `out`.
 export function buildScene(doc, media, tMs, out) {
   const { A } = frameTime(tMs, out.fps);
@@ -260,7 +298,7 @@ export function buildScene(doc, media, tMs, out) {
     if (p.t0 > A + 1e-6) continue; // its first frame comes after this one
     if (p.kind === "piece") {
       const m = media[p.clip.media];
-      if (!m) continue;
+      if (!drawable(m)) continue;
       items.push({ kind: "layer", layer: layerFor(p.clip, m, out, A, { pieceEndsAtClipEnd: p.pieceEndsAtClipEnd }) });
     } else {
       const ma = media[p.a.media];
@@ -274,8 +312,8 @@ export function buildScene(doc, media, tMs, out) {
         type: XFADE_ID[p.type] ?? 0,
         name: p.type,
         progress,
-        a: ma && inRange(p.a) ? layerFor(p.a, ma, out, A, { fades: false }) : null,
-        b: mb && inRange(p.b) ? layerFor(p.b, mb, out, A, { fades: false }) : null,
+        a: drawable(ma) && inRange(p.a) ? layerFor(p.a, ma, out, A, { fades: false }) : null,
+        b: drawable(mb) && inRange(p.b) ? layerFor(p.b, mb, out, A, { fades: false }) : null,
       });
     }
   }

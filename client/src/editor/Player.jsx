@@ -6,6 +6,7 @@ import { useEd } from "./EditorContext.js";
 import { ClipLayer, TextLayer } from "./layers.jsx";
 import Captions from "./Captions.jsx";
 import GLStage from "./GLStage.jsx";
+import { drawable } from "./gl/scene.js";
 import { SourceRegistry } from "./gl/sources.js";
 import { usePlaybackState, useTime } from "./playback.js";
 import { setGlPreview, useGlPreview, webglAvailable } from "./previewPrefs.js";
@@ -153,7 +154,9 @@ export default function Player() {
             {ordered.map(({ clip, track, next }) => (clip.type === "text"
               ? <TextLayer key={clip.id} clip={clip} track={track} box={box} k={k} z={useGL ? 8000 + (zOf.get(clip.id) || 0) : zOf.get(clip.id)} pb={pb} />
               : (
-                <ClipLayer key={clip.id} clip={clip} track={track} next={next} media={media[clip.media]} canvas={doc.canvas} box={box} k={k} z={zOf.get(clip.id)} pb={pb} projectMuted={false} gl={useGL} onEl={useGL ? registry.set : undefined} />
+                // a nested sequence whose intermediate is not rendered yet keeps the DOM poster; everything else is a GL source
+                <ClipLayer key={clip.id} clip={clip} track={track} next={next} media={media[clip.media]} canvas={doc.canvas} box={box} k={k} z={zOf.get(clip.id)} pb={pb} projectMuted={false}
+                  gl={useGL && drawable(media[clip.media])} onEl={useGL && drawable(media[clip.media]) ? registry.set : undefined} />
               )))}
             <Captions doc={doc} words={ed.transcript?.words} box={box} k={k} pb={pb} />
             {showExact ? <ExactFrame projectId={ed.projectId} rev={view.rev} pb={pb} width={frameWidth} /> : null}

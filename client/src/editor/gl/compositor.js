@@ -393,6 +393,13 @@ export class GLCompositor {
       const next = this.applyEffect(fx, cur, mat, ctx);
       if (next && next !== cur) { this.release(cur); cur = next; }
     }
+    const m = layer.mask;
+    if (m) {
+      // multiplies the alpha of the whole picture (with fit=blur that includes the blurred fill), before rotation and opacity
+      const masked = this.fxPass(FX.MASK, cur, cur.w, cur.h, mat, [m.cx, m.cy, m.rx, m.ry], [m.feather, m.radius, m.invert ? 1 : 0, m.ellipse ? 1 : 0]);
+      this.release(cur);
+      cur = masked;
+    }
     return cur;
   }
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { frameTime } from "./gl/scene.js";
+import { frameSrcMs, frameTime } from "./gl/scene.js";
 import { clamp, clipDur, kfValue, speedAt, srcAt } from "./time.js";
 
 // ---------- geometry: where the picture sits inside the preview box (mirrors the render's fit / crop / focus logic) ----------
@@ -272,7 +272,7 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
     // millisecond so a frame that starts exactly there is not missed by a rounding error); the CSS preview follows the raw time.
     const exactFrame = gl && !playing;
     const at = exactFrame ? frameTime(t, canvas.fps || 30).A : t;
-    const target = ((inside ? srcAt(c, at) : c.reverse ? c.src_out : c.src_in) + (exactFrame && inside ? 1 : 0)) / 1000;
+    const target = (inside ? (exactFrame ? frameSrcMs(c, at, canvas.fps || 30) : srcAt(c, at)) : c.reverse ? c.src_out : c.src_in) / 1000;
     const kf = c.keyframes || {};
     let db = kfValue(kf.volume_db, local, c.volume_db) + tr.volume_db;
     let gain = dbToGain(db);

@@ -47,7 +47,7 @@ void main() {
 // Colour / look effects, one per pass. uMat: 0 = BT.601, 1 = BT.709 (the matrix the picture was decoded with).
 export const FX = {
   COPY: 0, EQ: 1, GRAY: 2, SEPIA: 3, CURVES: 4, BALANCE: 5, VIGNETTE: 6, UNSHARP: 7, PIXELATE: 8, KEY: 9, FLIPH: 10, FLIPV: 11,
-  LUT: 12, BLUR: 13, COMBINE: 14,
+  LUT: 12, BLUR: 13, COMBINE: 14, MASK: 15,
 };
 
 export const FX_FRAG = `${HEAD}
@@ -190,6 +190,20 @@ void main() {
     vec3 a = toYuv(c.rgb);
     vec3 b = toYuv(texture(uTex2, vUv).rgb);
     outColor = vec4(fromYuv(vec3(a.x, b.y, b.z)), c.a);
+  } else if (uOp == 15) {
+    // shape mask (compiler.mask_alpha_expr): coverage from a signed distance to the outline, in pixel units, with a linear soft
+    // edge of uP1.x pixels centred on it. uP0 = centre and half sizes, uP1 = (feather, corner radius, invert, ellipse).
+    vec2 d0 = px - uP0.xy;
+    float dist;
+    if (uP1.w > 0.5) {
+      dist = (length(d0 / uP0.zw) - 1.0) * min(uP0.z, uP0.w);
+    } else {
+      vec2 e = abs(d0) - uP0.zw + uP1.y;
+      dist = length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - uP1.y;
+    }
+    float cover = clamp(0.5 - dist / uP1.x, 0.0, 1.0);
+    if (uP1.z > 0.5) cover = 1.0 - cover;
+    outColor = vec4(c.rgb, c.a * cover);
   } else {
     outColor = c;
   }
