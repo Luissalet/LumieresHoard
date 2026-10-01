@@ -4,6 +4,7 @@ import { useApp } from "../../App.jsx";
 import { Icon, Seg, SliderRow, Spinner, Toggle } from "../../components/ui.jsx";
 import { useEd } from "../EditorContext.js";
 import { Hint, PanelHead } from "./Shared.jsx";
+import TranslateSubtitles from "./TranslateSubtitles.jsx";
 
 const STYLES = {
   clean: { color: "#fff", fontWeight: 500, textShadow: "0 1px 4px #000" },
@@ -85,6 +86,7 @@ export default function CaptionsPanel() {
             </div>
           ))}
         </div>
+        <TranslateSubtitles busy={busy} />
       </div>
     </div>
   );

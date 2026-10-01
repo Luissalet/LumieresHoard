@@ -227,3 +227,17 @@ def test_progress_names_each_output(services, lib, monkeypatch):
     assert any(d.startswith("16:9 · 1920×1080 (1/2) · picture") for d in details) and any(d.startswith("9:16 · 1080×1920 (2/2) · picture") for d in details), details
     values = [v for v, _ in seen]
     assert values == sorted(values) or max(values) <= 1      # progress never leaves 0..1
+
+
+def test_plans_understand_several_formats_and_translated_subtitles(services):
+    from lumiere_hoard import plan as plan_mod
+
+    pid = store.create(services, "Plan", preset="hd720")["id"]
+    steps = plan_mod.create(services, pid, "Exporta en 16:9 y 9:16 y 1:1 con los subtítulos traducidos al inglés, bilingües", use_model=False)["steps"]
+    assert [(s["kind"], s["name"]) for s in steps] == [("command", "captions"), ("export", "final")]     # no reframe step: the project stays as it is
+    assert steps[1]["args"] == {"formats": ["16:9", "9:16", "1:1"], "captions_language": "en", "captions_dual": True}
+    steps = plan_mod.create(services, pid, "Quiero todos los formatos, sin recortar", use_model=False)["steps"]
+    assert steps[-1]["args"] == {"formats": ["16:9", "9:16", "1:1"], "reframe": "blur"}
+    steps = plan_mod.create(services, pid, "hazlo vertical y exporta", use_model=False)["steps"]
+    assert [s["name"] for s in steps] == ["reframe", "final"] and steps[1]["args"] == {}
+    assert "formats?:" in plan_mod.SYSTEM and "captions_language?" in plan_mod.SYSTEM
