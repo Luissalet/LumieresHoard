@@ -642,7 +642,10 @@ def script_assemble(svc: "Services", p: Project, *, media: str, script: str = ""
                     a = max(a, sents[x - 1][1])
                 if y + 1 < len(sents):
                     b = min(b, max(sents[y + 1][0], sents[y][1]))
-                src.append([a, b])
+                if src and a <= src[-1][1] + 40 and a >= src[-1][0]:
+                    src[-1][1] = max(src[-1][1], b)  # contiguous sentences play as one clip
+                else:
+                    src.append([a, b])
             items.append({"segment": seg.index + 1, "title": seg.title, "ranges": src, "takes": None, "coverage": None})
     if not items:
         raise LumiereError("No part of the script was found in the recording.", code="script_not_found")
