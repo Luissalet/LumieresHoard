@@ -150,3 +150,24 @@ def test_undo_redo_and_history(services, lib):
     assert h["items"][0]["current"] and len(h["items"]) == 4
     store.restore(services, pid, 2)
     assert store.doc(services, pid).duration == 12000
+
+
+def test_blur_fill_vertical_and_zoom_cuts(services, lib):
+    from lumiere_hoard import commands
+
+    pid = store.create(services, "Blur", preset="reels", media=[lib["talk"]])["id"]
+    store.edit(services, pid, [{"op": "split", "at": 3000}, {"op": "split", "at": 6000}])
+    commands.run(services, pid, "reframe", {"aspect": "9:16", "mode": "blur"})
+    commands.run(services, pid, "zoom_cuts", {"scale": 1.2})
+    p = store.doc(services, pid)
+    clips = sorted(p.main_track().clips, key=lambda c: c.start)
+    assert all(c.transform.fit == "blur" for c in clips) and [c.transform.scale for c in clips] == [1.0, 1.2, 1.0]
+    frame = runner.render_frame(services, pid, 1000, width=270)
+    from PIL import Image
+
+    img = Image.open(frame).convert("RGB")
+    assert img.size == (270, 480)
+    top = img.getpixel((135, 20))
+    assert sum(top) > 30  # the blurred fill, not black bars
+    res = _render(services, pid, preset="preview", end=4000)
+    assert res["qc"]["ok"]

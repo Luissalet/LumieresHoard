@@ -236,7 +236,8 @@ def aspect_canvas(aspect: str, current: Project) -> dict[str, Any]:
 def reframe(svc: "Services", p: Project, *, aspect: str = "9:16", mode: str = "auto", clips: Optional[list[str]] = None) -> tuple[Project, dict[str, Any]]:
     """Change the canvas aspect and keep the subject in frame: every horizontal video clip on the main track (or the given
     clips) is cropped with a camera path from the focus analysis (faces, else motion and detail), still within a scene
-    when the subject does not move, panning smoothly otherwise. mode: auto | track | stable | center."""
+    when the subject does not move, panning smoothly otherwise. mode: auto | track | stable | center | blur (the whole frame over
+    a blurred fill, nothing cropped)."""
     size = aspect_canvas(aspect, p)
     p = _apply(svc, p, [{"op": "canvas", **size}])
     targets: list[Clip] = []
@@ -247,17 +248,21 @@ def reframe(svc: "Services", p: Project, *, aspect: str = "9:16", mode: str = "a
         targets = [c for c in (main.clips if main else []) if c.type == "media"]
     out_aspect = size["width"] / size["height"]
     video_ids = sorted({c.media for c in targets if media_store.get(svc, c.media)["has_video"] and media_store.get(svc, c.media)["kind"] == "video"})
-    found = _need(svc, video_ids, "focus", "Reframing") if mode != "center" else {}
+    found = _need(svc, video_ids, "focus", "Reframing") if mode not in ("center", "blur") else {}
     scenes: dict[str, list[int]] = {}
     for mid in video_ids:
         sc = media_store.get_analysis(svc, mid, "scenes")
         scenes[mid] = [c["t"] for c in (sc or {}).get("cuts", [])]
-        if sc is None and mode != "center":
+        if sc is None and mode not in ("center", "blur"):
             analyze.schedule(svc, mid, ["scenes"])  # better next time; the path still works without cuts
     changed = 0
     ops: list[dict[str, Any]] = []
     for c in targets:
         info = media_store.get(svc, c.media)
+        if mode == "blur":
+            ops.append({"op": "set", "clip": c.id, "props": {"reframe": None, "transform": {"fit": "blur", "scale": 1.0, "x": 0, "y": 0}}})
+            changed += 1
+            continue
         ops.append({"op": "set", "clip": c.id, "props": {"transform": {"fit": "cover", "scale": 1.0, "x": 0, "y": 0}}})
         if info["kind"] != "video" or mode == "center":
             ops.append({"op": "set", "clip": c.id, "props": {"reframe": None, "transform": {"focus_x": 0.5, "focus_y": 0.5}}})
@@ -470,6 +475,74 @@ def match_loudness(svc: "Services", p: Project, *, target_lufs: float = -16.0, t
     return p, {"clips": len(ops), "target_lufs": target_lufs}
 
 
+# ---------------------------------------------------------------- zoom on cuts
+
+def zoom_cuts(svc: "Services", p: Project, *, scale: float = 1.12, every: int = 2, track: Optional[str] = None) -> tuple[Project, dict[str, Any]]:
+    """The talking-head trick: alternate framings across jump cuts (every ``every``-th clip punched in by ``scale``) so the
+    cuts read as camera changes."""
+    if not 1.0 <= scale <= 2.0:
+        raise LumiereError("scale goes from 1.0 to 2.0.")
+    t = p.track(track) if track else p.main_track()
+    if t is None:
+        raise LumiereError("No video track.")
+    clips = [c for c in sorted(t.clips, key=lambda c: c.start) if c.type == "media"]
+    ops = []
+    for i, c in enumerate(clips):
+        target = scale if every > 0 and i % max(1, every) == max(1, every) - 1 else 1.0
+        if abs(c.transform.scale - target) > 1e-3:
+            ops.append({"op": "set", "clip": c.id, "props": {"transform": {"scale": target}}, "ripple": False})
+    p = _apply(svc, p, ops)
+    return p, {"clips": len(ops), "scale": scale, "every": every}
+
+
+# ---------------------------------------------------------------- script assembly
+
+def script_assemble(svc: "Services", p: Project, *, media: str, script: str = "", script_path: str = "", take: str = "last",
+                    min_coverage: float = 0.6, markers: bool = True) -> tuple[Project, dict[str, Any]]:
+    """Rough cut from a script: the recording of someone reading it (with retakes) becomes the main track, one take per
+    script segment in script order, with a chapter marker per segment. take: last | best."""
+    from pathlib import Path
+
+    from .analysis import script as script_an
+
+    if script_path and not script:
+        path = Path(script_path).expanduser()
+        media_store._check_root(svc, path)
+        if not path.is_file():
+            raise NotFound(f"There is no script at {path}.")
+        script = path.read_text(encoding="utf-8", errors="replace")
+    segments = script_an.parse_script(script)
+    if not segments:
+        raise LumiereError("The script has no text: paste it (Markdown with ## sections, a plan JSON or paragraphs).")
+    words = _need(svc, [media], "transcript", "Assembling from the script")[media]["words"]
+    if not words:
+        raise LumiereError("The transcript of that recording is empty: is there speech in it?")
+    res = script_an.assemble(segments, words, take="best" if take == "best" else "last", min_coverage=min_coverage)
+    if not res["segments"]:
+        raise LumiereError("No segment of the script was found in the recording. Is it the right file, and the right language?")
+    main = p.main_track()
+    ops: list[dict[str, Any]] = []
+    if main is not None and main.clips:
+        ops.append({"op": "delete", "clips": [c.id for c in main.clips], "ripple": False})
+    ops.append({"op": "marker_delete", "kind": "chapter"})
+    p = _apply(svc, p, ops)
+    main = p.main_track()
+    p = _apply(svc, p, [{"op": "sequence", "track": main.id if main else None,
+                         "items": [{"media": media, "src_in": s["src_in"], "src_out": s["src_out"], "label": s["title"][:120]} for s in res["segments"]]}])
+    if markers:
+        cursor = 0
+        mops = []
+        for s in res["segments"]:
+            mops.append({"op": "marker_add", "t": cursor, "label": s["title"][:120], "kind": "chapter", "color": "#7FE3A0"})
+            cursor += s["src_out"] - s["src_in"]
+        p = _apply(svc, p, mops)
+    summary = {"segments": len(res["segments"]), "of": res["total_segments"], "missing": res["missing"],
+               "retakes": sum(max(0, s["takes"] - 1) for s in res["segments"]), "duration": ms_to_tc(p.duration),
+               "chosen": [{"segment": s["segment"], "title": s["title"], "at": f"{ms_to_tc(s['src_in'])}–{ms_to_tc(s['src_out'])}", "takes": s["takes"],
+                           "coverage": s["coverage"]} for s in res["segments"]]}
+    return p, summary
+
+
 # ---------------------------------------------------------------- registry
 
 def short_from_range(svc: "Services", media: str, start_ms: int, end_ms: int, *, name: str, preset: str = "reels", reframe_mode: str = "auto",
@@ -496,7 +569,8 @@ def short_from_range(svc: "Services", media: str, start_ms: int, end_ms: int, *,
 
 COMMANDS: dict[str, Callable[..., tuple[Project, dict[str, Any]]]] = {
     "remove_silences": remove_silences, "remove_fillers": remove_fillers, "cut_words": cut_words, "split_scenes": split_scenes,
-    "reframe": reframe, "captions": captions, "beat_sync": beat_sync, "match_loudness": match_loudness,
+    "reframe": reframe, "captions": captions, "beat_sync": beat_sync, "match_loudness": match_loudness, "script_assemble": script_assemble,
+    "zoom_cuts": zoom_cuts,
 }
 
 
@@ -514,6 +588,6 @@ def run(svc: "Services", project_id: str, name: str, args: dict[str, Any], *, ac
         return {"project": project_id, "preview": True, "summary": summary, "duration_before": ms_to_tc(before), "duration_after": ms_to_tc(new.duration)}
     label = {"remove_silences": "Quitar silencios", "remove_fillers": "Quitar muletillas", "cut_words": "Editar por texto",
              "split_scenes": "Cortar por escenas", "reframe": "Reencuadre", "captions": "Subtítulos", "beat_sync": "Corte al ritmo",
-             "match_loudness": "Igualar volumen"}[name]
+             "match_loudness": "Igualar volumen", "script_assemble": "Montaje desde guion", "zoom_cuts": "Zoom en los cortes"}[name]
     rev = project_store.save(svc, project_id, new, label, actor)
     return {"project": project_id, "rev": rev, "summary": summary, "duration": ms_to_tc(new.duration), "duration_ms": new.duration}

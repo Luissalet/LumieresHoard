@@ -340,11 +340,32 @@ def clip_chain(idx: int, piece_clip: Clip, media: MediaRef, t0: float, t1: float
     chain.append("setpts=PTS-STARTPTS")
     scale_keys = clip.keyframes.get("scale")
     box_scale = clip.transform.scale if not scale_keys else 1.0
-    fchain, w, h, cover = _fit_chain(clip, media, out, box_scale)
-    if cover:
-        x, y = _focus_exprs(clip, t0, cover[0], cover[1], w, h)
-        fchain = [f.replace("{CX}", f"'{x}'").replace("{CY}", f"'{y}'") for f in fchain]
-    chain += fchain
+    blur_fill = clip.transform.fit == "blur"
+    head = ""
+    if blur_fill:
+        # the whole frame, fitted, over a blurred and darkened copy that fills the box (vertical from horizontal, and the reverse)
+        bg_clip = clip.model_copy(deep=True)
+        bg_clip.transform.fit = "cover"
+        bg_clip.reframe = None
+        bchain, bw, bh, bcover = _fit_chain(bg_clip, media, out, box_scale)
+        bx, by = _focus_exprs(bg_clip, t0, bcover[0], bcover[1], bw, bh) if bcover else ("0", "0")
+        bchain = [f.replace("{CX}", f"'{bx}'").replace("{CY}", f"'{by}'") for f in bchain]
+        fg_clip = clip.model_copy(deep=True)
+        fg_clip.transform.fit = "contain"
+        fchain, fw, fh, _ = _fit_chain(fg_clip, media, out, box_scale)
+        sigma = max(8, int(min(bw, bh) / 30))
+        head = (f"[{idx}:v]" + ",".join(chain) + f",split[{label}a][{label}b];"
+                f"[{label}a]" + ",".join(bchain) + f",gblur=sigma={sigma},eq=brightness=-0.06:saturation=0.9[{label}bg];"
+                f"[{label}b]" + ",".join(fchain) + f"[{label}fg];"
+                f"[{label}bg][{label}fg]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2")
+        chain = []
+        w, h = bw, bh
+    else:
+        fchain, w, h, cover = _fit_chain(clip, media, out, box_scale)
+        if cover:
+            x, y = _focus_exprs(clip, t0, cover[0], cover[1], w, h)
+            fchain = [f.replace("{CX}", f"'{x}'").replace("{CY}", f"'{y}'") for f in fchain]
+        chain += fchain
     shift = (t0 - clip.start) / 1000  # clip-local time at the start of the piece
     if scale_keys:
         z = keyframe_expr(scale_keys, shift, var="(on/" + _num(out.fps) + ")")
@@ -379,7 +400,10 @@ def clip_chain(idx: int, piece_clip: Clip, media: MediaRef, t0: float, t1: float
         if clip.fade_out and abs(t1 - clip.end) < 1:
             d = min(clip.fade_out / 1000, piece_len)
             chain.append(f"fade=t=out:st={_num(piece_len - d)}:d={_num(d)}:alpha=1")
-    text = f"[{idx}:v]" + ",".join(chain) + f"[{label}]"
+    if head:
+        text = head + ("," + ",".join(chain) if chain else "") + f"[{label}]"
+    else:
+        text = f"[{idx}:v]" + ",".join(chain) + f"[{label}]"
     return in_args, text, w, h
 
 

@@ -163,7 +163,8 @@ def describe(ops: list[dict[str, Any]]) -> str:
              "speed": "Velocidad", "transition": "Transición", "filter_add": "Efecto", "filter_remove": "Quitar efecto", "track_add": "Nueva pista",
              "track_set": "Pista", "track_delete": "Borrar pista", "canvas": "Formato", "marker_add": "Marcador", "marker_delete": "Quitar marcadores",
              "captions": "Subtítulos", "duplicate": "Duplicar", "detach_audio": "Separar audio", "close_gaps": "Cerrar huecos",
-             "replace_media": "Sustituir medio", "sequence": "Secuencia", "keyframes": "Animación", "notes": "Notas"}
+             "replace_media": "Sustituir medio", "sequence": "Secuencia", "keyframes": "Animación", "slip": "Deslizar contenido", "roll": "Mover corte",
+             "insert_clips": "Pegar", "notes": "Notas"}
     first = names.get(str(ops[0].get("op")), str(ops[0].get("op")))
     return first if len(ops) == 1 else f"{first} (+{len(ops) - 1})"
 

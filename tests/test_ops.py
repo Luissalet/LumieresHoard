@@ -175,3 +175,25 @@ def test_length_mode_main_cuts_music_tail():
     assert p.duration == 5000 and p.content_end == 60000
     p, _ = build([{"op": "canvas", "length_mode": "longest"}], p)
     assert p.duration == 60000
+
+
+def test_slip_roll_and_paste():
+    p, res = build([{"op": "add_media", "media": "m1", "src_in": 2000, "src_out": 5000}, {"op": "add_media", "media": "m1", "src_in": 6000, "src_out": 9000}])
+    a, b = res[0]["clip"], res[1]["clip"]
+    p, r = build([{"op": "slip", "clip": a, "delta": 1000}], p)
+    _, ca = p.find(a)
+    assert (ca.start, ca.src_in, ca.src_out) == (0, 3000, 6000)
+    p, r = build([{"op": "slip", "clip": a, "delta": -9000}], p)
+    assert p.find(a)[1].src_in == 0 and r[0]["applied_ms"] == -3000
+    p, r = build([{"op": "roll", "clip": b, "delta": 500}], p)
+    ca, cb = p.find(a)[1], p.find(b)[1]
+    assert ca.end == cb.start == 3500 and cb.src_in == 6500 and p.duration == 6000
+    copied = [p.find(a)[1].model_dump()]
+    p, r = build([{"op": "insert_clips", "clips": copied, "at": 6000}], p)
+    new = p.find(r[0]["clips"][0])[1]
+    assert new.id != a and new.start == 6000 and new.src_in == ca.src_in
+
+
+def test_blur_fit_is_valid():
+    p, res = build([{"op": "add_media", "media": "m1", "fit": "blur"}, {"op": "canvas", "preset": "reels"}])
+    assert main_clips(p)[0].transform.fit == "blur"

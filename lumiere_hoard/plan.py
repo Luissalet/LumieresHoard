@@ -53,6 +53,8 @@ COMMAND_DOCS = {
     "captions": "args {enabled?: true, style?: 'clean'|'bold'|'karaoke'|'pop'|'boxed'|'minimal', props?: {position, uppercase, max_words, highlight}}",
     "beat_sync": "args {music: media id, source?: video media id, beats_per_cut?: 2, mode?: 'scenes'|'clips'} — rebuild the main track on the beat",
     "match_loudness": "args {target_lufs?: -16} — same loudness for every clip",
+    "zoom_cuts": "args {scale?: 1.12, every?: 2} — punch in on every other clip so jump cuts look like camera changes",
+    "script_assemble": "args {media, script?: text, script_path?: file, take?: 'last'|'best'} — rough cut of a recording read from a script: one take per segment",
 }
 
 OP_DOCS = """Timeline operations (times in ms or '1:23.5'; clip / track / media ids from the context):
@@ -210,6 +212,8 @@ def rules_plan(svc: "Services", project_id: str, instruction: str) -> PlanOut:
         aspect = "16:9"
     if aspect:
         mode = "center" if re.search(r"centr", text) else ("stable" if re.search(r"fij|estatic|stable|still", text) else "auto")
+        if re.search(r"desenfoc|borros|blur|sin recortar|entero|completo", text):
+            mode = "blur"
         add("command", "reframe", {"aspect": aspect, "mode": mode}, f"Formato {aspect} siguiendo al sujeto", "aspect")
     if re.search(r"subtitul|caption|rotul.*habla|texto de lo que dice", text):
         style = next((s for s in ("karaoke", "pop", "boxed", "minimal", "clean", "bold") if s in text), None)
@@ -227,6 +231,8 @@ def rules_plan(svc: "Services", project_id: str, instruction: str) -> PlanOut:
             for c in main_clips:
                 steps.append(Step(kind="op", name="speed", args={"clip": c.id, "speed": factor}, explain=f"Velocidad ×{factor:g} en {c.id}"))
             understood.append("speed")
+    if re.search(r"punch|zoom.{0,12}(cortes|cuts)|acerc.{0,20}cortes|zooms?\b", text) and len(main_clips) > 1:
+        add("command", "zoom_cuts", {"scale": 1.12, "every": 2}, "Zoom alterno en los cortes", "zoom")
     if re.search(r"normaliz|iguala.*(volumen|audio|sonido)|mismo volumen|loudness", text):
         add("command", "match_loudness", {"target_lufs": -16}, "Igualar el volumen de los clips", "loudness")
     if re.search(r"transicion|fundid|crossfade|transition|dissolve", text) and len(main_clips) > 1:

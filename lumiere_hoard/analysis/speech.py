@@ -75,7 +75,7 @@ def transcribe(path: Path, *, model: str = "", language: str = "", device: str =
         raise TranscriberUnavailable(f"Could not load the speech model {name}: {last}")
     if progress:
         progress(0.02, f"{name} on {used[0]}")
-    segments, info = wm.transcribe(str(path), language=language or None, word_timestamps=True, vad_filter=True,
+    segments, info = wm.transcribe(_load_audio(path), language=language or None, word_timestamps=True, vad_filter=True,
                                    vad_parameters={"min_silence_duration_ms": 300}, beam_size=5, condition_on_previous_text=False,
                                    initial_prompt=initial_prompt or None)
     words: list[dict[str, Any]] = []
@@ -96,6 +96,20 @@ def transcribe(path: Path, *, model: str = "", language: str = "", device: str =
             progress(min(0.98, seg.end * 1000 / duration_ms), f"{len(words)} words")
     return {"language": info.language, "language_p": round(float(info.language_probability or 0), 3), "model": name, "device": used[0],
             "words": words, "segments": segs}
+
+
+def _load_audio(path: Path):
+    """16 kHz mono float32 samples. A 16-bit mono WAV at 16 kHz (what the app prepares) is read directly, so the
+    transcriber never decodes media itself (its decoder depends on a media library whose API changes between versions)."""
+    import wave
+
+    import numpy as np
+
+    with wave.open(str(path), "rb") as w:
+        if w.getframerate() != 16000 or w.getnchannels() != 1 or w.getsampwidth() != 2:
+            raise TranscriberUnavailable("The speech audio must be 16 kHz mono 16-bit WAV.")
+        data = w.readframes(w.getnframes())
+    return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
 
 
 def find_fillers(words: list[dict[str, Any]], language: str = "es", extra: Optional[list[str]] = None, repeats: bool = True,

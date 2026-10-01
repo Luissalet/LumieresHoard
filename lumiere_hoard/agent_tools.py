@@ -123,7 +123,8 @@ class HistoryArgs(BaseModel):
 
 class CommandArgs(BaseModel):
     project: str = ProjectId
-    command: Literal["remove_silences", "remove_fillers", "cut_words", "split_scenes", "reframe", "captions", "beat_sync", "match_loudness"]
+    command: Literal["remove_silences", "remove_fillers", "cut_words", "split_scenes", "reframe", "captions", "beat_sync", "match_loudness",
+                     "script_assemble", "zoom_cuts"]
     args: dict[str, Any] = Field(default_factory=dict, description="See the command list in plan docs / presets_list.")
     preview: bool = Field(False, description="Report what would change without saving.")
 

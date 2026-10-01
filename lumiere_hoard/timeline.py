@@ -23,7 +23,7 @@ MAX_TRACKS = 24
 MAX_CLIPS = 4000
 
 TrackKind = Literal["video", "audio", "text"]
-FitMode = Literal["contain", "cover", "fill", "none"]
+FitMode = Literal["contain", "cover", "fill", "none", "blur"]
 TransitionType = Literal["crossfade", "dissolve", "fade_black", "fade_white", "slide_left", "slide_right", "slide_up", "slide_down",
                          "wipe_left", "wipe_right", "wipe_up", "wipe_down", "circle_open", "circle_close", "zoom_in", "pixelize",
                          "radial", "smooth_left", "smooth_right", "blur"]

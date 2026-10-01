@@ -58,7 +58,7 @@ class AddMedia(OpBase):
     length: Optional[Time] = Field(None, description="Images: how long they stay (default 4000 ms).")
     mode: Literal["insert", "overwrite", "append"] = "append"
     label: str = ""
-    fit: Optional[Literal["contain", "cover", "fill", "none"]] = None
+    fit: Optional[Literal["contain", "cover", "fill", "none", "blur"]] = None
 
 
 class AddText(OpBase):
@@ -189,7 +189,7 @@ class CanvasOp(OpBase):
     height: Optional[int] = None
     fps: Optional[float] = None
     background: Optional[str] = None
-    fit: Optional[Literal["contain", "cover", "fill"]] = Field(None, description="Also set this fit on every video clip.")
+    fit: Optional[Literal["contain", "cover", "fill", "blur"]] = Field(None, description="Also set this fit on every video clip (blur: whole frame over a blurred fill).")
     length_mode: Optional[Literal["main", "longest"]] = Field(None, description="main: the video ends with the main track; longest: with the last clip.")
 
 
@@ -250,6 +250,26 @@ class KeyframesOp(OpBase):
     keys: list[Keyframe] = Field(default_factory=list, max_length=500, description="Empty list removes the animation.")
 
 
+class Slip(OpBase):
+    op: Literal["slip"]
+    clip: str
+    delta: Time = Field(..., description="Show later (+) or earlier (-) source material; the clip stays where it is.")
+
+
+class Roll(OpBase):
+    op: Literal["roll"]
+    clip: str = Field(..., description="The clip after the cut: the cut between it and the previous clip moves.")
+    delta: Time = Field(..., description="Move the cut later (+) or earlier (-); both clips change, nothing else moves.")
+
+
+class InsertClips(OpBase):
+    op: Literal["insert_clips"]
+    clips: list[dict[str, Any]] = Field(..., min_length=1, max_length=500, description="Clip objects (as in project_get full), e.g. copied ones.")
+    at: Time
+    track: Optional[str] = None
+    mode: Literal["insert", "overwrite"] = "overwrite"
+
+
 class Notes(OpBase):
     op: Literal["notes"]
     text: str = Field("", max_length=8000)
@@ -257,7 +277,7 @@ class Notes(OpBase):
 
 Op = Union[AddMedia, AddText, Split, Trim, Move, Delete, DeleteRange, CutSource, KeepSource, SetClip, Speed, TransitionOp, FilterAdd,
            FilterRemove, TrackAdd, TrackSet, TrackDelete, CanvasOp, MarkerAdd, MarkerDelete, CaptionsOp, Duplicate, DetachAudio, CloseGaps,
-           ReplaceMedia, Sequence, KeyframesOp, Notes]
+           ReplaceMedia, Sequence, KeyframesOp, Slip, Roll, InsertClips, Notes]
 _ADAPTER = TypeAdapter(Op)
 OP_NAMES = sorted(m.model_fields["op"].annotation.__args__[0] for m in Op.__args__)  # type: ignore[union-attr]
 
@@ -947,6 +967,100 @@ def _keyframes(ctx: Ctx, o: KeyframesOp) -> dict:
     return {"clip": c.id, "prop": o.prop, "keys": len(keys)}
 
 
+def _slip(ctx: Ctx, o: Slip) -> dict:
+    track, c = ctx.p.find(o.clip)
+    _unlocked(track)
+    if c.type != "media":
+        raise LumiereError("Only media clips can slip.")
+    info = ctx.media(c.media)
+    if info.get("kind") == "image":
+        raise LumiereError("A picture has nothing to slip.")
+    dur = int(info.get("duration_ms") or 0)
+    delta = int(round(_t(o.delta) * c.speed))
+    delta = max(-c.src_in, delta)
+    if dur:
+        delta = min(dur - c.src_out, delta)
+    c.src_in += delta
+    c.src_out += delta
+    return {"clip": c.id, "src_in": c.src_in, "src_out": c.src_out, "applied_ms": delta}
+
+
+def _roll(ctx: Ctx, o: Roll) -> dict:
+    track, right = ctx.p.find(o.clip)
+    _unlocked(track)
+    track.clips.sort(key=lambda c: c.start)
+    idx = track.clips.index(right)
+    if idx == 0:
+        raise LumiereError("That clip has no clip before it on its track.")
+    left = track.clips[idx - 1]
+    if left.end != right.start and not right.transition_in:
+        raise LumiereError("Roll needs two clips that touch.")
+    delta = ctx.snap(_t(o.delta))
+    lo = -(left.duration - MIN_CLIP_MS)
+    hi = right.duration - MIN_CLIP_MS
+    if left.type == "media" and (ctx.media(left.media).get("kind") != "image"):
+        dur = int(ctx.media(left.media).get("duration_ms") or 0)
+        if dur:
+            hi = min(hi, int((dur - left.src_out) / left.speed))
+    if right.type == "media" and (ctx.media(right.media).get("kind") != "image"):
+        lo = max(lo, -int(right.src_in / right.speed))
+    delta = max(lo, min(hi, delta))
+    if left.type == "text":
+        left.length += delta
+    else:
+        left.src_out += int(round(delta * left.speed))
+    if right.type == "text":
+        right.length -= delta
+    elif ctx.media(right.media).get("kind") == "image":
+        right.src_out -= int(round(delta * right.speed))
+    else:
+        right.src_in += int(round(delta * right.speed))
+    right.start += delta
+    return {"cut_at": right.start, "applied_ms": delta}
+
+
+def _insert_clips(ctx: Ctx, o: InsertClips) -> dict:
+    p = ctx.p
+    clips = []
+    for raw in o.clips:
+        data = {k: v for k, v in raw.items() if k != "id"}
+        try:
+            c = Clip.model_validate(data)
+        except ValidationError as error:
+            raise LumiereError(f"Not a clip: {error.errors()[0]['msg']}") from error
+        if c.media:
+            ctx.media(c.media)
+        clips.append(c)
+    first = min(c.start for c in clips)
+    at = ctx.snap(_t(o.at))
+    kind = "text" if clips[0].type == "text" else None
+    if o.track:
+        track = p.track(o.track)
+    elif kind == "text":
+        track = next((t for t in p.tracks if t.kind == "text" and not t.locked), None) or p.main_track()
+    else:
+        info = ctx.media(clips[0].media)
+        track = _default_track(ctx, info)
+    _unlocked(track)
+    span = max(c.end for c in clips) - first
+    if o.mode == "insert":
+        hit = next((c for c in track.clips if c.start < at < c.end), None)
+        if hit:
+            _split_clip(track, hit, at)
+        _shift(track, at, span)
+    else:
+        _clear_range(track, at, at + span)
+    created = []
+    for c in clips:
+        if (track.kind == "text") != (c.type == "text"):
+            raise LumiereError("Text clips go on text tracks and media clips on video or audio tracks.")
+        c.start = at + (c.start - first)
+        c.transition_in = None if c.start == at else c.transition_in
+        track.clips.append(c)
+        created.append(c.id)
+    return {"clips": created, "track": track.id}
+
+
 def _notes(ctx: Ctx, o: Notes) -> dict:
     ctx.p.notes = o.text
     return {"ok": True}
@@ -958,7 +1072,7 @@ HANDLERS: dict[str, Callable[[Ctx, Any], dict]] = {
     "transition": _transition, "filter_add": _filter_add, "filter_remove": _filter_remove, "track_add": _track_add, "track_set": _track_set,
     "track_delete": _track_delete, "canvas": _canvas, "marker_add": _marker_add, "marker_delete": _marker_delete, "captions": _captions,
     "duplicate": _duplicate, "detach_audio": _detach_audio, "close_gaps": _close_gaps, "replace_media": _replace_media,
-    "sequence": _sequence, "keyframes": _keyframes, "notes": _notes,
+    "sequence": _sequence, "keyframes": _keyframes, "slip": _slip, "roll": _roll, "insert_clips": _insert_clips, "notes": _notes,
 }
 
 
