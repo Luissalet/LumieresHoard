@@ -14,22 +14,28 @@ Un editor de vídeo local que funciona en el navegador y en tu propio ordenador.
 - Importa archivos o carpetas enteras por ruta (no copia nada) y sube archivos arrastrándolos. Cada medio recibe en segundo plano un proxy de 540p con GOP corto para moverse con fluidez, una tira de miniaturas y la forma de onda.
 - Pistas de vídeo, audio y texto; la primera de vídeo es la principal y las demás se dibujan encima (imagen en imagen, superposiciones).
 - Dividir, recortar con o sin arrastre, mover, deslizar el contenido sin mover el clip, mover un corte entre dos clips, borrar cerrando el hueco, cerrar huecos, duplicar, copiar y pegar, imán al cabezal, a los bordes y a los marcadores, rango de entrada y salida, marcadores y capítulos.
-- Por clip: velocidad (el audio conserva el tono), inversa, volumen, fundidos de imagen y de sonido, encaje (contener, cubrir, llenar, tamaño nativo o el cuadro entero sobre un fondo desenfocado), posición, escala, rotación, opacidad, recorte, keyframes de posición, escala, rotación, opacidad y volumen con suavizado, efectos (color, LUT, desenfoque, nitidez, reducción de ruido, croma, viñeta, estilos; ruido de audio, mejora de voz, filtros, compresor, tono, eco) y 20 transiciones.
+- Por clip: velocidad (el audio conserva el tono) y curvas de velocidad (entrada y salida suaves, acelerar, cámara lenta en un golpe o tus propios puntos; el sonido sigue la curva), inversa, volumen, fundidos de imagen y de sonido, encaje (contener, cubrir, llenar, tamaño nativo o el cuadro entero sobre un fondo desenfocado), posición, escala, rotación, opacidad, recorte, keyframes de posición, escala, rotación, opacidad y volumen con suavizado, máscaras de forma (rectángulo, redondeada, elipse; borde suave, invertir, animadas con keyframes), efectos (color, LUT, desenfoque, nitidez, reducción de ruido, croma, viñeta, estilos; ruido de audio, mejora de voz, filtros, compresor, tono, eco) y 20 transiciones.
 - Rótulos con estilos y animaciones (fundido, pop, subida, máquina de escribir). Imagen congelada. Estabilización (vid.stab en dos pasadas sobre el tramo que usa el clip). Música que baja cuando se habla.
+- Secuencias anidadas: otro proyecto usado como un clip, anidar una selección en su propio proyecto y desanidarla; los bucles se rechazan y el render anidado se guarda hasta que cambia.
+- Multicámara: grabaciones del mismo momento sincronizadas por el sonido (desfase y confianza por cámara, corrección a mano), un sonido maestro continuo, cortar a un ángulo en el cabezal pulsando su miniatura, o cortar solo a quien habla (plano mínimo, histéresis).
+- Plantillas: guardar un proyecto como plantilla con huecos con nombre (intro, principal, cierre…) y crear proyectos nuevos rellenándolos con otros medios; se conservan rótulos, estilo de subtítulos, música y efectos.
 - Deshacer y rehacer cada cambio, y un historial al que se puede volver.
 
 **Edición por texto**
 - Transcripción local con tiempos por palabra (faster-whisper; large-v3-turbo en GPU, un modelo más pequeño en CPU). Doce minutos de habla tardan medio minuto en una GPU.
 - Las palabras que se oyen en el timeline se ven como texto: seleccionarlas y borrarlas las corta del vídeo, o se puede conservar solo una selección. Las correcciones del texto pasan a los subtítulos.
+- Separación de hablantes en el propio ordenador (motor propio por tono y forma del espectro, o huellas de voz si están instaladas): renombrar hablantes, corregir quién dijo qué, quedarse con lo que dice uno o quitarlo, subtítulos con el color o el nombre de cada hablante.
 - Quita muletillas («eh», «o sea», «um», «like»…) y palabras repetidas; quita o acelera los silencios con un umbral sacado del ruido de fondo.
 - Montaje desde guion: la grabación de alguien leyendo un guion (o un teleprompter), con repeticiones, queda como una toma por sección en el orden del guion, con un marcador de capítulo por sección. Si la charla sigue el guion con libertad, el modelo local encuentra qué frases cuentan cada sección.
 
 **Herramientas automáticas**
-- Reencuadre a 9:16, 1:1 o 4:5 con una cámara que sigue al sujeto (caras si está OpenCV, si no movimiento y detalle; fija dentro de una escena cuando el sujeto no se mueve, suave y con velocidad limitada cuando se mueve), o el cuadro entero sobre un fondo desenfocado.
+- Reencuadre a 9:16, 1:1 o 4:5 con una cámara que sigue al sujeto (caras con el detector YuNet de OpenCV, que se descarga una vez, o los detectores clásicos; si no movimiento y detalle; fija dentro de una escena cuando el sujeto no se mueve, suave y con velocidad limitada cuando se mueve), o el cuadro entero sobre un fondo desenfocado.
 - Subtítulos quemados en el render en seis estilos (limpio, negrita, karaoke, pop palabra a palabra, con caja, mínimo) y exportación SRT / VTT / ASS.
 - Detección de escenas por cambio de color, con cortes o marcadores en cada escena.
 - Corte de un grupo de clips o de las escenas de un vídeo al ritmo de una canción (tempo y pulsos calculados en la app).
-- Momentos destacados de un vídeo largo (momentos fuertes, picos, movimiento, cortes, exclamaciones de la transcripción) y cortos verticales a partir de ellos con un clic.
+- Momentos destacados de un vídeo largo (momentos fuertes, picos, movimiento, cortes, exclamaciones de la transcripción) y cortos verticales a partir de ellos con un clic; opcionalmente el modelo local lee la transcripción buscando ganchos, remates e ideas completas.
+- Música de fondo: ordena las pistas de una carpeta según encajen su tempo, duración y energía con el montaje, y pone la elegida debajo recortada, con fundidos y bajando cuando se habla.
+- Sugerencias de recursos (b-roll): clips de la biblioteca cuyas palabras, nombre o etiquetas casan con lo que se dice en cada frase, colocados en silencio sobre ese tramo con un clic.
 - Igualar el volumen entre clips; exportaciones normalizadas a -14 LUFS (u otro objetivo) en dos pasadas.
 
 **Planes de edición en lenguaje natural**
@@ -37,9 +43,10 @@ Un editor de vídeo local que funciona en el navegador y en tu propio ordenador.
 - Escribe el plan el modelo local cuando lo hay (a través del backend de modelos compartido de la familia); sin él, un lector por reglas entiende las peticiones habituales en español e inglés.
 
 **Exportación**
-- MP4 H.264 o H.265, MOV ProRes 422 HQ, una versión ligera de 720p, una vista previa rápida de 540p desde los proxies, GIF, MP3 y WAV; un tramo del timeline o todo; un .srt junto al vídeo; un EDL CMX 3600 de la pista principal; corte sin pérdida (copia de flujo, cortes en fotogramas clave) para grabaciones largas que solo hay que recortar.
+- MP4 H.264 o H.265, MOV ProRes 422 HQ, una versión ligera de 720p, una vista previa rápida de 540p desde los proxies, GIF, MP3 y WAV; un tramo del timeline o todo; un .srt junto al vídeo; varios lienzos a la vez (16:9, 9:16, 1:1, 4:5) en una sola tarea, cada uno reencuadrado sobre una copia del proyecto; subtítulos traducidos por el modelo local con los tiempos originales (SRT / VTT / ASS, quemados, u original y traducción en dos líneas); un EDL CMX 3600 de la pista principal; corte sin pérdida (copia de flujo, cortes en fotogramas clave) para grabaciones largas que solo hay que recortar.
 - El timeline se parte en trozos que se codifican en paralelo (cada trozo abre solo los clips que muestra, así que cientos de cortes nunca son cientos de decodificadores) y se unen sin recodificar; el sonido se mezcla en una pasada. Cada exportación se comprueba: duración, tamaño, que haya sonido, sonoridad, saturación.
-- El fotograma que muestra el timeline en cualquier instante se puede renderizar tal cual lo dibujaría la exportación.
+- Una sola regla de tiempo para cada fotograma (el último fotograma de origen alcanzado antes de medio fotograma de salida después), comprobada fotograma a fotograma en las uniones de trozos, cambios de cadencia y de velocidad; el fotograma que muestra el timeline en cualquier instante se puede renderizar tal cual lo dibuja la exportación.
+- La vista previa en directo se dibuja con WebGL2 desde los proxies con las mismas cuentas que el render (encajes, fondo desenfocado, keyframes, máscaras, curvas de velocidad, las 20 transiciones, efectos de color y LUT), medida contra el render por debajo del 4 % de diferencia media (vista previa CSS si no hay WebGL2).
 
 ## Cómo se arranca
 
@@ -49,6 +56,7 @@ Necesita Python 3.11+, Node 22 (para compilar la interfaz) y ffmpeg 6 o posterio
 python -m venv venv
 venv\Scripts\python -m pip install -r requirements.txt      # Windows (venv/bin/python en otros sistemas)
 venv\Scripts\python -m pip install -r requirements-gpu.txt  # opcional: transcribir en una GPU NVIDIA sin el toolkit de CUDA
+venv\Scripts\python -m pip install -r requirements-speakers.txt  # opcional: huellas de voz para voces parecidas
 npm ci && npx vite build
 venv\Scripts\python -m lumiere_hoard                         # http://127.0.0.1:5198
 ```
@@ -59,14 +67,14 @@ Ajustes (entorno): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE_ROOT
 
 ## Asistentes (MCP)
 
-`mcp_server.py` es un puente MCP por stdio con 32 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
+`mcp_server.py` es un puente MCP por stdio con 47 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
  "env": {"LUMIERE_URL": "http://127.0.0.1:5198", "LUMIERE_TOKEN_FILE": "<repo>/data/mcp-token"}}
 ```
 
-Las herramientas cubren la biblioteca (`media_import`, `media_analyze`, `transcript_get`, `highlights_find`…), los proyectos y el timeline (`project_create`, `project_get`, `timeline_edit` con 31 operaciones, `timeline_history`), la edición inteligente (`edit_command`, `text_cut`, `timeline_transcript`), los planes (`plan_create`, `plan_apply`), la salida (`render_start`, `job_status`, `renders_list`, `frame_snapshot`, `subtitles_export`) y los ajustes. Si una operación o un campo no existe, la respuesta lista todas las operaciones con sus campos; `project_get` pone primero los rótulos y lee los timelines largos por pista o por tramo; `frame_snapshot` devuelve la imagen (una imagen MCP) y las capas que se dibujan en ese instante (rótulos, subtítulos, medios), para que un asistente compruebe su propio trabajo. `faustus-plugin.json` describe la app, cómo se arranca y el puente para los anfitriones que lo leen.
+Las herramientas cubren la biblioteca (`media_import`, `media_analyze`, `transcript_get`, `speakers_edit`, `highlights_find`, `music_pick`, `broll_suggest`…), la multicámara (`multicam_sync`, `multicam_create`, `multicam_switch`, `multicam_auto`), las plantillas (`template_save`, `template_list`), los proyectos y el timeline (`project_create`, `project_get`, `timeline_edit` con 40 operaciones, `timeline_nest`, `timeline_history`), la edición inteligente (`edit_command`, `text_cut`, `timeline_transcript`), los planes (`plan_create`, `plan_apply`), la salida (`render_start`, `job_status`, `renders_list`, `frame_snapshot`, `subtitles_export`, `subtitles_translate`) y los ajustes. Si una operación o un campo no existe, la respuesta lista todas las operaciones con sus campos; `project_get` pone primero los rótulos y lee los timelines largos por pista o por tramo; `frame_snapshot` devuelve la imagen (una imagen MCP) y las capas que se dibujan en ese instante (rótulos, subtítulos, medios), para que un asistente compruebe su propio trabajo. Las apps hermanas pueden mandar medios (`media_receive`, o el evento `lumiere.media.import` en `/api/family/events`) y enterarse de cuándo acaban los renders y las transcripciones (`GET /api/family/contract` lista los eventos). `faustus-plugin.json` describe la app, cómo se arranca y el puente para los anfitriones que lo leen.
 
 ## Cómo está hecha
 
@@ -75,16 +83,16 @@ Las herramientas cubren la biblioteca (`media_import`, `media_analyze`, `transcr
 - `lumiere_hoard/render/`: el compilador (timeline → scripts de filtros por trozo, transiciones con `xfade`, rótulos y subtítulos en un solo archivo ASS, el grafo de sonido desde másteres FLAC), el ejecutor (trozos en paralelo, sonoridad, mezcla final, control de calidad, fotogramas, corte sin pérdida) y la tabla de efectos (lo que no está en ella se rechaza).
 - `lumiere_hoard/analysis/`: sonido (envolvente, silencios, sonoridad, tempo y pulsos), imagen (escenas, movimiento, el seguimiento del foco y los caminos de cámara), voz (transcripción, muletillas) y alineación con un guion.
 - `lumiere_hoard/commands.py`, `plan.py`: edición inteligente y planes; `jobs.py`: la cola de tareas de fondo (proxies, análisis, transcripción, renders) con progreso y cancelación.
-- `client/`: interfaz en React: biblioteca, vista previa compuesta en el navegador a partir de los proxies, timeline, inspector, vista de texto, asistente y exportación.
+- `lumiere_hoard/speakers.py`, `multicam.py`, `music.py`, `broll.py`, `subtitles.py`, `family_events.py`: separación de hablantes, grupos multicámara, el selector de música, las sugerencias de recursos, la traducción de subtítulos y los eventos de familia; `render/sequences.py` (renders anidados en caché) y `render/formats.py` (varios lienzos por tarea).
+- `client/`: interfaz en React: biblioteca, vista previa dibujada con WebGL2 a partir de los proxies (`client/src/editor/gl/`), timeline, inspector, vista de texto, asistente y exportación.
 
-Pruebas: `python -m pytest -q` (medios sintéticos hechos con ffmpeg; los renders se comprueban fotograma a fotograma).
+Pruebas: `python -m pytest -q` (medios sintéticos hechos con ffmpeg; los renders se comprueban fotograma a fotograma). `python scripts/preview_check.py` (necesita Playwright) mide la vista previa en directo contra el render caso por caso.
 
 ## Límites
 
-- La vista previa en directo es una aproximación que dibuja el navegador (transiciones y efectos simplificados); «Fotograma exacto» y la exportación de vista previa a 540p muestran el resultado real.
-- La velocidad es constante por clip (para cambiarla se divide el clip); no hay curvas de velocidad, secuencias anidadas ni multicámara.
-- No separa hablantes; el montaje desde guion por sentido depende del modelo local y es más lento que el que va palabra por palabra.
-- El seguimiento de caras usa los detectores clásicos de OpenCV: bien para gente que mira a cámara, peor de perfil o muy pequeña en el cuadro.
+- La vista previa en directo se parece mucho al render pero no es idéntica (la transición «disolver» es la que más se aleja); «Fotograma exacto» y la exportación de vista previa a 540p muestran el resultado real. La reducción de ruido no se dibuja en la vista previa.
+- El montaje desde guion por sentido, los destacados con el modelo y la traducción de subtítulos dependen del modelo local. El motor propio de hablantes está ajustado para voces claramente distintas; con voces parecidas hacen falta las huellas de voz (requirements-speakers.txt) o el número de hablantes.
+- El seguimiento de caras necesita descargar una vez el modelo YuNet (230 KB); sin red usa los detectores clásicos, peores de perfil o con caras pequeñas.
 
 ## Licencia
 

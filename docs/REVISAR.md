@@ -4,10 +4,13 @@ Fallos, rarezas y cosas por comprobar. Cada entrada dice qué se vio y dónde.
 
 ## Abierto
 
-Nada abierto. Los límites conocidos (vista previa aproximada, velocidad constante por clip, montaje por sentido que depende del modelo local) están en el README.
+Nada abierto. Diferencias conocidas y aceptadas (en el README): la transición «disolver» de la vista previa difiere un 9 % del render en los planos de color; la reducción de ruido no se dibuja en la vista previa.
 
 ## Resuelto
 
+- Uniones de trozos y fotograma exacto (01-10): con cadencias distintas (25→30, 30→24, 29,97) o clips que empiezan fuera de la rejilla de fotogramas, hasta un 40 % de los fotogramas salían uno tarde y el fotograma exacto difería del export en clips con velocidad. Ahora todo pasa por una sola regla de tiempo (`tests/test_frame_accuracy.py`: 0 fotogramas distintos).
+- El fotograma exacto ignoraba fundidos y mostraba solo el clip saliente dentro de una transición; el desenfoque y el pixelado no escalaban con el tamaño de salida (un 720p de un lienzo 1080p desenfocaba de más).
+- Los clips invertidos empezaban 1-2 fotogramas después de su punto de salida.
 - Prueba con Faustus (01-10): el 27B no sabía qué campos llevaba cada operación y probó a ciegas (`add_title`), llegó a dibujar el título con PIL e importarlo como imagen. Ahora hay alias (`add_title`, `remove_clip`, `duration`, `at`…) y los errores devuelven los campos de todas las operaciones.
 - El asistente no podía abrir el fotograma (ruta fuera de sus carpetas) y confundió los subtítulos del proyecto con texto del vídeo original: `frame_snapshot` devuelve la imagen y la lista de capas visibles.
 - `project_get` de un timeline de 125 clips pasaba de 26.000 caracteres y el asistente tenía que buscar el rótulo en el desbordamiento: ahora van primero los rótulos, con su estilo, y hay filtros por pista y tramo y un tope de clips por pista.
