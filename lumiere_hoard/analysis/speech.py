@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import sys
 import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -29,7 +31,39 @@ def norm(text: str) -> str:
     return re.sub(r"[^\w\s']", "", text).strip()
 
 
+_DLL_DONE = False
+
+
+def cuda_dll_dirs() -> list[str]:
+    """On Windows, the folders of the pip-installed NVIDIA libraries (cuBLAS, cuDNN) go on the DLL search path so the speech
+    model finds them without a system-wide CUDA toolkit (requirements-gpu.txt)."""
+    global _DLL_DONE
+    added: list[str] = []
+    if not sys.platform.startswith("win"):
+        return added
+    import site
+
+    roots = [Path(p) for p in (site.getsitepackages() + [site.getusersitepackages()]) if p]
+    for root in roots:
+        nv = root / "nvidia"
+        if not nv.is_dir():
+            continue
+        for bin_dir in sorted(nv.glob("*/bin")):
+            if bin_dir.is_dir():
+                added.append(str(bin_dir))
+    if added and not _DLL_DONE:
+        for d in added:
+            try:
+                os.add_dll_directory(d)  # type: ignore[attr-defined]
+            except OSError:
+                pass
+        os.environ["PATH"] = os.pathsep.join(added + [os.environ.get("PATH", "")])
+        _DLL_DONE = True
+    return added
+
+
 def engine_status() -> dict[str, Any]:
+    dlls = cuda_dll_dirs()
     try:
         import faster_whisper  # type: ignore  # noqa: F401
     except Exception as error:  # noqa: BLE001
@@ -41,41 +75,43 @@ def engine_status() -> dict[str, Any]:
         cuda = ctranslate2.get_cuda_device_count()
     except Exception:  # noqa: BLE001
         cuda = 0
-    return {"available": True, "engine": "faster-whisper", "cuda_devices": cuda}
+    return {"available": True, "engine": "faster-whisper", "cuda_devices": cuda, "cuda_libraries": bool(dlls) or not sys.platform.startswith("win")}
 
 
 def transcribe(path: Path, *, model: str = "", language: str = "", device: str = "auto", gpu: Optional[int] = None,
                progress: Optional[Callable[[float, str], None]] = None, duration_ms: int = 0, cancelled: Callable[[], bool] = lambda: False,
                initial_prompt: str = "") -> dict[str, Any]:
-    """Words [{id, t0, t1, text, p}], segments [{t0, t1, text}] and the language. ``path`` should be a 16 kHz mono WAV or any
-    file ffmpeg reads."""
+    """Words [{id, t0, t1, text, p}], segments [{t0, t1, text}] and the language. ``path`` is a 16 kHz mono 16-bit WAV
+    (media.speech_wav). Tries the GPU (large-v3-turbo) and falls back to the CPU (small) when CUDA fails."""
     status = engine_status()
     if not status["available"]:
         raise TranscriberUnavailable(status["reason"] + " Install it with: pip install faster-whisper")
     from faster_whisper import WhisperModel  # type: ignore
 
     use_cuda = device == "cuda" or (device == "auto" and status.get("cuda_devices", 0) > 0)
-    name = model or ("large-v3-turbo" if use_cuda else "small")
-    attempts = [("cuda", "float16"), ("cpu", "int8")] if use_cuda else [("cpu", "int8")]
+    audio = _load_audio(path)
+    attempts = [("cuda", "float16", model or "large-v3-turbo")] if use_cuda else []
+    attempts.append(("cpu", "int8", model or "small"))
     last: Optional[Exception] = None
-    wm = None
-    used = ("cpu", "int8")
-    for dev, ct in attempts:
+    for dev, ct, name in attempts:
         try:
             kwargs: dict[str, Any] = {"device": dev, "compute_type": ct}
             if dev == "cuda" and gpu is not None:
                 kwargs["device_index"] = gpu
             wm = WhisperModel(name, **kwargs)
-            used = (dev, ct)
-            break
-        except Exception as error:  # noqa: BLE001
+            if progress:
+                progress(0.02, f"{name} on {dev}")
+            return _run(wm, audio, name, dev, language, initial_prompt, duration_ms, progress, cancelled, note=str(last) if last else "")
+        except Exception as error:  # noqa: BLE001 - a missing CUDA library shows up only when decoding starts: retry on the CPU
             last = error
             log.warning("whisper %s on %s failed: %s", name, dev, error)
-    if wm is None:
-        raise TranscriberUnavailable(f"Could not load the speech model {name}: {last}")
-    if progress:
-        progress(0.02, f"{name} on {used[0]}")
-    segments, info = wm.transcribe(_load_audio(path), language=language or None, word_timestamps=True, vad_filter=True,
+            if dev == "cpu":
+                break
+    raise TranscriberUnavailable(f"Could not run the speech model: {last}")
+
+
+def _run(wm, audio, name: str, dev: str, language: str, initial_prompt: str, duration_ms: int, progress, cancelled, note: str = "") -> dict[str, Any]:
+    segments, info = wm.transcribe(audio, language=language or None, word_timestamps=True, vad_filter=True,
                                    vad_parameters={"min_silence_duration_ms": 300}, beam_size=5, condition_on_previous_text=False,
                                    initial_prompt=initial_prompt or None)
     words: list[dict[str, Any]] = []
@@ -93,9 +129,12 @@ def transcribe(path: Path, *, model: str = "", language: str = "", device: str =
             words.append({"id": f"w{n}", "t0": int(round(w.start * 1000)), "t1": int(round(max(w.end, w.start + 0.02) * 1000)), "text": text,
                           "p": round(float(w.probability or 0), 3)})
         if progress and duration_ms:
-            progress(min(0.98, seg.end * 1000 / duration_ms), f"{len(words)} words")
-    return {"language": info.language, "language_p": round(float(info.language_probability or 0), 3), "model": name, "device": used[0],
-            "words": words, "segments": segs}
+            progress(min(0.98, seg.end * 1000 / duration_ms), f"{len(words)} words · {name} on {dev}")
+    out = {"language": info.language, "language_p": round(float(info.language_probability or 0), 3), "model": name, "device": dev,
+           "words": words, "segments": segs}
+    if note:
+        out["note"] = f"The GPU failed ({note[:200]}); transcribed on the CPU."
+    return out
 
 
 def _load_audio(path: Path):
