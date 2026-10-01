@@ -22,7 +22,7 @@ from .errors import LumiereError
 from .hoard_link import family
 from .hoard_link.config import LinkConfig
 from .jobs import JobQueue
-from .render import runner
+from .render import runner, sequences
 from .util import clip
 
 log = logging.getLogger("lumiere")
@@ -86,6 +86,7 @@ class Services:
         self.jobs.register("copy_cut", lambda ctx: runner.copy_cut_job(self, ctx))
         self.jobs.register("stabilize", lambda ctx: derive.stabilize_job(self, ctx))
         self.jobs.register("plan_apply", lambda ctx: plan_mod.apply_job(self, ctx))
+        self.jobs.register("sequence", lambda ctx: sequences.prepare_job(self, ctx))
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> None:

@@ -220,4 +220,4 @@ def test_op_errors_explain_the_fields():
     with pytest.raises(LumiereError) as error:
         parse_op({"op": "split"})
     assert "Expected: split {at, clip?}" in str(error.value)
-    assert len(op_reference().splitlines()) == len(OP_NAMES) == 31
+    assert len(op_reference().splitlines()) == len(OP_NAMES) == 35

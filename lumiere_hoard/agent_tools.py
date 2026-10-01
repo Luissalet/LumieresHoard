@@ -15,7 +15,7 @@ from . import media as media_store
 from . import plan as plan_mod
 from . import projects as project_store
 from .errors import LumiereError
-from .ops import OP_NAMES, PRESETS, op_reference
+from .ops import OP_NAMES, PRESETS, RAMP_PRESETS, op_reference
 from .render import filters as fx
 from .render import runner
 from .services import Services
@@ -219,6 +219,19 @@ class FreezeArgs(BaseModel):
     clip: str
     at: float | int | str
     length: float | int | str = 2000
+
+
+class NestArgs(BaseModel):
+    project: str = ProjectId
+    action: Literal["nest", "unnest", "add", "list", "prepare"] = Field(
+        "list", description="nest: clips -> one sequence clip (a new project); unnest: a sequence clip -> its clips; add: put another project "
+                            "on this timeline; list: nested sequences here and where this project is used; prepare: render a sequence now.")
+    clips: list[str] = Field(default_factory=list, max_length=2000, description="nest: the clips to move into the new project.")
+    clip: str = Field("", max_length=40, description="unnest: the sequence clip.")
+    name: str = Field("", max_length=120, description="nest: name of the new project.")
+    sequence: str = Field("", max_length=40, description="add / prepare: the nested project (prj_...).")
+    at: TimeVal = Field(None, description="add: timeline time; omitted = end of the main track.")
+    track: str = Field("", max_length=40, description="add: the track (default the main track).")
 
 
 class SettingsArgs(BaseModel):
@@ -474,6 +487,9 @@ def _frame_layers(svc: Services, project: str, t: int) -> list[dict]:
                 item: dict = {"layer": "text" if c.type == "text" else track.role, "track": track.id, "clip": c.id}
                 if c.type == "text":
                     item.update(text=(c.text or "")[:200], position=c.style.position if c.style else None)
+                elif c.type == "sequence":
+                    info = svc.db.one("SELECT name FROM projects WHERE id = ?", (c.media,))
+                    item.update(sequence=c.media, media=info["name"] if info else c.media)
                 else:
                     info = svc.db.one("SELECT name FROM media WHERE id = ?", (c.media,))
                     item["media"] = info["name"] if info else c.media
@@ -510,7 +526,43 @@ def run_freeze(svc: Services, a: FreezeArgs) -> dict:
 def run_presets(svc: Services, a: Empty) -> dict:
     return {"canvas_presets": PRESETS, "export_presets": runner.export_presets(), "transitions": list(TRANSITIONS),
             "effects": {k: {p: v[0] for p, v in spec.items()} for k, spec in fx.SPECS.items()},
-            "caption_styles": ["clean", "bold", "karaoke", "pop", "boxed", "minimal"], "operations": OP_NAMES, "operation_fields": op_reference().split("\n"), "commands": plan_mod.COMMAND_DOCS}
+            "caption_styles": ["clean", "bold", "karaoke", "pop", "boxed", "minimal"], "operations": OP_NAMES, "operation_fields": op_reference().split("\n"), "commands": plan_mod.COMMAND_DOCS,
+            "speed_curves": list(RAMP_PRESETS), "mask_shapes": ["rectangle", "rounded", "ellipse"]}
+
+
+def run_nest(svc: Services, a: NestArgs) -> dict:
+    from .render import sequences
+
+    if a.action == "nest":
+        if not a.clips:
+            raise LumiereError("nest needs clips (ids from project_get).")
+        return project_store.nest(svc, a.project, a.clips, a.name, actor="agent")
+    if a.action == "unnest":
+        if not a.clip:
+            raise LumiereError("unnest needs the sequence clip id.")
+        return project_store.edit(svc, a.project, [{"op": "unnest", "clip": a.clip}], label="Desanidar", actor="agent")
+    if a.action == "add":
+        if not a.sequence:
+            raise LumiereError("add needs sequence (the project id to nest).")
+        op: dict[str, Any] = {"op": "add_sequence", "project": a.sequence}
+        if a.at is not None:
+            op.update(at=a.at, mode="overwrite")
+        if a.track:
+            op["track"] = a.track
+        return project_store.edit(svc, a.project, [op], label="Añadir secuencia", actor="agent")
+    if a.action == "prepare":
+        target = a.sequence or a.project
+        job = svc.jobs.submit("sequence", {"project": target}, label="Secuencia anidada", project_id=target)
+        return {"job": job["id"], "state": job["state"]}
+    p = project_store.doc(svc, a.project)
+    look = project_store.media_lookup(svc)
+    items = []
+    for sid in sorted(p.sequence_ids()):
+        info = look(sid) or {}
+        clips = [{"clip": c.id, "start": ms_to_tc(c.start), "end": ms_to_tc(c.end)} for _, c in p.all_clips() if c.media == sid]
+        items.append({"project": sid, "name": info.get("name"), "duration": ms_to_tc(info.get("duration_ms") or 0),
+                      "ready": sequences.cached(svc, sid) is not None, "clips": clips})
+    return {"project": a.project, "sequences": items, "used_by": project_store.used_by(svc, a.project)}
 
 
 def run_settings(svc: Services, a: SettingsArgs) -> dict:
@@ -550,8 +602,9 @@ TOOLS: list[Tool] = [
     Tool("project_delete", "Delete a project and its history (needs confirm=true). Borrar proyecto.\nKeywords: delete project.",
          ProjectDeleteArgs, _ann(False, True, True), run_project_delete),
     Tool("timeline_edit", "Edit the timeline with operations (split, trim, move, delete, titles, speed...). Editar timeline.\n"
-         "All or nothing, one undo step. Sinónimos: cortar, recortar, mover, añadir texto, título, rótulo.\n"
-         "Keywords: edit, cut, trim, split, title, text overlay, ops.",
+         "All or nothing, one undo step. Speed curves (speed_ramp), shape masks (mask), nested sequences (add_sequence, unnest).\n"
+         "Sinónimos: cortar, recortar, mover, añadir texto, título, rótulo, rampa de velocidad, cámara lenta, máscara.\n"
+         "Keywords: edit, cut, trim, split, title, text overlay, ops, speed ramp, slow motion, mask.",
          EditArgs, _ann(False, True, False), run_edit),
     Tool("timeline_history", "Undo, redo, list or restore history steps of a project. Deshacer.\n"
          "Sinónimos: deshacer, rehacer, historial, volver atrás.\nKeywords: undo, redo, history.", HistoryArgs, _ann(False, False, False), run_history),
@@ -582,6 +635,9 @@ TOOLS: list[Tool] = [
     Tool("clip_stabilize", "Stabilize a shaky clip (background job; the clip is pointed at the stable copy). Estabilizar.\n"
          "Keywords: stabilize, shaky, gimbal.", StabilizeArgs, _ann(False), run_stabilize),
     Tool("clip_freeze", "Insert a freeze frame of a clip at a time. Congelar imagen.\nKeywords: freeze frame, still.", FreezeArgs, _ann(False), run_freeze),
+    Tool("timeline_nest", "Nested sequences: nest clips into a new project, un-nest, add a project as a clip, list. Anidar.\n"
+         "Sinónimos: anidar, secuencia anidada, agrupar clips, desanidar, compound clip.\nKeywords: nest, nested sequence, compound, group clips.",
+         NestArgs, _ann(False, False, False), run_nest),
     Tool("presets_list", "Canvas and export presets, transitions, effects, caption styles, operations. Opciones.\n"
          "Keywords: presets, effects, transitions, vocabulary.", Empty, _ann(True), run_presets),
     Tool("settings", "Read or change settings (speech model, language, GPU decoding, export folder). Ajustes.\n"

@@ -21,6 +21,7 @@ from ..ops import delete_range
 from ..timeline import Project, clone, validate
 from ..util import clip, dumps, ms_to_tc, new_id, safe_filename
 from . import compiler as C
+from . import sequences
 from .ass import build_ass, build_srt, build_vtt
 
 if TYPE_CHECKING:
@@ -105,22 +106,52 @@ def _script_flag(tools: ff.Tools, path: str) -> list[str]:
 
 
 class RenderContext:
-    def __init__(self, svc: "Services", project: Project, work: Path, *, use_proxies: bool = False):
+    def __init__(self, svc: "Services", project: Project, work: Path, *, use_proxies: bool = False, stack: tuple[str, ...] = ()):
         self.svc = svc
         self.p = project
         self.work = work
         self.use_proxies = use_proxies
+        self.stack = stack  # projects being rendered around this one (nested sequences refuse loops)
         self._luts: dict[str, str] = {}
         self._media: dict[str, C.MediaRef] = {}
+        self._seq: dict[str, sequences.SeqMaster] = {}
         self._lock = threading.Lock()
+        self._seq_lock = threading.Lock()
 
     def media(self, mid: str) -> C.MediaRef:
         if mid not in self._media:
+            if mid.startswith("prj_"):
+                m = self.sequence(mid)
+                self._media[mid] = C.MediaRef(id=mid, path=str(m.video), kind="video", width=m.width, height=m.height, has_audio=True,
+                                              has_video=True, duration_ms=m.duration_ms, proxy=None)
+                return self._media[mid]
             info = media_store.get(self.svc, mid)
             self._media[mid] = C.MediaRef(id=mid, path=info["path"], kind=info["kind"], width=info["width"], height=info["height"],
                                           has_audio=info["has_audio"], has_video=info["has_video"], duration_ms=info["duration_ms"],
                                           proxy=media_store.proxy_path(self.svc, mid))
         return self._media[mid]
+
+    def sequence(self, project_id: str, ctx: Optional["JobCtx"] = None) -> sequences.SeqMaster:
+        with self._seq_lock:
+            if project_id not in self._seq:
+                self._seq[project_id] = sequences.ensure(self.svc, project_id, stack=self.stack, ctx=ctx)
+            return self._seq[project_id]
+
+    def prepare(self, ctx: Optional["JobCtx"] = None) -> int:
+        """Make the intermediates of every nested sequence before the parallel chunks need them."""
+        ids = sorted(self.p.sequence_ids())
+        for i, sid in enumerate(ids):
+            if ctx is not None:
+                ctx.check()
+                ctx.progress(0.01, f"nested sequence {i + 1}/{len(ids)}", force=True)
+            self.sequence(sid, ctx)
+        return len(ids)
+
+    def master_name(self, mid: str, stream: int) -> str:
+        """The FLAC a sound comes from, relative to the cache folder (where the sound pass runs)."""
+        if mid.startswith("prj_"):
+            return self.sequence(mid).audio_rel
+        return f"{mid}/a{stream}.flac"
 
     def lut_name(self, file: str) -> str:
         with self._lock:
@@ -193,12 +224,15 @@ def render_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
             n += 1
     t_start = time.time()
     try:
+        # 0. nested sequences (each one rendered once, then read like a media)
+        rc.prepare(ctx)
         # 1. sound masters
-        ag = C.audio_graph(p, total, rc.media, lambda m, s: f"{m}/a{s}.flac")
+        ag = C.audio_graph(p, total, rc.media, rc.master_name)
         for i, (mid, stream) in enumerate(ag.sources):
             ctx.check()
             ctx.progress(0.02 + 0.08 * i / max(1, len(ag.sources)), f"audio {i + 1}/{len(ag.sources)}", force=True)
-            media_store.audio_master(svc, mid, stream, handle=ctx.handle())
+            if not mid.startswith("prj_"):
+                media_store.audio_master(svc, mid, stream, handle=ctx.handle())
         # 2. picture
         chunk_files: list[str] = []
         if not audio_only:
@@ -351,7 +385,8 @@ def render_frame(svc: "Services", project_id: str, t_ms: int, *, width: int = 0,
     work = svc.config.work_dir / rid
     work.mkdir(parents=True, exist_ok=True)
     try:
-        rc = RenderContext(svc, p, work, use_proxies=False)
+        rc = RenderContext(svc, p, work, use_proxies=False, stack=(project_id,))
+        rc.prepare()
         W, H = p.canvas.width, p.canvas.height
         if width and width < W:
             H = max(2, int(round(H * width / W / 2)) * 2)
@@ -398,8 +433,11 @@ def copy_cut_check(p: Project) -> list[str]:
         if c.type == "text":
             reasons.append("it has titles")
             break
-        if c.speed != 1 or c.reverse or c.filters or c.transition_in or c.keyframes or c.reframe or c.fade_in or c.fade_out:
-            reasons.append(f"clip {c.id} has speed, effects, fades or transitions")
+        if c.type == "sequence":
+            reasons.append(f"clip {c.id} is a nested sequence")
+            break
+        if c.speed != 1 or c.speed_keys or c.reverse or c.filters or c.transition_in or c.keyframes or c.reframe or c.fade_in or c.fade_out or c.mask:
+            reasons.append(f"clip {c.id} has speed, effects, masks, fades or transitions")
             break
         if c.transform.fit not in ("contain", "cover") or c.transform.scale != 1 or c.transform.x or c.transform.y:
             reasons.append(f"clip {c.id} is moved or scaled")
@@ -493,12 +531,13 @@ def edl_export(svc: "Services", project_id: str) -> str:
              "FCM: NON-DROP FRAME", ""]
     for i, c in enumerate(sorted(main.clips if main else [], key=lambda c: c.start), start=1):
         if c.type != "media":
-            continue
+            continue  # titles and nested sequences have no source file
         info = media_store.get(svc, c.media)
         tc = lambda ms: ms_to_tc(ms, fps)  # noqa: E731
         lines.append(f"{i:03d}  AX       AA/V  C        {tc(c.src_in)} {tc(c.src_out)} {tc(c.start)} {tc(c.end)}")
         lines.append(f"* FROM CLIP NAME: {Path(info['path']).name}")
-        if c.speed != 1:
-            lines.append(f"M2   AX       {c.speed * fps:05.1f}                {tc(c.src_in)}")
+        if c.speed != 1 or c.has_ramp:
+            mean = (c.src_out - c.src_in) / max(1, c.duration) if c.has_ramp else c.speed  # a curve is listed at its mean speed
+            lines.append(f"M2   AX       {mean * fps:05.1f}                {tc(c.src_in)}")
         lines.append("")
     return "\n".join(lines)

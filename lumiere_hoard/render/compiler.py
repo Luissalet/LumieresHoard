@@ -15,7 +15,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from ..timeline import Clip, Keyframe, Project, Track
+from ..timeline import MASK_PROPS, Clip, Keyframe, Mask, Project, Track
 from . import filters as fx
 
 XFADE = {
@@ -48,6 +48,7 @@ class Output:
     fps_expr: str
     use_proxies: bool = False
     factor: float = 1.0  # output pixels per canvas pixel (previews render smaller)
+    alpha: bool = False  # transparent where nothing is drawn (a nested sequence that only holds overlays)
 
 
 @dataclass
@@ -194,7 +195,7 @@ def pieces_in(project: Project, A: float, B: float) -> list[Piece]:
     """What each visible video track shows between A and B (ms), bottom track first."""
     out: list[Piece] = []
     for t in video_tracks(project):
-        clips = sorted((c for c in t.clips if c.type == "media"), key=lambda c: c.start)
+        clips = sorted((c for c in t.clips if c.type != "text"), key=lambda c: c.start)
         for i, c in enumerate(clips):
             nxt = clips[i + 1] if i + 1 < len(clips) else None
             start = c.start + (c.transition_in.dur if c.transition_in and i > 0 else 0)
@@ -222,12 +223,115 @@ def _input_args(clip: Clip, media: MediaRef, t0: float, t1: float, out: Output, 
         return ["-loop", "1", "-framerate", out.fps_expr, "-t", _num(dur_s + 0.5), "-i", path], dur_s
     a, b = clip.src_at(t0), clip.src_at(t1)
     lo, hi = (b, a) if clip.reverse else (a, b)
-    pad = 2 * 1000 / out.fps * clip.speed
+    pad = 2 * 1000 / out.fps * max(v for _, _, v in clip.segments())
     args: list[str] = []
     if hwdec and not out.use_proxies:
         args += ["-hwaccel", "auto"]
-    args += ["-ss", _num(max(0.0, lo) / 1000), "-t", _num((hi - lo + pad) / 1000), "-i", path]
+    if clip.reverse:
+        # reversed, the first frame shown is the last one read: pad below lo instead, and let reverse_trim() cut at hi
+        start = reverse_start(clip, t0, t1, out.fps)
+        args += ["-ss", _num(start / 1000), "-t", _num((hi - start + pad) / 1000), "-i", path]
+    else:
+        args += ["-ss", _num(max(0.0, lo) / 1000), "-t", _num((hi - lo + pad) / 1000), "-i", path]
     return args, dur_s
+
+
+def reverse_start(clip: Clip, t0: float, t1: float, fps: float) -> float:
+    """Source ms where a reversed piece starts reading (two frames of margin below its lowest source time)."""
+    lo = min(clip.src_at(t0), clip.src_at(t1))
+    return max(0.0, lo - 2 * 1000 / fps * max(v for _, _, v in clip.segments()))
+
+
+def reverse_trim(clip: Clip, t0: float, t1: float, fps: float) -> str:
+    """Before ``reverse``: keep only the frames that start before the piece's highest source time. The input's -t edge is
+    not exact (a frame on the boundary may or may not come), a trim on timestamps is."""
+    hi = max(clip.src_at(t0), clip.src_at(t1))
+    return f"trim=end={_num6((hi - reverse_start(clip, t0, t1, fps) - 0.5) / 1000)}"
+
+
+def ramp_expr(clip: Clip, t0: float, t1: float, fps: float) -> str:
+    """setpts expression (output seconds from the piece start, as a function of T = input seconds) for a speed curve.
+    The input starts at the piece's first source frame (its last one when reversed); the map is piecewise linear on the
+    clip's constant-speed steps, the same steps the sound and the timing helpers use."""
+    a, b = clip.src_at(t0), clip.src_at(t1)
+    lo, hi = (b, a) if clip.reverse else (a, b)
+    pad = 2 * 1000 / fps * max(v for _, _, v in clip.segments())
+    edges = {s for seg in clip.segments() for s in seg[:2]}
+    if clip.reverse:
+        span = [x for x in edges if lo - pad < x < hi] + [hi, lo - pad]
+        pts = [((hi - x) / 1000, (clip.timeline_at(x) - t0) / 1000) for x in span]
+    else:
+        span = [x for x in edges if lo < x < hi + pad] + [lo, hi + pad]
+        pts = [((x - lo) / 1000, (clip.timeline_at(x) - t0) / 1000) for x in span]
+    return piecewise(sorted(set(pts)), "T")
+
+
+def _num6(value: float) -> str:
+    text = f"{value:.6f}".rstrip("0").rstrip(".")
+    return text if text not in ("-0", "") else "0"
+
+
+def ramp_audio(clip: Clip, label: str, rate: int = 48000) -> list[str]:
+    """[label] (the clip's whole source span, reversed if the clip is) -> [label c]: each constant-speed step through its
+    own pitch-keeping atempo chain, padded / cut to the exact sample count the timeline gives it, then joined."""
+    origin = clip.src_out if clip.reverse else clip.src_in
+    acc = 0.0
+    parts: list[tuple[float, float, float, int]] = []
+    prev_samples = 0
+    for s0, s1, v in clip.steps():
+        acc += abs(s1 - s0) / v
+        samples = int(round(acc * rate / 1000))
+        if samples > prev_samples:
+            parts.append((abs(s0 - origin) / 1000, abs(s1 - origin) / 1000, v, samples - prev_samples))
+        prev_samples = samples
+    if not parts:
+        return [f"[{label}]anull[{label}c]"]
+    lines = [f"[{label}]asplit={len(parts)}" + "".join(f"[{label}_{i}]" for i in range(len(parts))) if len(parts) > 1 else f"[{label}]anull[{label}_0]"]
+    for i, (u0, u1, v, count) in enumerate(parts):
+        tempo = ",".join(fx.atempo_chain(v)) or "anull"
+        lines.append(f"[{label}_{i}]atrim=start={_num6(u0)}:end={_num6(u1)},asetpts=PTS-STARTPTS,{tempo},apad,atrim=end_sample={count},"
+                     f"asetpts=PTS-STARTPTS[{label}s{i}]")
+    joined = "".join(f"[{label}s{i}]" for i in range(len(parts)))
+    lines.append(f"{joined}concat=n={len(parts)}:v=0:a=1[{label}c]" if len(parts) > 1 else f"{joined}anull[{label}c]")
+    return lines
+
+
+def _mask_value(clip: Clip, attr: str, shift: float) -> str:
+    keys = clip.keyframes.get("mask_" + attr)
+    if keys:
+        return f"({keyframe_expr(keys, shift, var='T')})"
+    return _num(getattr(clip.mask, attr))
+
+
+def mask_alpha_expr(clip: Clip, shift: float) -> str:
+    """0..1 coverage of the clip's mask at pixel (X, Y) of a W x H picture, from a signed distance to the shape (negative
+    inside) and a linear soft edge of 'feather' width centred on the outline. Animated values are functions of T."""
+    m: Mask = clip.mask  # type: ignore[assignment]
+    x, y, w, h, feather = (_mask_value(clip, a, shift) for a in ("x", "y", "w", "h", "feather"))
+    setup = f"st(0,{x}*W);st(1,{y}*H);st(2,max(0.5,{w}*W/2));st(3,max(0.5,{h}*H/2));st(4,max(1,{feather}*min(W,H)));"
+    if m.shape == "ellipse":
+        dist = "(hypot((X-ld(0))/ld(2),(Y-ld(1))/ld(3))-1)*min(ld(2),ld(3))"
+    else:
+        r = f"{_num(m.radius)}*2*min(ld(2),ld(3))" if m.shape == "rounded" else "0"
+        setup += f"st(5,{r});st(6,abs(X-ld(0))-ld(2)+ld(5));st(7,abs(Y-ld(1))-ld(3)+ld(5));"
+        dist = "(hypot(max(ld(6),0),max(ld(7),0))+min(max(ld(6),ld(7)),0)-ld(5))"
+    cover = f"clip(0.5-{dist}/ld(4),0,1)"
+    return setup + (f"1-{cover}" if m.invert else cover)
+
+
+def mask_graph(clip: Clip, w: int, h: int, shift: float, dur_s: float, out: Output, p: str) -> list[str]:
+    """[p0] -> [p1]: the picture with its alpha multiplied by the mask. A still mask is drawn once and repeated; an
+    animated one (mask keyframes) is drawn per frame, on one grey plane only."""
+    animated = any(clip.keyframes.get(k) for k in MASK_PROPS)
+    expr = mask_alpha_expr(clip, shift)
+    source = f"color=c=white:s={w}x{h}:r={out.fps_expr}:d={_num(dur_s + 1 if animated else 0.1)},format=gray,geq=lum='255*({expr})'"
+    if not animated:
+        source += ",loop=loop=-1:size=1:start=0"
+    return [source + f"[{p}m]",
+            f"[{p}0]split[{p}a][{p}b]",
+            f"[{p}b]alphaextract[{p}ab]",
+            f"[{p}ab][{p}m]blend=all_mode=multiply:shortest=1[{p}am]",
+            f"[{p}a][{p}am]alphamerge[{p}1]"]
 
 
 def _fit_chain(clip: Clip, media: MediaRef, out: Output, box_scale: float) -> tuple[list[str], int, int, Optional[tuple[int, int]]]:
@@ -285,7 +389,10 @@ def _focus_exprs(clip: Clip, t0: float, sw: int, sh: int, bw: int, bh: int) -> t
                 continue
             src, fx_ = p[0], p[1]
             fy_ = p[2] if len(p) > 2 else tr.focus_y
-            local = ((src0 - src) if clip.reverse else (src - src0)) / clip.speed / 1000
+            if clip.has_ramp:
+                local = (clip.timeline_at(src) - t0) / 1000
+            else:
+                local = ((src0 - src) if clip.reverse else (src - src0)) / clip.speed / 1000
             pts_x.append((local, fx_))
             pts_y.append((local, fy_))
         pts_x = _window(pts_x)
@@ -331,9 +438,13 @@ def clip_chain(idx: int, piece_clip: Clip, media: MediaRef, t0: float, t1: float
     in_args, dur_s = _input_args(clip, media, t0, t1, out, cx.hwdec)
     chain: list[str] = []
     if clip.reverse:
+        if media.kind != "image":
+            chain.append(reverse_trim(clip, t0, t1, out.fps))
         chain.append("reverse")
     chain.append("setpts=PTS-STARTPTS")
-    if abs(clip.speed - 1) > 1e-4 and media.kind != "image":
+    if clip.has_ramp and media.kind != "image":
+        chain.append(f"setpts='({ramp_expr(clip, t0, t1, out.fps)})/TB'")
+    elif abs(clip.speed - 1) > 1e-4 and media.kind != "image":
         chain.append(f"setpts=PTS/{_num(clip.speed)}")
     chain.append(f"fps={out.fps_expr}")
     chain.append(f"trim=duration={_num(dur_s)}")
@@ -374,6 +485,12 @@ def clip_chain(idx: int, piece_clip: Clip, media: MediaRef, t0: float, t1: float
     if others:
         chain += fx.video_chain(others, {"lut_name": cx.lut_name, "uid": label})
     chain.append("format=yuva420p")
+    if clip.mask and clip.mask.enabled:
+        # the mask multiplies the clip's alpha: close the chain here, branch, and carry on from the masked picture
+        lines = mask_graph(clip, w, h, shift, dur_s, out, f"{label}k")
+        body = (head + ("," + ",".join(chain) if chain else "")) if head else f"[{idx}:v]" + ",".join(chain)
+        head = body + f"[{label}k0];" + ";".join(lines) + f";[{label}k1]null"
+        chain = []
     rot_keys = clip.keyframes.get("rotation")
     if rot_keys or abs(clip.transform.rotation) > 1e-3:
         angle = f"({keyframe_expr(rot_keys, shift)})*PI/180" if rot_keys else _num(clip.transform.rotation * math.pi / 180)
@@ -423,7 +540,8 @@ def chunk_graph(project: Project, index: int, f0: int, f1: int, out: Output, med
     A, B = ms_of_frame(f0, out.fps), ms_of_frame(f1, out.fps)
     dur = (B - A) / 1000
     g = ChunkGraph(index, f0, f1)
-    lines = [f"color=c={project.canvas.background.replace('#', '0x')}:s={out.width}x{out.height}:r={out.fps_expr}:d={_num(dur + 1)},format=yuv420p[b0]"]
+    base = "black@0" if out.alpha else project.canvas.background.replace('#', '0x')
+    lines = [f"color=c={base}:s={out.width}x{out.height}:r={out.fps_expr}:d={_num(dur + 1)},format={'yuva420p' if out.alpha else 'yuv420p'}[b0]"]
     cur = "b0"
     n = 0
     for p in pieces_in(project, A, B):
@@ -457,7 +575,7 @@ def chunk_graph(project: Project, index: int, f0: int, f1: int, out: Output, med
     tail = [f"trim=duration={_num(dur)}"]
     if ass_file:
         tail += [f"setpts=PTS-STARTPTS+{_num(A / 1000)}/TB", f"ass={ass_file}", "setpts=PTS-STARTPTS"]
-    tail.append("format=yuv420p")
+    tail.append("format=yuva420p" if out.alpha else "format=yuv420p")
     lines.append(f"[{cur}]" + ",".join(tail) + f"[{g.out_label}]")
     g.graph = ";\n".join(lines) + "\n"
     return g
@@ -513,7 +631,7 @@ def audio_graph(project: Project, total_ms: int, media: Callable[[str], MediaRef
         fades = _transition_fades(t)
         clips = []
         for c in t.clips:
-            if c.type != "media" or c.mute or c.start >= total_ms:
+            if c.type == "text" or c.mute or c.start >= total_ms:
                 continue
             m = media(c.media)
             if not m.has_audio or m.kind == "image":
@@ -537,7 +655,13 @@ def audio_graph(project: Project, total_ms: int, media: Callable[[str], MediaRef
                 chain = [f"amovie={src}:seek_point={_num(lo / 1000)}", f"atrim=start={_num(lo / 1000)}:end={_num(hi / 1000)}", "asetpts=PTS-STARTPTS"]
                 if c.reverse:
                     chain.append("areverse")
-                chain += fx.atempo_chain(c.speed)
+                if c.has_ramp:
+                    # one atempo per constant-speed step, each cut to its exact length: the sound follows the picture's steps
+                    lines.append(",".join(chain + [fmt]) + f"[r{n}]")
+                    lines += ramp_audio(c, f"r{n}")
+                    chain = [f"[r{n}c]anull"]
+                else:
+                    chain += fx.atempo_chain(c.speed)
                 chain += fx.audio_filters(c.filters)
                 vol_keys = c.keyframes.get("volume_db")
                 if vol_keys:

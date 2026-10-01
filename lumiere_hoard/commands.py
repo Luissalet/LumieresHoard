@@ -39,7 +39,7 @@ def _main_media(p: Project, media: Optional[str]) -> list[str]:
     main = p.main_track()
     seen: list[str] = []
     for c in (main.clips if main else []):
-        if c.media and c.media not in seen:
+        if c.media and c.type == "media" and c.media not in seen:
             seen.append(c.media)
     return seen
 
@@ -291,7 +291,7 @@ def captions(svc: "Services", p: Project, *, enabled: bool = True, style: Option
     p = _apply(svc, p, [op])
     if enabled:
         tracks = p.captions.tracks or ([p.main_track().id] if p.main_track() else [])
-        mids = sorted({c.media for t in p.tracks if t.id in tracks for c in t.clips if c.media and media_store.get(svc, c.media)["has_audio"]})
+        mids = sorted({c.media for t in p.tracks if t.id in tracks for c in t.clips if c.media and c.type == "media" and media_store.get(svc, c.media)["has_audio"]})
         _need(svc, mids, "transcript", "Captions", language=language)
     return p, {"captions": p.captions.model_dump()}
 
@@ -462,7 +462,7 @@ def _signals(levels, motion, scenes, tr) -> list[str]:
 def match_loudness(svc: "Services", p: Project, *, target_lufs: float = -16.0, track: Optional[str] = None) -> tuple[Project, dict[str, Any]]:
     """Set each clip's gain so every source sits at the same loudness (dialogue from different mics, game captures)."""
     tracks = [p.track(track)] if track else [t for t in p.tracks if t.kind in ("video", "audio") and t.role != "music"]
-    mids = sorted({c.media for t in tracks for c in t.clips if c.media and media_store.get(svc, c.media)["has_audio"]})
+    mids = sorted({c.media for t in tracks for c in t.clips if c.media and c.type == "media" and media_store.get(svc, c.media)["has_audio"]})
     found = _need(svc, mids, "loudness", "Matching loudness")
     ops = []
     for t in tracks:

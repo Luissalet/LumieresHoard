@@ -81,6 +81,11 @@ class StabilizeBody(BaseModel):
     smoothing: int = 15
 
 
+class NestBody(BaseModel):
+    clips: list[str] = Field(..., min_length=1, max_length=2000)
+    name: str = Field("", max_length=120)
+
+
 @router.get("/projects")
 def list_projects(request: Request, templates: Optional[bool] = None):
     return {"projects": store.list_projects(services(request), templates)}
@@ -206,6 +211,37 @@ def freeze(request: Request, project_id: str, body: FreezeBody):
 @router.post("/projects/{project_id}/stabilize")
 def stabilize(request: Request, project_id: str, body: StabilizeBody):
     return tool(request, "clip_stabilize", project=project_id, clip=body.clip, smoothing=body.smoothing)
+
+
+@router.post("/projects/{project_id}/nest")
+def nest(request: Request, project_id: str, body: NestBody):
+    """Move the selected clips into a new project and leave one sequence clip in their place."""
+    svc = services(request)
+    res = store.nest(svc, project_id, body.clips, body.name)
+    return {**res, "view": store.view(svc, project_id)}
+
+
+@router.get("/projects/{project_id}/nesting")
+def nesting(request: Request, project_id: str):
+    """Nested sequences in this project (with their render state) and the projects that nest this one."""
+    return tool(request, "timeline_nest", project=project_id, action="list")
+
+
+@router.post("/projects/{project_id}/sequence/prepare")
+def sequence_prepare(request: Request, project_id: str):
+    """Render a project's intermediate now so the live preview of the projects nesting it can play it."""
+    return tool(request, "timeline_nest", project=project_id, action="prepare")
+
+
+@router.get("/projects/{project_id}/sequence.mp4")
+def sequence_file(request: Request, project_id: str):
+    from ..errors import NotFound
+    from ..render import sequences
+
+    m = sequences.cached(services(request), project_id)
+    if m is None or m.alpha:
+        raise NotFound("This sequence has no playable render yet.")
+    return FileResponse(m.video, media_type="video/mp4")
 
 
 @router.post("/projects/{project_id}/render")
