@@ -2,8 +2,8 @@
 scaling of pixel-sized effects. The browser side is checked by scripts/preview_check.py (it needs a browser)."""
 
 import json
+import ast
 import re
-import subprocess
 
 import pytest
 
@@ -140,4 +140,4 @@ def test_preview_strings_exist_in_both_languages():
 def test_the_preview_check_script_stays_out_of_pytest():
     script = ROOT / "scripts" / "preview_check.py"
     assert script.exists() and not script.name.startswith("test_")
-    assert subprocess.run(["python", "-c", f"import ast,sys; ast.parse(open(r'{script}', encoding='utf-8').read())"]).returncode == 0
+    ast.parse(script.read_text(encoding="utf-8"))  # it is valid Python (parsed here: the folder name may hold quotes)
