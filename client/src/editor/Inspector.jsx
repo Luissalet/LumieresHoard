@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useApp } from "../App.jsx";
+import { api } from "../api.js";
+import { go, useApp } from "../App.jsx";
 import { ConfirmButton, Icon, NumInput, Seg, SliderRow, Toggle } from "../components/ui.jsx";
 import { useEd } from "./EditorContext.js";
 import { AUDIO_FX, FONTS, FX_RANGES } from "./fxspec.js";
 import { useTime } from "./playback.js";
-import { clamp, clipDur, fmtMs, kfValue, parseTc } from "./time.js";
+import { clamp, clipDur, fmtMs, hasRamp, kfValue, parseTc, speedAt, speedValue, srcAt, timelineAt } from "./time.js";
 
 const Sec = ({ title, children, right }) => (
   <div className="insp-sec">
@@ -128,6 +129,8 @@ function EffectsSection({ clip, ids }) {
 
 // ------------------------------------------------------------------ keyframes
 const KF_PROPS = ["x", "y", "scale", "opacity", "rotation"];
+const MASK_KF = { mask_x: "x", mask_y: "y", mask_w: "w", mask_h: "h", mask_feather: "feather" };
+const kfBase = (clip, prop) => (MASK_KF[prop] ? clip.mask?.[MASK_KF[prop]] ?? 0 : clip.transform[prop]);
 
 function KeyframesSection({ clip }) {
   const { t } = useApp();
@@ -138,10 +141,10 @@ function KeyframesSection({ clip }) {
   const setKeys = (prop, keys) => ed.edit([{ op: "keyframes", clip: clip.id, prop, keys: [...keys].sort((a, b) => a.t - b.t) }], t("lbl_keyframes"));
   const add = (prop) => {
     const keys = clip.keyframes?.[prop] || [];
-    const value = kfValue(keys, local, clip.transform[prop]);
+    const value = kfValue(keys, local, kfBase(clip, prop));
     setKeys(prop, [...keys.filter((k) => Math.abs(k.t - local) > 1), { t: local, v: Math.round(value * 1000) / 1000, ease: "linear" }]);
   };
-  const withKeys = KF_PROPS.filter((p) => clip.keyframes?.[p]?.length);
+  const withKeys = [...KF_PROPS, ...Object.keys(MASK_KF)].filter((p) => clip.keyframes?.[p]?.length);
   return (
     <Sec title={t("insp_keyframes")}>
       <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }}>{t("kf_help", { t: fmtMs(nowLocal) })}</div>
@@ -167,6 +170,246 @@ function KeyframesSection({ clip }) {
       ))}
     </Sec>
   );
+}
+
+// ------------------------------------------------------------------ speed curve
+const RAMP_BUTTONS = [
+  { preset: "speed_up", label: "ramp_speed_up", up: true },
+  { preset: "slow_down", label: "ramp_slow_down", up: false },
+  { preset: "ease_in_out", label: "ramp_ease_in_out", up: true },
+  { preset: "hit", label: "ramp_hit", up: false },
+];
+const EASES = ["linear", "ease_in_out", "ease_in", "ease_out", "hold"];
+
+// Speed over the clip as the timeline plays it (log scale), with the keys as dots that can be dragged up and down.
+function SpeedCurve({ clip, onKeys }) {
+  const ed = useEd();
+  const now = useTime(ed.pb, 80);
+  const W = 260;
+  const H = 96;
+  const dur = Math.max(1, clipDur(clip));
+  const keys = clip.speed_keys || [];
+  const [dragV, setDragV] = useState(null);
+  const shown = dragV ? keys.map((k, i) => (i === dragV.i ? { ...k, v: dragV.v } : k)) : keys;
+  const lo = Math.log2(Math.min(0.25, ...shown.map((k) => k.v)));
+  const hi = Math.log2(Math.max(4, ...shown.map((k) => k.v)));
+  const yOf = (v) => H - 8 - ((Math.log2(v) - lo) / (hi - lo)) * (H - 16);
+  const vOf = (y) => clamp(Math.pow(2, lo + ((H - 8 - y) / (H - 16)) * (hi - lo)), 0.1, 16);
+  const live = { ...clip, speed_keys: shown };
+  const pts = [];
+  for (let i = 0; i <= 80; i++) {
+    const local = (dur * i) / 80;
+    const v = shown.length ? speedValue(shown, srcAt(live, clip.start + local)) : clip.speed || 1;
+    pts.push(`${((local / dur) * W).toFixed(1)},${yOf(v).toFixed(1)}`);
+  }
+  const svgRef = useRef(null);
+  const toLocal = (e) => {
+    const r = svgRef.current.getBoundingClientRect();
+    return { x: ((e.clientX - r.left) / r.width) * W, y: ((e.clientY - r.top) / r.height) * H };
+  };
+  const startDrag = (e, i) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const move = (ev) => setDragV({ i, v: Math.round(vOf(toLocal(ev).y) * 100) / 100 });
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const v = Math.round(vOf(toLocal(ev).y) * 100) / 100;
+      setDragV(null);
+      if (Math.abs(v - keys[i].v) > 0.004) onKeys(keys.map((k, j) => (j === i ? { ...k, v } : k)));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const playX = clamp(((now - clip.start) / dur) * W, 0, W);
+  return (
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width="100%" height={H} data-testid="speed-curve" role="img" aria-label="Curva de velocidad"
+      style={{ background: "var(--field)", border: "1px solid var(--line-2)", borderRadius: 6, cursor: "crosshair", touchAction: "none", display: "block" }}
+      onPointerDown={(e) => { const p = toLocal(e); ed.pb.seek(clip.start + (p.x / W) * dur); }}>
+      {[0.25, 0.5, 1, 2, 4, 8].filter((v) => Math.log2(v) >= lo && Math.log2(v) <= hi).map((v) => (
+        <g key={v}>
+          <line x1={0} x2={W} y1={yOf(v)} y2={yOf(v)} stroke="var(--line-2)" strokeDasharray={v === 1 ? "" : "2 3"} />
+          <text x={3} y={yOf(v) - 2} fontSize={8} fill="var(--dim)">{v}×</text>
+        </g>
+      ))}
+      <polyline points={pts.join(" ")} fill="none" stroke="var(--accent)" strokeWidth={2} />
+      <line x1={playX} x2={playX} y1={0} y2={H} stroke="var(--warn)" strokeWidth={1} />
+      {shown.map((k, i) => {
+        const x = ((timelineAt(live, k.t) - clip.start) / dur) * W;
+        if (x < -4 || x > W + 4) return null;
+        return <circle key={i} cx={clamp(x, 4, W - 4)} cy={yOf(k.v)} r={5} fill="var(--panel)" stroke="var(--accent)" strokeWidth={2} style={{ cursor: "ns-resize" }} data-key={i} onPointerDown={(e) => startDrag(e, i)} />;
+      })}
+    </svg>
+  );
+}
+
+function SpeedSection({ clip, isImage }) {
+  const { t } = useApp();
+  const ed = useEd();
+  const [target, setTarget] = useState(2);
+  const ramp = hasRamp(clip);
+  const keys = clip.speed_keys || [];
+  const setKeys = (next) => ed.edit([{ op: "speed_ramp", clip: clip.id, keys: [...next].sort((a, b) => a.t - b.t), relative: false }], t("lbl_ramp"));
+  const preset = (b) => {
+    // the target speed is used where it makes sense (faster for speed up, slower for slow motion); otherwise the preset's own
+    const speed = b.up ? (target > 1 ? target : undefined) : (target < 1 ? target : undefined);
+    const op = { op: "speed_ramp", clip: clip.id, preset: b.preset, ...(speed ? { speed } : {}) };
+    if (b.preset === "hit") op.at = Math.round(clamp(ed.pb.t, clip.start, clip.start + clipDur(clip) - 1));
+    ed.edit([op], t("lbl_ramp"));
+  };
+  const addKey = () => {
+    const tt = clamp(ed.pb.t, clip.start, clip.start + clipDur(clip) - 1);
+    const src = Math.round(srcAt(clip, tt));
+    const v = Math.round(speedAt(clip, tt) * 100) / 100;
+    const base = keys.length ? keys : [{ t: clip.reverse ? clip.src_out : clip.src_in, v: clip.speed || 1, ease: "linear" }];
+    setKeys([...base.filter((k) => Math.abs(k.t - src) > 1), { t: src, v, ease: "linear" }]);
+  };
+  return (
+    <Sec title={t("insp_speed")}>
+      <Row label={t("speed")}>
+        <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "nowrap" }}>
+          <NumInput width={50} value={clip.speed} min={0.1} max={16} step={0.25} decimals={2} onCommit={(v) => ed.edit([{ op: "speed", clip: clip.id, speed: v }], t("lbl_speed"))} />
+          {[0.5, 1, 2].map((v) => <button key={v} type="button" className={`btn btn-sm ${!ramp && clip.speed === v ? "btn-on" : ""}`} style={{ padding: "0 7px" }} onClick={() => ed.edit([{ op: "speed", clip: clip.id, speed: v }], t("lbl_speed"))}>{v}×</button>)}
+        </div>
+      </Row>
+      {!isImage ? <Row label={t("reverse")}><Toggle checked={clip.reverse} onChange={(v) => ed.edit([{ op: "set", clip: clip.id, props: { reverse: v }, ripple: false }], t("lbl_reverse"))} label="" /></Row> : null}
+      {!isImage ? (
+        <div data-testid="ramp-section" style={{ marginTop: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            <Icon name="ramp" size={14} style={{ color: "var(--accent)" }} />
+            <b style={{ fontSize: 12, flex: 1 }}>{t("ramp_title")}</b>
+            {ramp ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => ed.edit([{ op: "speed_ramp", clip: clip.id, preset: "clear" }], t("lbl_ramp"))}>{t("ramp_clear")}</button> : null}
+          </div>
+          <SpeedCurve clip={clip} onKeys={setKeys} />
+          <div className="muted" style={{ fontSize: 11, margin: "4px 0 6px" }}>{ramp ? t("ramp_len", { d: fmtMs(clipDur(clip)) }) : t("ramp_none")}</div>
+          <Row label={t("ramp_target")}>
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              <NumInput width={50} value={target} min={0.1} max={16} step={0.25} decimals={2} onCommit={setTarget} />
+              {[0.25, 0.5, 2].map((v) => <button key={v} type="button" className={`btn btn-sm ${target === v ? "btn-on" : ""}`} style={{ padding: "0 6px" }} onClick={() => setTarget(v)}>{v}×</button>)}
+            </div>
+          </Row>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginTop: 4 }}>
+            {RAMP_BUTTONS.map((b) => <button key={b.preset} type="button" className="btn btn-sm" data-preset={b.preset} onClick={() => preset(b)}>{t(b.label)}</button>)}
+            <button type="button" className="btn btn-sm" style={{ gridColumn: "1 / -1" }} onClick={addKey}><Icon name="keyframe" size={11} />{t("ramp_add_key")}</button>
+          </div>
+          {keys.length ? (
+            <div style={{ marginTop: 8 }}>
+              {[...keys].sort((a, b) => a.t - b.t).map((k, i) => {
+                const at = timelineAt(clip, k.t);
+                return (
+                  <div key={`${k.t}-${i}`} style={{ display: "grid", gridTemplateColumns: "1fr 58px 1fr 24px", gap: 5, marginTop: 4, alignItems: "center" }} data-testid="ramp-key">
+                    <button type="button" className="btn btn-ghost btn-sm mono" style={{ justifyContent: "flex-start", padding: "0 4px" }} title={`${t("ramp_src")} ${fmtMs(k.t)}`} onClick={() => ed.pb.seek(clamp(at, clip.start, clip.start + clipDur(clip)))}>{at < clip.start - 1 ? "‹ " : ""}{fmtMs(Math.max(0, at - clip.start))}</button>
+                    <NumInput value={k.v} min={0.1} max={16} step={0.1} decimals={2} onCommit={(v) => setKeys(keys.map((x) => (x === k ? { ...x, v } : x)))} />
+                    <select className="field" value={k.ease || "linear"} aria-label={t("ramp_title")} onChange={(e) => setKeys(keys.map((x) => (x === k ? { ...x, ease: e.target.value } : x)))}>
+                      {EASES.map((x) => <option key={x} value={x}>{t(`ease_${x}`)}</option>)}
+                    </select>
+                    <button type="button" className="btn btn-ghost btn-icon btn-sm" style={{ width: 24 }} aria-label={t("remove")} onClick={() => (keys.length > 1 ? setKeys(keys.filter((x) => x !== k)) : ed.edit([{ op: "speed_ramp", clip: clip.id, preset: "clear" }], t("lbl_ramp")))}><Icon name="x" size={12} /></button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+          <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>{t("ramp_help")}</div>
+        </div>
+      ) : null}
+    </Sec>
+  );
+}
+
+// ------------------------------------------------------------------ mask
+const MASK_SHAPES = ["none", "rectangle", "rounded", "ellipse"];
+
+function MaskSection({ clip }) {
+  const { t } = useApp();
+  const ed = useEd();
+  const m = clip.mask;
+  const now = useTime(ed.pb, 120);
+  const local = Math.round(clamp(now - clip.start, 0, clipDur(clip)));
+  const commit = (patch) => ed.commitClipProps(clip.id, { mask: patch }, t("lbl_mask"));
+  const setShape = (shape) => ed.edit([shape === "none" ? { op: "mask", clip: clip.id, remove: true } : { op: "mask", clip: clip.id, shape }], t("lbl_mask"));
+  const animate = (prop) => {
+    const keys = clip.keyframes?.[prop] || [];
+    const value = kfValue(keys, local, m?.[MASK_KF[prop]] ?? 0);
+    const next = [...keys.filter((k) => Math.abs(k.t - local) > 1), { t: local, v: Math.round(value * 1000) / 1000, ease: "linear" }].sort((a, b) => a.t - b.t);
+    ed.edit([{ op: "keyframes", clip: clip.id, prop, keys: next }], t("lbl_keyframes"));
+  };
+  const kv = (prop, attr) => kfValue(clip.keyframes?.[prop], local, m?.[attr]);
+  return (
+    <Sec title={t("mask_title")} right={m ? <Icon name="mask" size={13} style={{ color: "var(--accent)" }} /> : null}>
+      <div data-testid="mask-section">
+        <Row label={t("type")}>
+          <select className="field" value={m ? m.shape : "none"} aria-label={t("mask_title")} data-testid="mask-shape" onChange={(e) => setShape(e.target.value)}>
+            {MASK_SHAPES.map((x) => <option key={x} value={x}>{t(x === "none" ? "mask_none" : `mask_${x}`)}</option>)}
+          </select>
+        </Row>
+        {m ? (
+          <div style={{ marginTop: 8 }}>
+            <SliderRow label={t("mask_x")} value={kv("mask_x", "x")} min={0} max={1} step={0.005} decimals={3} defaultValue={0.5} onChange={(v) => commit({ x: v })} />
+            <SliderRow label={t("mask_y")} value={kv("mask_y", "y")} min={0} max={1} step={0.005} decimals={3} defaultValue={0.5} onChange={(v) => commit({ y: v })} />
+            <SliderRow label={t("mask_w")} value={kv("mask_w", "w")} min={0.02} max={2} step={0.005} decimals={3} defaultValue={0.8} onChange={(v) => commit({ w: v })} />
+            <SliderRow label={t("mask_h")} value={kv("mask_h", "h")} min={0.02} max={2} step={0.005} decimals={3} defaultValue={0.8} onChange={(v) => commit({ h: v })} />
+            {m.shape === "rounded" ? <SliderRow label={t("mask_radius")} value={m.radius} min={0} max={0.5} step={0.005} decimals={3} defaultValue={0.2} onChange={(v) => commit({ radius: v })} /> : null}
+            <SliderRow label={t("mask_feather")} value={kv("mask_feather", "feather")} min={0} max={0.5} step={0.005} decimals={3} defaultValue={0} onChange={(v) => commit({ feather: v })} />
+            <Row label={t("mask_invert")}><Toggle checked={!!m.invert} onChange={(v) => ed.edit([{ op: "mask", clip: clip.id, invert: v }], t("lbl_mask"))} label="" /></Row>
+            <div className="muted" style={{ fontSize: 11, margin: "6px 0 4px" }}>{t("mask_animate")}</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {Object.keys(MASK_KF).map((p) => <button key={p} type="button" className="btn btn-sm" data-kf={p} onClick={() => animate(p)}><Icon name="keyframe" size={11} />{t(`kf_${p}`)}</button>)}
+            </div>
+            <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>{t("mask_help")}</div>
+          </div>
+        ) : null}
+      </div>
+    </Sec>
+  );
+}
+
+// ------------------------------------------------------------------ nested sequence
+function SequenceSection({ clip, media }) {
+  const { t, notify, fail, jobs } = useApp();
+  const ed = useEd();
+  const ready = media?.proxy === "ready";
+  const unnest = async () => {
+    const res = await ed.edit([{ op: "unnest", clip: clip.id }], t("lbl_unnest"));
+    const r = res?.results?.[0];
+    if (r) {
+      notify(r.dropped?.length ? t("seq_dropped", { what: r.dropped.join(", ") }) : t("unnested_ok"), r.dropped?.length ? "info" : "ok");
+      ed.setSelection({ ids: r.clips || [], track: null });
+    }
+  };
+  const prepare = async () => {
+    try {
+      const job = await api.sequencePrepare(clip.media);
+      notify(t("seq_prepare_started"));
+      jobs.poke();
+      if (job?.job) jobs.watch(job.job).then(() => ed.reload());
+    } catch (e) { fail(e); }
+  };
+  return (
+    <Sec title={t("seq_title")}>
+      <div data-testid="sequence-section">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <Icon name="nest" size={16} style={{ color: "var(--accent)" }} />
+          <b className="ellipsis" style={{ flex: 1 }}>{media?.name || clip.media}</b>
+          <span className="mono muted" style={{ fontSize: 11 }}>{fmtMs(media?.duration_ms || 0)}</span>
+        </div>
+        {ready ? <div className="chip chip-info" style={{ marginBottom: 6 }}>{t("seq_ready")}</div> : <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }}>{t("seq_not_ready")}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+          <button type="button" className="btn btn-sm" onClick={() => go(`p/${clip.media}`)}><Icon name="external" size={13} />{t("seq_open")}</button>
+          <button type="button" className="btn btn-sm" onClick={unnest}><Icon name="grid" size={13} />{t("seq_unnest")}</button>
+          {!ready ? <button type="button" className="btn btn-sm" style={{ gridColumn: "1 / -1" }} onClick={prepare}><Icon name="refresh" size={13} />{t("seq_prepare")}</button> : null}
+        </div>
+      </div>
+    </Sec>
+  );
+}
+
+async function nestSelection(ed, ids, { t, notify, fail }) {
+  try {
+    const res = await api.nest(ed.projectId, { clips: ids });
+    ed.applyView(res.view);
+    ed.setSelection({ ids: [res.clip], track: null });
+    notify(t("nested_ok", { name: res.name }), "ok");
+  } catch (e) { fail(e); }
 }
 
 // ------------------------------------------------------------------ text clip
@@ -217,7 +460,8 @@ function TextSection({ clip }) {
 
 // ------------------------------------------------------------------ one clip
 function ClipInspector({ clip, track, media }) {
-  const { t, presets } = useApp();
+  const app = useApp();
+  const { t, presets } = app;
   const ed = useEd();
   const { actions } = ed;
   const isText = clip.type === "text";
@@ -253,17 +497,9 @@ function ClipInspector({ clip, track, media }) {
 
       {isText ? <TextSection clip={clip} /> : null}
 
-      {!isText ? (
-        <Sec title={t("insp_speed")}>
-          <Row label={t("speed")}>
-            <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "nowrap" }}>
-              <NumInput width={50} value={clip.speed} min={0.1} max={16} step={0.25} decimals={2} onCommit={(v) => ed.edit([{ op: "speed", clip: clip.id, speed: v }], t("lbl_speed"))} />
-              {[0.5, 1, 2].map((v) => <button key={v} type="button" className={`btn btn-sm ${clip.speed === v ? "btn-on" : ""}`} style={{ padding: "0 7px" }} onClick={() => ed.edit([{ op: "speed", clip: clip.id, speed: v }], t("lbl_speed"))}>{v}×</button>)}
-            </div>
-          </Row>
-          {!isImage ? <Row label={t("reverse")}><Toggle checked={clip.reverse} onChange={(v) => setProps({ reverse: v }, t("lbl_reverse"))} label="" /></Row> : null}
-        </Sec>
-      ) : null}
+      {clip.type === "sequence" ? <SequenceSection clip={clip} media={media} /> : null}
+
+      {!isText ? <SpeedSection clip={clip} isImage={isImage} /> : null}
 
       {!isText && !isImage && media?.has_audio ? (
         <Sec title={t("insp_audio")}>
@@ -303,6 +539,7 @@ function ClipInspector({ clip, track, media }) {
               </>
             ) : null}
           </Sec>
+          {!isText ? <MaskSection clip={clip} /> : null}
           {!isText ? (
             <Sec title={t("insp_crop")}>
               {["left", "top", "right", "bottom"].map((side) => <SliderRow key={side} label={t(`crop_${side}`)} value={clip.crop[side]} min={0} max={0.45} step={0.005} decimals={3} defaultValue={0} onChange={(v) => commitCrop({ [side]: v })} />)}
@@ -331,8 +568,9 @@ function ClipInspector({ clip, track, media }) {
           <button type="button" className="btn btn-sm btn-danger" onClick={() => actions.remove(true)} title="Supr"><Icon name="trash" size={14} />{t("delete")}</button>
           <button type="button" className="btn btn-sm btn-danger" onClick={() => actions.remove(false)} title="Shift+Supr"><Icon name="trash" size={14} />{t("delete_nogap")}</button>
           {!isText && !isImage && !isAudioTrack && media?.has_audio ? <button type="button" className="btn btn-sm" onClick={() => actions.detachAudio()}><Icon name="detach" size={14} />{t("detach_audio")}</button> : null}
-          {!isText && !isAudioTrack ? <button type="button" className="btn btn-sm" onClick={() => actions.freeze()}><Icon name="freeze" size={14} />{t("freeze")}</button> : null}
-          {!isText && !isImage && !isAudioTrack ? <button type="button" className="btn btn-sm" onClick={() => actions.stabilize()}><Icon name="stabilize" size={14} />{t("stabilize")}</button> : null}
+          {!isText && !isAudioTrack && clip.type === "media" ? <button type="button" className="btn btn-sm" onClick={() => actions.freeze()}><Icon name="freeze" size={14} />{t("freeze")}</button> : null}
+          {!isText && !isImage && !isAudioTrack && clip.type === "media" ? <button type="button" className="btn btn-sm" onClick={() => actions.stabilize()}><Icon name="stabilize" size={14} />{t("stabilize")}</button> : null}
+          {!isText ? <button type="button" className="btn btn-sm" onClick={() => nestSelection(ed, [clip.id], app)}><Icon name="nest" size={14} />{t("nest_selection")}</button> : null}
         </div>
       </Sec>
     </>
@@ -341,11 +579,12 @@ function ClipInspector({ clip, track, media }) {
 
 // ------------------------------------------------------------------ several clips
 function MultiInspector({ clips }) {
-  const { t } = useApp();
+  const app = useApp();
+  const { t } = app;
   const ed = useEd();
   const { actions } = ed;
   const [speed, setSpeed] = useState(1);
-  const media = clips.filter(({ clip }) => clip.type === "media");
+  const media = clips.filter(({ clip }) => clip.type !== "text");
   return (
     <>
       <Sec title={t("insp_selection", { n: clips.length })}>
@@ -353,6 +592,7 @@ function MultiInspector({ clips }) {
           <button type="button" className="btn btn-sm btn-danger" onClick={() => actions.remove(true)}><Icon name="trash" size={14} />{t("delete")}</button>
           <button type="button" className="btn btn-sm btn-danger" onClick={() => actions.remove(false)}><Icon name="trash" size={14} />{t("delete_nogap")}</button>
           <button type="button" className="btn btn-sm" onClick={() => actions.duplicate()}><Icon name="copy" size={14} />{t("duplicate")}</button>
+          {media.length ? <button type="button" className="btn btn-sm btn-primary" data-testid="nest-selection" onClick={() => nestSelection(ed, clips.map(({ clip }) => clip.id), app)}><Icon name="nest" size={14} />{t("nest_selection")}</button> : null}
         </div>
       </Sec>
       {media.length ? (

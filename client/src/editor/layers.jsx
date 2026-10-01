@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { clamp, clipDur, kfValue, srcAt } from "./time.js";
+import { clamp, clipDur, kfValue, speedAt, srcAt } from "./time.js";
 
 // ---------- geometry: where the picture sits inside the preview box (mirrors the render's fit / crop / focus logic) ----------
 
@@ -113,12 +113,64 @@ function transitionOut(type, p) {
 
 export const dbToGain = (db) => clamp(Math.pow(10, db / 20), 0, 1);
 
+// Shape mask as a CSS mask image (an SVG drawn at the picture's size), animated with the mask keyframes. The render
+// uses a signed-distance edge; a Gaussian blur of a third of the feather width looks the same at preview size.
+export function maskCss(clip, local, w, h) {
+  const m = clip.mask;
+  if (!m || m.enabled === false || !w || !h) return "none";
+  const kf = clip.keyframes || {};
+  const cx = kfValue(kf.mask_x, local, m.x) * w;
+  const cy = kfValue(kf.mask_y, local, m.y) * h;
+  const mw = Math.max(1, kfValue(kf.mask_w, local, m.w) * w);
+  const mh = Math.max(1, kfValue(kf.mask_h, local, m.h) * h);
+  const fe = Math.max(0, kfValue(kf.mask_feather, local, m.feather) * Math.min(w, h));
+  const r = m.shape === "rounded" ? (m.radius ?? 0.2) * Math.min(mw, mh) : 0;
+  const filt = fe > 0.5 ? ' filter="url(#f)"' : "";
+  const fill = m.invert ? "black" : "white";
+  const shape = m.shape === "ellipse"
+    ? `<ellipse cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="${(mw / 2).toFixed(1)}" ry="${(mh / 2).toFixed(1)}" fill="${fill}"${filt}/>`
+    : `<rect x="${(cx - mw / 2).toFixed(1)}" y="${(cy - mh / 2).toFixed(1)}" width="${mw.toFixed(1)}" height="${mh.toFixed(1)}" rx="${r.toFixed(1)}" fill="${fill}"${filt}/>`;
+  const defs = `<filter id="f" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${(fe / 3).toFixed(2)}"/></filter>`;
+  const body = m.invert
+    ? `<defs>${defs}<mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="white"/>${shape}</mask></defs><rect width="${w}" height="${h}" fill="white" mask="url(#m)"/>`
+    : `<defs>${defs}</defs>${shape}`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${body}</svg>`;
+  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
+}
+
+function setMask(el, css) {
+  if (!el || el.dataset.mask === css) return;
+  el.dataset.mask = css;
+  el.style.maskImage = css;
+  el.style.webkitMaskImage = css;
+  el.style.maskSize = "100% 100%";
+  el.style.webkitMaskSize = "100% 100%";
+  el.style.maskRepeat = "no-repeat";
+  el.style.webkitMaskRepeat = "no-repeat";
+}
+
+// A nested sequence that has not been rendered yet: a placeholder with its name ("Exact frame" and exports are real).
+function SequencePoster({ name }) {
+  return (
+    <div data-sequence-poster="1" style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
+      background: "repeating-linear-gradient(135deg, color-mix(in srgb, var(--accent) 24%, #10131a) 0 14px, color-mix(in srgb, var(--accent) 12%, #10131a) 14px 28px)",
+      color: "#fff", textAlign: "center", padding: 8, pointerEvents: "none" }}>
+      <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2" /><rect x="7" y="7" width="10" height="10" rx="1" />
+      </svg>
+      <div style={{ fontWeight: 700, fontSize: 14, textShadow: "0 1px 3px #000" }}>{name}</div>
+      <div style={{ fontSize: 11, opacity: 0.85 }}>Secuencia anidada · «Fotograma exacto» y la exportación la muestran tal cual</div>
+    </div>
+  );
+}
+
 // One media clip as a live element (video / image / audio) kept in sync with the playback clock.
 export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, next, canvas, box, k, z, pb, projectMuted }) {
   const root = useRef(null);
   const xf = useRef(null);
   const el = useRef(null);
   const bgc = useRef(null);
+  const pic = useRef(null);
   const state = useRef({});
   const forced = useRef(false);
   const settle = useRef(0);
@@ -195,6 +247,8 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
           media_el.style.top = `${-cy - g.tp * g.fullH}px`;
         }
         if (g.blur) drawBg();
+        // shape mask: on the picture box, or on the whole frame with fit=blur (the render masks the blurred fill too)
+        setMask(g.blur ? xf.current : pic.current, maskCss(c, local, g.blur ? s.box.w : g.w, g.blur ? s.box.h : g.h));
       }
     }
     // ----- sound and time
@@ -214,7 +268,7 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
     media_el.muted = silent || forced.current;
     media_el.volume = clamp(gain, 0, 1);
     const wantPlay = playing && inside && !c.reverse;
-    const speed = clamp((c.speed || 1) * rate, 0.0625, 16);
+    const speed = clamp(speedAt(c, t) * rate, 0.0625, 16);
     if (media_el.playbackRate !== speed) media_el.playbackRate = speed;
     const diff = Math.abs(media_el.currentTime - target);
     if (wantPlay) {
@@ -286,10 +340,11 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
             <canvas ref={bgc} width={Math.max(8, Math.round(box.w / 10))} height={Math.max(8, Math.round(box.h / 10))} data-blur-bg="1" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", transform: "scale(1.12)", filter: "blur(24px) brightness(0.9)" }} />
           </div>
         ) : null}
-        <div style={{ position: "absolute", left: geo.x, top: geo.y, width: geo.w, height: geo.h, overflow: "hidden" }}>
+        <div ref={pic} style={{ position: "absolute", left: geo.x, top: geo.y, width: geo.w, height: geo.h, overflow: "hidden" }}>
           {isImage
             ? <img ref={el} src={src} alt="" style={mediaStyle} draggable={false} />
-            : <video ref={el} src={src} preload="auto" playsInline style={mediaStyle} />}
+            : <video ref={el} src={src || undefined} preload="auto" playsInline style={mediaStyle} />}
+          {media?.kind === "sequence" && !src ? <SequencePoster name={media.name || clip.label} /> : null}
         </div>
       </div>
     </div>
