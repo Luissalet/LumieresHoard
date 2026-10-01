@@ -510,14 +510,15 @@ def _meaning_alignment(svc: "Services", media: str, segments: list, transcript: 
     cached = media_store.get_analysis(svc, media, "script_align")
     if cached and cached.get("key") == key:
         return cached
-    lines = [f"{i}\t{ms_to_tc(s['t0'])}\t{s['text']}" for i, s in enumerate(sents)]
+    lines = [f"{i}\t{s['text']}" for i, s in enumerate(sents)]
     script_lines = [f"{seg.index + 1}. {seg.title}: {seg.text}" for seg in segments]
     system = ("You align a talk recorded in front of a camera to the script it follows freely. For each script part, give the sentence "
               "ranges of the recording that deliver it, in the order to play them. When a part was attempted several times, keep only the "
               "last attempt that reaches its end. Leave out false starts, comments to the camera crew or to oneself ('vamos allá', 'otra "
-              "vez', 'qué nervios'), and anything that belongs to no part. A part that was never said gets no ranges. Answer JSON only: "
-              '{"parts": [{"segment": 1, "ranges": [[first_sentence, last_sentence], ...]}], "notes": ""}')
-    user = "SCRIPT\n" + "\n".join(script_lines) + "\n\nRECORDING (index, time, sentence)\n" + "\n".join(lines)
+              "vez', 'qué nervios'), and anything that belongs to no part. A sentence belongs to one part at most. A part that was "
+              "never said gets no ranges. Answer with compact JSON on one line, nothing else: "
+              '{"parts":[{"segment":1,"ranges":[[first_sentence,last_sentence]]}],"notes":"short, in the language of the talk"}')
+    user = "SCRIPT\n" + "\n".join(script_lines) + "\n\nRECORDING (index, sentence)\n" + "\n".join(lines)
     if len(user) > 60000:
         raise LumiereError("The recording is too long for the model to align at once; cut it into parts first.")
 
@@ -535,9 +536,27 @@ def _meaning_alignment(svc: "Services", media: str, segments: list, transcript: 
                     raise ValueError(f"sentence range {r} out of bounds")
                 ranges.append([x, y])
             out.append({"segment": seg, "ranges": ranges})
-        return {"parts": out, "notes": str(data.get("notes") or "")}
+        # one sentence plays once: drop what an earlier part already claimed (script order wins)
+        claimed: set[int] = set()
+        for part in sorted(out, key=lambda x: x["segment"]):
+            clean = []
+            for x, y in part["ranges"]:
+                free = [k for k in range(x, y + 1) if k not in claimed]
+                if not free:
+                    continue
+                run = [free[0], free[0]]
+                for k in free[1:]:
+                    if k == run[1] + 1:
+                        run[1] = k
+                    else:
+                        clean.append(run)
+                        run = [k, k]
+                clean.append(run)
+                claimed.update(free)
+            part["ranges"] = clean
+        return {"parts": out, "notes": str(data.get("notes") or "")[:600]}
 
-    result, model = chat_json(svc, [{"role": "system", "content": system}, {"role": "user", "content": user}], parse, max_tokens=3000, effort="off")
+    result, model = chat_json(svc, [{"role": "system", "content": system}, {"role": "user", "content": user}], parse, max_tokens=2000, effort="off")
     result.update({"key": key, "model": model, "sentences": [[s["t0"], s["t1"]] for s in sents]})
     media_store.put_analysis(svc, media, "script_align", result, {"segments": len(segments)})
     return result
