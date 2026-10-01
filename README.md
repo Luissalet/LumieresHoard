@@ -59,7 +59,7 @@ Settings (environment): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE
 
 ## Assistants (MCP)
 
-`mcp_server.py` is a stdio MCP bridge with 33 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
+`mcp_server.py` is a stdio MCP bridge with 32 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],

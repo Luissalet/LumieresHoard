@@ -10,6 +10,7 @@ import { clipDur, clipEnd, fmtFrames } from "./time.js";
 
 const PRELOAD = 2000;
 const KEEP = 250;
+const SCRUB_GAP = 220;
 
 // Which clips need a live element right now: the ones under the playhead plus the next ones (preloaded).
 function useActiveClips(doc, pb) {
@@ -18,7 +19,9 @@ function useActiveClips(doc, pb) {
   const docRef = useRef(doc);
   docRef.current = doc;
   useEffect(() => {
-    const compute = (t, force) => {
+    let last = 0;
+    let timer = 0;
+    const build = (t) => {
       const list = [];
       docRef.current.tracks.forEach((tr, ti) => {
         const sorted = tr.clips;
@@ -29,14 +32,29 @@ function useActiveClips(doc, pb) {
           if (t >= s - PRELOAD * Math.max(1, pb.rate) && t < e + KEEP) list.push({ track: tr, ti, clip: c, next: sorted[i + 1] || null });
         }
       });
+      return list;
+    };
+    const commit = (t, force) => {
+      timer = 0;
+      const list = build(t);
       const signature = list.map((x) => x.clip.id).join(",");
       if (force || signature !== sig.current) {
         sig.current = signature;
+        last = performance.now();
         setActive(list);
       }
     };
-    compute(pb.t, true);
-    return pb.subscribe((t) => compute(t, false));
+    // While scrubbing (paused) a fast drag crosses many clips: mounting a media element for each would queue decoder work
+    // that nobody sees, so changes are applied at most every SCRUB_GAP ms (leading + trailing). Playback applies them at once.
+    const onTick = (t, playing) => {
+      if (playing) { clearTimeout(timer); timer = 0; commit(t, false); return; }
+      const wait = SCRUB_GAP - (performance.now() - last);
+      if (wait <= 0) { clearTimeout(timer); commit(t, false); return; }
+      if (!timer) timer = setTimeout(() => commit(pb.t, false), wait);
+    };
+    commit(pb.t, true);
+    const unsub = pb.subscribe(onTick);
+    return () => { unsub(); clearTimeout(timer); };
   }, [doc, pb]);
   return active;
 }

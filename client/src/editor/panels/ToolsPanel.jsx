@@ -7,25 +7,53 @@ import { useEd } from "../EditorContext.js";
 import { fmtMs } from "../time.js";
 import { Hint, PanelHead } from "./Shared.jsx";
 
-function Summary({ res }) {
+const secs = (ms) => `${(Number(ms || 0) / 1000).toFixed(1)}`;
+
+// One sentence per tool instead of raw keys.
+function describe(id, s, t) {
+  const n = (v) => Number(v || 0);
+  switch (id) {
+    case "remove_silences": return t(s.mode === "speed" ? "sum_silences_speed" : "sum_silences", { n: n(s.cuts), s: secs(s.saved_ms) });
+    case "remove_fillers": return t("sum_fillers", { n: n(s.removed) });
+    case "split_scenes": return t(s.mode === "markers" ? "sum_scenes_markers" : "sum_scenes", { n: n(s.scenes) });
+    case "reframe": return t("sum_reframe", { n: n(s.clips), canvas: s.canvas, mode: t(`reframe_${s.mode}`) });
+    case "match_loudness": return t("sum_loudness", { n: n(s.clips), lufs: s.target_lufs });
+    case "zoom_cuts": return t("sum_zoom", { n: n(s.clips), scale: s.scale, every: s.every });
+    case "beat_sync": return t("sum_beat", { n: n(s.cuts), bpm: Math.round(n(s.bpm)), step: s.beats_per_cut, length: s.length });
+    case "script_assemble": {
+      const parts = [t("sum_script_found", { a: n(s.segments), b: n(s.of) })];
+      if (n(s.retakes)) parts.push(t("script_retakes", { n: n(s.retakes) }));
+      if (s.duration) parts.push(t("sum_duration", { d: s.duration }));
+      return parts.join(" · ");
+    }
+    default: return null;
+  }
+}
+
+function Summary({ id, res }) {
   const { t } = useApp();
   if (!res) return null;
   const s = res.summary || {};
-  const rows = Array.isArray(s.chosen) ? [] : Object.entries(s).filter(([, v]) => v !== null && typeof v !== "object");
+  const sentence = describe(id, s, t);
+  const rows = sentence ? [] : Object.entries(s).filter(([, v]) => v !== null && typeof v !== "object");
   return (
-    <div style={{ marginTop: 8, padding: 8, background: "var(--field)", borderRadius: 6, fontSize: 12 }}>
+    <div style={{ marginTop: 8, padding: 8, background: "var(--field)", borderRadius: 6, fontSize: 12 }} data-testid="tool-summary">
       <b>{res.preview ? t("tool_preview_result") : t("tool_applied")}</b>
-      {res.duration_before ? <div className="muted num">{res.duration_before} → {res.duration_after}</div> : null}
+      {sentence ? <div style={{ marginTop: 3 }}>{sentence}</div> : null}
+      {res.duration_before && id !== "script_assemble" ? <div className="muted num">{res.duration_before} → {res.duration_after}</div> : null}
       {rows.map(([k, v]) => <div key={k} className="muted"><span className="mono">{k}</span>: {String(v)}</div>)}
+      {s.mode === "meaning" && s.notes ? <div className="muted" style={{ marginTop: 4 }}>{s.notes}</div> : null}
       {Array.isArray(s.examples) && s.examples.length ? <div className="muted" style={{ marginTop: 4 }}>{s.examples.slice(0, 5).map((x) => `${x.at} ${x.text}`).join(" · ")}</div> : null}
     </div>
   );
 }
 
-function ToolCard({ id, icon, title, help, children, run, canRun = true, extra, defaultOpen = false }) {
+function ToolCard({ id, icon, title, help, children, run, canRun = true, extra, defaultOpen = false, slow = false }) {
   const { t, fail } = useApp();
+  const ed = useEd();
   const [busy, setBusy] = useState(null);
   const [res, setRes] = useState(null);
+  const locked = !!busy || ed.busy > 0;
   const go_ = async (preview) => {
     setBusy(preview ? "preview" : "apply");
     try {
@@ -41,10 +69,11 @@ function ToolCard({ id, icon, title, help, children, run, canRun = true, extra, 
         <Hint>{help}</Hint>
         {children}
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <button type="button" className="btn btn-sm" disabled={!!busy || !canRun} onClick={() => go_(true)}>{busy === "preview" ? <Spinner /> : <Icon name="eye" size={14} />}{t("preview")}</button>
-          <button type="button" className="btn btn-sm btn-primary" disabled={!!busy || !canRun} onClick={() => go_(false)}>{busy === "apply" ? <Spinner /> : <Icon name="check" size={14} />}{t("apply")}</button>
+          <button type="button" className="btn btn-sm" disabled={locked || !canRun} onClick={() => go_(true)}>{busy === "preview" ? <Spinner /> : <Icon name="eye" size={14} />}{t("preview")}</button>
+          <button type="button" className="btn btn-sm btn-primary" disabled={locked || !canRun} onClick={() => go_(false)}>{busy === "apply" ? <Spinner /> : <Icon name="check" size={14} />}{t("apply")}</button>
         </div>
-        <Summary res={res} />
+        {busy && slow ? <div className="muted" style={{ marginTop: 8, fontSize: 11.5 }}><Spinner /> {t("tool_slow")}</div> : null}
+        <Summary id={id} res={res} />
         {extra ? extra(res) : null}
       </div>
     </details>
@@ -80,8 +109,8 @@ function ScriptResult({ res }) {
                 <td style={cell} className="num">{c.segment}</td>
                 <td style={{ ...cell, wordBreak: "break-word" }}>{c.title}</td>
                 <td style={{ ...cell, whiteSpace: "nowrap" }} className="num">{c.at}</td>
-                <td style={cell} className="num">{c.takes}</td>
-                <td style={{ ...cell, color: Number(c.coverage) < 0.75 ? "var(--warn, #f5b700)" : "var(--accent)" }} className="num">{pct(c.coverage)}</td>
+                <td style={cell} className="num">{c.takes ?? "—"}</td>
+                <td style={{ ...cell, color: c.coverage === null || c.coverage === undefined ? undefined : Number(c.coverage) < 0.75 ? "var(--warn, #f5b700)" : "var(--accent)" }} className="num">{c.coverage === null || c.coverage === undefined ? "—" : pct(c.coverage)}</td>
               </tr>
             ))}
           </tbody>
@@ -95,7 +124,6 @@ function ScriptResult({ res }) {
           </ul>
         </div>
       ) : null}
-      {s.retakes !== undefined ? <div className="muted" style={{ marginTop: 6, fontSize: 11.5 }}>{t("script_retakes", { n: s.retakes })}{s.duration ? ` · ${s.duration}` : ""}</div> : null}
     </div>
   );
 }
@@ -112,6 +140,7 @@ function ScriptTool({ videos }) {
   const [text, setText] = useState("");
   const [fileName, setFileName] = useState("");
   const [take, setTake] = useState("last");
+  const [mode, setMode] = useState("auto");
   const [markers, setMarkers] = useState(true);
   const fileRef = React.useRef(null);
   const chosenMedia = mediaId || mainMedia || videos[0]?.id || "";
@@ -125,7 +154,8 @@ function ScriptTool({ videos }) {
   const waiting = ed.analysis;
   return (
     <ToolCard id="script_assemble" icon="clip" title={t("tool_script")} help={t("tool_script_help")} defaultOpen canRun={!!chosenMedia && !!text.trim()}
-      run={(preview) => ed.runCommand("script_assemble", { media: chosenMedia, script: text, take, markers }, { preview })}
+      slow={mode !== "words"}
+      run={(preview) => ed.runCommand("script_assemble", { media: chosenMedia, script: text, take, markers, mode }, { preview })}
       extra={(res) => (<>
         {waiting ? <div className="chip chip-info" style={{ marginTop: 8, height: "auto", padding: "4px 8px", whiteSpace: "normal" }}><Spinner /> {waiting.message || t("analysis_wait")}</div> : null}
         <ScriptResult res={res} />
@@ -141,10 +171,22 @@ function ScriptTool({ videos }) {
         {fileName ? <span className="muted ellipsis" style={{ fontSize: 11.5 }}>{fileName}</span> : null}
         <input ref={fileRef} type="file" accept=".md,.txt,.json,text/plain,text/markdown,application/json" style={{ display: "none" }} data-testid="script-file" onChange={(e) => { load(e.target.files?.[0]); e.target.value = ""; }} />
       </div>
-      <div className="muted" style={{ fontSize: 12, margin: "4px 0" }}>{t("script_take")}</div>
-      <Seg value={take} onChange={setTake} options={[{ value: "last", label: t("script_take_last") }, { value: "best", label: t("script_take_best") }]} />
-      <div style={{ height: 8 }} />
+      <Labeled label={t("script_mode")}>
+        <select className="field" value={mode} onChange={(e) => setMode(e.target.value)} data-testid="script-mode">
+          <option value="auto">{t("script_mode_auto")}</option>
+          <option value="words">{t("script_mode_words")}</option>
+          <option value="meaning">{t("script_mode_meaning")}</option>
+        </select>
+      </Labeled>
+      <div className="muted" style={{ fontSize: 11.5, margin: "-3px 0 7px" }}>{t(`script_mode_help_${mode}`)}</div>
+      <Labeled label={t("script_take")}>
+        <select className="field" value={take} disabled={mode === "meaning"} onChange={(e) => setTake(e.target.value)} data-testid="script-take">
+          <option value="last">{t("script_take_last")}</option>
+          <option value="best">{t("script_take_best")}</option>
+        </select>
+      </Labeled>
       <Toggle checked={markers} onChange={setMarkers} label={t("script_markers")} />
+      <div style={{ height: 4 }} />
       {waiting ? null : <div style={{ height: 0 }} />}
     </ToolCard>
   );

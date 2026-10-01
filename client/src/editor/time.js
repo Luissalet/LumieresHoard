@@ -12,7 +12,7 @@ export function fmtMs(ms) {
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${mmm}` : `${m}:${String(s).padStart(2, "0")}.${mmm}`;
 }
 
-// Player timecode "mm:ss:ff" (frames) or "h:mm:ss:ff".
+// Player timecode, always "hh:mm:ss:ff" (frames) like every editor, so 7 seconds never reads as 7 minutes.
 export function fmtFrames(ms, fps = 30) {
   ms = Math.max(0, Math.round(ms || 0));
   const total = Math.floor((ms * fps) / 1000 + 1e-6);
@@ -22,7 +22,7 @@ export function fmtFrames(ms, fps = 30) {
   const m = Math.floor(secs / 60) % 60;
   const h = Math.floor(secs / 3600);
   const two = (n) => String(n).padStart(2, "0");
-  return h ? `${h}:${two(m)}:${two(s)}:${two(f)}` : `${two(m)}:${two(s)}:${two(f)}`;
+  return `${two(h)}:${two(m)}:${two(s)}:${two(f)}`;
 }
 
 // Short label for rulers: 12s / 1:05 / 1:05.5

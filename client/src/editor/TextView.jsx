@@ -5,6 +5,35 @@ import { Icon, Spinner } from "../components/ui.jsx";
 import { useEd } from "./EditorContext.js";
 import { fmtMs } from "./time.js";
 
+// One paragraph of the transcript. Memoised so a selection change only re-renders the paragraphs it touches.
+const Paragraph = React.memo(function Paragraph({ p, words, selA, selB, editing, onSeek, onWordDown, onWordEnter, onEdit, onFix, setSpan }) {
+  return (
+    <p style={{ margin: "0 0 10px" }}>
+      <button type="button" className="btn btn-ghost btn-sm num" style={{ height: 20, padding: "0 6px", marginRight: 6, fontSize: 10.5 }} onClick={() => onSeek(p.start)}>{fmtMs(p.start).replace(/\.\d+$/, "")}</button>
+      {p.items.map((i) => {
+        const w = words[i];
+        const isSel = i >= selA && i <= selB;
+        if (editing === i) {
+          return <input key={w.id + i} autoFocus className="field" style={{ width: Math.max(50, w.text.length * 11), height: 24, display: "inline-block", fontSize: 14 }} defaultValue={w.text} onBlur={(e) => onFix(i, e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") onEdit(null); e.stopPropagation(); }} />;
+        }
+        return (
+          <span
+            key={w.id + i}
+            ref={(el) => setSpan(i, el)}
+            className={`word${isSel ? " sel" : ""}${w.p !== null && w.p !== undefined && w.p < 0.5 ? " low" : ""}`}
+            data-word={w.id}
+            onPointerDown={(e) => onWordDown(e, i)}
+            onPointerEnter={() => onWordEnter(i)}
+            onDoubleClick={() => onEdit(i)}
+          >
+            {w.text}{" "}
+          </span>
+        );
+      })}
+    </p>
+  );
+});
+
 // Text-based editing: the transcript of the timeline as running text. Select words and cut them (or keep only them).
 export default function TextView() {
   const { t, notify, fail, jobs } = useApp();
@@ -126,15 +155,18 @@ export default function TextView() {
     }
   };
 
-  const fixWord = async (idx, text) => {
+  const live = useRef({});
+  live.current = { ed, fail, words };
+  const fixWord = useCallback(async (idx, text) => {
     setEditing(null);
-    const w = words[idx];
+    const { ed: e, fail: f, words: ws } = live.current;
+    const w = ws[idx];
     if (!text.trim() || text.trim() === w.text) return;
     try {
       await api.mediaTranscriptFix(w.media, [{ id: w.id, text: text.trim() }]);
-      await ed.reloadTranscript();
-    } catch (e) { fail(e); }
-  };
+      await e.reloadTranscript();
+    } catch (err) { f(err); }
+  }, []);
 
   const paragraphs = useMemo(() => {
     const out = [];
@@ -146,6 +178,16 @@ export default function TextView() {
     });
     return out;
   }, [words]);
+
+  const setSpan = useCallback((i, el) => { spans.current[i] = el; }, []);
+  const onWordDown = useCallback((e, i) => {
+    if (e.button !== 0) return;
+    if (e.shiftKey && anchor.current !== null) setSel({ a: anchor.current, b: i });
+    else { anchor.current = i; setSel({ a: i, b: i }); dragging.current = true; }
+    ed.pb.seek(wordsRef.current[i].t);
+  }, [ed.pb]);
+  const onWordEnter = useCallback((i) => { if (dragging.current && anchor.current !== null) setSel({ a: anchor.current, b: i }); }, []);
+  const onSeek = useCallback((t0) => ed.pb.seek(t0), [ed.pb]);
 
   const missing = transcript?.missing || [];
 
@@ -168,36 +210,27 @@ export default function TextView() {
         </div>
       ) : null}
       <div ref={box} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "10px 18px 24px", fontSize: 15, lineHeight: 1.95, background: "#12151a", userSelect: "none" }} data-testid="textview">
-        {!transcript ? <Spinner /> : words.length === 0 ? <div className="muted" style={{ padding: 20 }}>{missing.length ? t("text_none_missing") : t("text_none")}</div> : paragraphs.map((p, pi) => (
-          <p key={pi} style={{ margin: "0 0 10px" }}>
-            <button type="button" className="btn btn-ghost btn-sm num" style={{ height: 20, padding: "0 6px", marginRight: 6, fontSize: 10.5 }} onClick={() => ed.pb.seek(p.start)}>{fmtMs(p.start).replace(/\.\d+$/, "")}</button>
-            {p.items.map((i) => {
-              const w = words[i];
-              const isSel = range && i >= range[0] && i <= range[1];
-              if (editing === i) {
-                return <input key={w.id + i} autoFocus className="field" style={{ width: Math.max(50, w.text.length * 11), height: 24, display: "inline-block", fontSize: 14 }} defaultValue={w.text} onBlur={(e) => fixWord(i, e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") setEditing(null); e.stopPropagation(); }} />;
-              }
-              return (
-                <span
-                  key={w.id + i}
-                  ref={(el) => { spans.current[i] = el; }}
-                  className={`word${isSel ? " sel" : ""}${w.p !== null && w.p !== undefined && w.p < 0.5 ? " low" : ""}`}
-                  data-word={w.id}
-                  onPointerDown={(e) => {
-                    if (e.button !== 0) return;
-                    if (e.shiftKey && anchor.current !== null) setSel({ a: anchor.current, b: i });
-                    else { anchor.current = i; setSel({ a: i, b: i }); dragging.current = true; }
-                    ed.pb.seek(w.t);
-                  }}
-                  onPointerEnter={() => { if (dragging.current && anchor.current !== null) setSel({ a: anchor.current, b: i }); }}
-                  onDoubleClick={() => setEditing(i)}
-                >
-                  {w.text}{" "}
-                </span>
-              );
-            })}
-          </p>
-        ))}
+        {!transcript ? <Spinner /> : words.length === 0 ? <div className="muted" style={{ padding: 20 }}>{missing.length ? t("text_none_missing") : t("text_none")}</div> : paragraphs.map((p, pi) => {
+          const first = p.items[0];
+          const last = p.items[p.items.length - 1];
+          const hit = range && range[1] >= first && range[0] <= last;
+          return (
+            <Paragraph
+              key={pi}
+              p={p}
+              words={words}
+              selA={hit ? range[0] : 1}
+              selB={hit ? range[1] : 0}
+              editing={editing !== null && editing >= first && editing <= last ? editing : -1}
+              onSeek={onSeek}
+              onWordDown={onWordDown}
+              onWordEnter={onWordEnter}
+              onEdit={setEditing}
+              onFix={fixWord}
+              setSpan={setSpan}
+            />
+          );
+        })}
       </div>
     </div>
   );

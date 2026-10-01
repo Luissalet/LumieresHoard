@@ -113,15 +113,27 @@ export default function Timeline() {
     return () => { el.removeEventListener("scroll", onScroll); ro.disconnect(); cancelAnimationFrame(raf); };
   }, []);
 
-  const zoomTo = useCallback((next, anchorX) => {
+  // Zoom requests are coalesced to one render per frame (wheel events and the slider can fire faster than that).
+  const zoomReq = useRef(null);
+  const zoomRaf = useRef(0);
+  const zoomNow = useCallback(() => {
+    zoomRaf.current = 0;
+    const req = zoomReq.current;
+    zoomReq.current = null;
     const el = scrollRef.current;
+    if (!req || !el) return;
     const cur = live.current.ppm;
-    const target = clamp(next, MIN_PPS, MAX_PPS);
-    const cx = anchorX === undefined ? Math.min(el.clientWidth / 2, Math.max(HDR_W, el.clientWidth / 2)) : Math.max(HDR_W, anchorX);
+    const target = clamp(req.next, MIN_PPS, MAX_PPS);
+    const cx = req.anchorX === undefined ? Math.min(el.clientWidth / 2, Math.max(HDR_W, el.clientWidth / 2)) : Math.max(HDR_W, req.anchorX);
     const tAnchor = (el.scrollLeft + cx - HDR_W) / cur;
     pendingScroll.current = Math.max(0, HDR_W + (tAnchor * target) / 1000 - cx);
     setPps(target);
   }, []);
+  const zoomTo = useCallback((next, anchorX) => {
+    zoomReq.current = { next, anchorX };
+    if (!zoomRaf.current) zoomRaf.current = requestAnimationFrame(zoomNow);
+  }, [zoomNow]);
+  useEffect(() => () => cancelAnimationFrame(zoomRaf.current), []);
 
   useLayoutEffect(() => {
     if (pendingScroll.current !== null && scrollRef.current) {
@@ -144,7 +156,7 @@ export default function Timeline() {
   }, [duration, viewport.w, fit]);
 
   useEffect(() => {
-    ed.tlApi.current = { zoomIn: () => zoomTo(live.current.pps * 1.4), zoomOut: () => zoomTo(live.current.pps / 1.4), fit };
+    ed.tlApi.current = { zoomIn: () => zoomTo((zoomReq.current ? zoomReq.current.next : live.current.pps) * 1.4), zoomOut: () => zoomTo((zoomReq.current ? zoomReq.current.next : live.current.pps) / 1.4), fit };
   }, [ed.tlApi, zoomTo, fit]);
 
   useEffect(() => {
@@ -153,7 +165,7 @@ export default function Timeline() {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         const rect = el.getBoundingClientRect();
-        zoomTo(live.current.pps * (e.deltaY < 0 ? 1.18 : 1 / 1.18), e.clientX - rect.left);
+        zoomTo((zoomReq.current ? zoomReq.current.next : live.current.pps) * (e.deltaY < 0 ? 1.18 : 1 / 1.18), e.clientX - rect.left);
       } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
         e.preventDefault();
         el.scrollLeft += e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX;

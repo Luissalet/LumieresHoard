@@ -121,6 +121,7 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
   const bgc = useRef(null);
   const state = useRef({});
   const forced = useRef(false);
+  const settle = useRef(0);
   const isAudio = track.kind === "audio";
   const isImage = media?.kind === "image";
   const geo = useMemo(() => placement(clip, media, box.w, box.h, k), [clip, media, box.w, box.h, k]);
@@ -147,7 +148,7 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
     try { cv.getContext("2d").drawImage(m, (sw - w) / 2, (sh - h) / 2, w, h, 0, 0, cw, ch); } catch { /* frame not decodable yet */ }
   };
 
-  const apply = (t, playing) => {
+  const apply = (t, playing, force) => {
     const s = state.current;
     const c = s.clip;
     const tr = s.track;
@@ -232,12 +233,28 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
       }
     } else {
       if (!media_el.paused) media_el.pause();
-      if (diff > (inside ? 0.02 : 0.1)) media_el.currentTime = target;
+      if (inside) {
+        // Scrubbing: do not queue a seek behind a running one, catch up once it lands (see the "seeked" listener).
+        if (diff > 0.02 && !media_el.seeking) media_el.currentTime = target;
+      } else if (diff > 0.1) {
+        // Preloaded neighbours only settle once the playhead stops moving.
+        if (force || playing) { if (!media_el.seeking) media_el.currentTime = target; } else {
+          clearTimeout(settle.current);
+          settle.current = setTimeout(() => { if (el.current) apply(pb.t, pb.playing, true); }, 260);
+        }
+      }
     }
   };
 
   useEffect(() => pb.subscribe(apply), [pb]); // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => { apply(pb.t, pb.playing); });
+  useEffect(() => {
+    const m = el.current;
+    if (!m) return undefined;
+    const catchUp = () => { if (!pb.playing) apply(pb.t, false); };
+    m.addEventListener("seeked", catchUp);
+    return () => { m.removeEventListener("seeked", catchUp); clearTimeout(settle.current); };
+  }, [pb, src]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const m = el.current;
     if (!m || !geo.blur) return undefined;

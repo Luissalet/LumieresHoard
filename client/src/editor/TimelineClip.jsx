@@ -95,6 +95,8 @@ function TimelineClipImpl({ clip, track, media, info, x, w, h, ppm, selected, dr
   const isAudio = track.kind === "audio";
   const bg = clip.color || (isText ? "var(--clip-text)" : isAudio ? "var(--clip-audio)" : "var(--clip-video)");
   const innerH = h - 6;
+  // Clips only a few pixels wide (a zoomed-out cut-up timeline) get no thumbnails / waveform: nothing would be legible.
+  const tiny = w < 20;
   return (
     <div
       className={`tl-clip${selected ? " sel" : ""}${dragging ? " dragging" : ""}`}
@@ -103,18 +105,18 @@ function TimelineClipImpl({ clip, track, media, info, x, w, h, ppm, selected, dr
       onPointerDown={(e) => onBody(e, clip, track)}
       title={label}
     >
-      {!isText && !isAudio ? <Filmstrip clip={clip} media={media} info={info} ppm={ppm} h={innerH + 4} visL={visL} visR={visR} /> : null}
-      {isAudio ? <Waveform clip={clip} media={media} ppm={ppm} h={innerH} visL={visL} visR={visR} /> : null}
-      {!isText && !isAudio && media?.has_audio && h > 36 ? <Waveform clip={clip} media={media} ppm={ppm} h={Math.min(18, innerH / 2.5)} visL={visL} visR={visR} bottom /> : null}
+      {!isText && !isAudio && !tiny ? <Filmstrip clip={clip} media={media} info={info} ppm={ppm} h={innerH + 4} visL={visL} visR={visR} /> : null}
+      {isAudio && !tiny ? <Waveform clip={clip} media={media} ppm={ppm} h={innerH} visL={visL} visR={visR} /> : null}
+      {!isText && !isAudio && !tiny && media?.has_audio && h > 36 ? <Waveform clip={clip} media={media} ppm={ppm} h={Math.min(18, innerH / 2.5)} visL={visL} visR={visR} bottom /> : null}
       {hasTransition ? <div className="tl-trans" style={{ width: Math.min(w, clip.transition_in.dur * ppm) }} title={transName} /> : null}
-      <div className="lbl">
+      {tiny ? null : <div className="lbl">
         <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{isText ? `“${clip.text}”` : label}</span>
         {clip.speed !== 1 ? <span className="tl-badge">×{Math.round(clip.speed * 100) / 100}</span> : null}
         {clip.reverse ? <span className="tl-badge">⟲</span> : null}
         {clip.filters?.length ? <span className="tl-badge" title={clip.filters.map((f) => f.type).join(", ")}>fx</span> : null}
         {clip.keyframes && Object.keys(clip.keyframes).length ? <span className="tl-badge" style={{ color: "var(--warn)" }}>◆</span> : null}
         {clip.mute ? <Icon name="mute" size={12} /> : null}
-      </div>
+      </div>}
       {hasTransition ? <div style={{ position: "absolute", left: 2, bottom: 2 }}><span className="tl-badge" style={{ background: "#fffc", color: "#000" }}>{transName}</span></div> : null}
       <div className="tl-edge l" data-edge="l" onPointerDown={(e) => onEdge(e, clip, track, "l")} />
       <div className="tl-edge r" data-edge="r" onPointerDown={(e) => onEdge(e, clip, track, "r")} />
