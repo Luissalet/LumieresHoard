@@ -144,6 +144,7 @@ class Clip(Strict):
     keyframes: dict[KeyProp, list[Keyframe]] = Field(default_factory=dict)
     reframe: Optional[Reframe] = None
     color: Optional[str] = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
+    multicam: Optional[str] = Field(None, description="Id of the multicam group this clip belongs to (its picture is an angle, or it is the group's master sound).")
 
     @property
     def duration(self) -> int:
@@ -210,6 +211,44 @@ class Captions(Strict):
     max_chars: int = Field(32, ge=8, le=120)
     uppercase: bool = False
     tracks: list[str] = Field(default_factory=list, description="Track ids whose speech is captioned; empty = the main track.")
+    speaker_labels: Literal["off", "color", "prefix", "both"] = Field(
+        "off", description="With a speaker-separated transcript: colour each speaker's words, start each speaker's lines with the name, or both.")
+
+
+class Angle(Strict):
+    """One recording of a multicam group. ``start`` is where the media's own time 0 falls on the group's shared clock (ms), so
+    the media shows ``group_time - start`` at ``group_time``. Audio-only angles (an external microphone) can be the master sound
+    but never the picture."""
+
+    media: str
+    label: str = Field("", max_length=60)
+    start: int = Field(0, description="Group time (ms) at which this media's time 0 happened.")
+    audio_only: bool = False
+    confidence: Optional[float] = Field(None, ge=0, le=1, description="How sure the audio sync was (null = set by hand).")
+
+
+class Multicam(Strict):
+    """Recordings of one event made at the same time. The timeline shows them as ordinary clips of the angle media on the main track
+    (``Clip.multicam`` points here) over one continuous master sound, so cuts, text edits and undo need nothing special."""
+
+    id: str = Field(default_factory=lambda: new_id("mc"))
+    name: str = Field("Multicámara", max_length=80)
+    angles: list[Angle] = Field(..., min_length=2, max_length=12)
+    master: int = Field(0, ge=0, description="Index of the angle whose sound is heard.")
+
+    def angle_index(self, media: str) -> int:
+        for i, a in enumerate(self.angles):
+            if a.media == media:
+                return i
+        raise NotFound(f"Media {media} is not an angle of {self.name}.")
+
+    @model_validator(mode="after")
+    def _check(self) -> "Multicam":
+        if len({a.media for a in self.angles}) != len(self.angles):
+            raise ValueError("Each angle needs a different media.")
+        if self.master >= len(self.angles):
+            raise ValueError("master is not one of the angles.")
+        return self
 
 
 class Project(Strict):
@@ -220,6 +259,7 @@ class Project(Strict):
     captions: Captions = Field(default_factory=Captions)
     notes: str = Field("", max_length=8000)
     length_mode: Literal["main", "longest"] = Field("main", description="main: the video ends with the main track (music or titles past it are cut); longest: with the last clip of any track.")
+    multicams: list[Multicam] = Field(default_factory=list, max_length=20)
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -236,6 +276,21 @@ class Project(Strict):
                 if c.id == clip_id:
                     return t, c
         raise NotFound(f"No clip {clip_id} in this project.")
+
+    def multicam(self, group_id: str) -> Multicam:
+        for g in self.multicams:
+            if g.id == group_id:
+                return g
+        raise NotFound(f"No multicam group {group_id} in this project.")
+
+    def with_multicam_sound(self, track_ids: set[str]) -> set[str]:
+        """``track_ids`` plus the tracks holding the master sound of every multicam group shown on them: the picture of a
+        group is muted angle clips, so its words (captions, text view) come from that sound."""
+        groups = {c.multicam for t in self.tracks if t.id in track_ids for c in t.clips if c.multicam}
+        if not groups:
+            return track_ids
+        extra = {t.id for t in self.tracks if t.kind == "audio" and any(c.multicam in groups for c in t.clips)}
+        return track_ids | extra
 
     def main_track(self) -> Optional[Track]:
         for t in self.tracks:
@@ -321,6 +376,11 @@ def validate(project: Project, media_lookup=None) -> list[dict[str, Any]]:
                     if c.reverse and c.src_out - c.src_in > 60000:
                         issues.append({"level": "error", "code": "reverse_too_long", "clip": c.id, "message": "Reverse playback is limited to 60 s of source per clip."})
             prev = c if prev is None or c.end > prev.end else prev
+    groups = {g.id for g in project.multicams}
+    for t in project.tracks:
+        for c in t.clips:
+            if c.multicam and c.multicam not in groups:
+                issues.append({"level": "warning", "code": "unknown_multicam", "clip": c.id, "message": f"Clip {c.id} points at multicam group {c.multicam}, which does not exist."})
     if total > MAX_CLIPS:
         issues.append({"level": "error", "code": "too_many_clips", "message": f"{total} clips: the limit is {MAX_CLIPS}."})
     return issues

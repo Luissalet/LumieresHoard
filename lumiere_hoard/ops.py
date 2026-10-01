@@ -12,7 +12,7 @@ from typing import Any, Callable, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from .errors import LumiereError, NotFound
-from .timeline import (MIN_CLIP_MS, Canvas, Captions, CaptionStyle, Clip, Crop, Filter, FilterType, Keyframe, KeyProp, Marker, Project,
+from .timeline import (MIN_CLIP_MS, Angle, Canvas, Captions, CaptionStyle, Clip, Crop, Filter, FilterType, Keyframe, KeyProp, Marker, Multicam, Project,
                        TextStyle, Track, TrackKind, Transform, Transition, TransitionType, clone, snap)
 from .util import new_id, parse_time
 
@@ -275,9 +275,40 @@ class Notes(OpBase):
     text: str = Field("", max_length=8000)
 
 
+class MulticamCreate(OpBase):
+    op: Literal["multicam_create"]
+    angles: list[dict[str, Any]] = Field(..., min_length=2, max_length=12, description="[{media, start?, label?}]: start = group time (ms) at which that media's own time 0 happened (multicam_sync finds it).")
+    name: str = Field("Multicámara", max_length=80)
+    master: Optional[Union[str, int]] = Field(None, description="Media id or label whose sound is heard (an external microphone is an angle with no picture). Default: the first angle with sound.")
+    angle: Optional[Union[str, int]] = Field(None, description="Angle shown first: media id, label or 1-based number. Default: the first with picture.")
+    at: Optional[Time] = Field(None, description="Timeline ms where the group starts; omitted = end of the main track.")
+    from_ms: Optional[Time] = Field(None, description="Group time to start from; default: where every angle has material.")
+    to_ms: Optional[Time] = None
+    id: Optional[str] = None
+
+
+class MulticamSwitch(OpBase):
+    op: Literal["multicam_switch"]
+    angle: Optional[Union[str, int]] = Field(None, description="Angle to show: media id, label or 1-based number.")
+    at: Optional[Time] = Field(None, description="Timeline ms where the new angle starts (the playhead).")
+    end: Optional[Time] = Field(None, description="Timeline ms where it ends; omitted = the end of the shot that contains 'at'.")
+    clip: Optional[str] = Field(None, description="A clip of the group (its whole shot is switched when 'at' is omitted).")
+    group: Optional[str] = Field(None, description="Group id; omitted = the group of 'clip', or the only one.")
+    cuts: Optional[list[list[Any]]] = Field(None, description="Many switches at once: [[timeline_ms, angle], ...]; each angle holds until the next cut (the last until the end of the group).")
+
+
+class MulticamSet(OpBase):
+    op: Literal["multicam_set"]
+    group: Optional[str] = None
+    name: Optional[str] = Field(None, max_length=80)
+    offsets: Optional[dict[str, Time]] = Field(None, description="{media id or label: start_ms}: put an angle's sync right by hand; clips follow.")
+    master: Optional[Union[str, int]] = Field(None, description="Media id or label: change whose sound is heard.")
+    release: bool = Field(False, description="Dissolve the group: its clips become ordinary clips.")
+
+
 Op = Union[AddMedia, AddText, Split, Trim, Move, Delete, DeleteRange, CutSource, KeepSource, SetClip, Speed, TransitionOp, FilterAdd,
            FilterRemove, TrackAdd, TrackSet, TrackDelete, CanvasOp, MarkerAdd, MarkerDelete, CaptionsOp, Duplicate, DetachAudio, CloseGaps,
-           ReplaceMedia, Sequence, KeyframesOp, Slip, Roll, InsertClips, Notes]
+           ReplaceMedia, Sequence, KeyframesOp, Slip, Roll, InsertClips, Notes, MulticamCreate, MulticamSwitch, MulticamSet]
 _ADAPTER = TypeAdapter(Op)
 OP_MODELS: dict[str, type[BaseModel]] = {m.model_fields["op"].annotation.__args__[0]: m for m in Op.__args__}  # type: ignore[union-attr]
 OP_NAMES = sorted(OP_MODELS)
@@ -516,6 +547,9 @@ def _scope_tracks(p: Project, media_id: str, scope: str) -> list[str]:
     if scope == "all":
         return [t.id for t in p.tracks if not t.locked]
     ids = [t.id for t in p.tracks if not t.locked and any(c.media == media_id for c in t.clips)]
+    groups = {c.multicam for _, c in p.all_clips() if c.multicam and c.media == media_id}
+    if groups:  # a multicam group moves as one: its picture and its master sound are cut together
+        ids += [t.id for t in p.tracks if not t.locked and t.id not in ids and any(c.multicam in groups for c in t.clips)]
     ids += [t.id for t in p.tracks if t.kind == "text" and not t.locked and t.id not in ids]
     return ids
 
@@ -1002,6 +1036,8 @@ def _replace_media(ctx: Ctx, o: ReplaceMedia) -> dict:
     info = ctx.media(o.media)
     if c.type != "media":
         raise LumiereError("Only media clips can change their media.")
+    if c.multicam:
+        raise LumiereError("This clip is an angle of a multicam group: change it with multicam_switch.")
     span = c.src_out - c.src_in
     dur = int(info.get("duration_ms") or 0)
     c.media = o.media
@@ -1136,6 +1172,256 @@ def _notes(ctx: Ctx, o: Notes) -> dict:
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ multicam
+
+def _angle_ref(g: Multicam, ref: Any, *, video: bool = False) -> int:
+    """Index of an angle given as a media id, a label (any case) or a 1-based number."""
+    idx: Optional[int] = None
+    if isinstance(ref, int) or (isinstance(ref, str) and ref.strip().isdigit()):
+        n = int(ref) - 1
+        idx = n if 0 <= n < len(g.angles) else None
+    else:
+        low = str(ref).strip().lower()
+        for i, a in enumerate(g.angles):
+            if a.media == ref or a.label.lower() == low:
+                idx = i
+                break
+    if idx is None:
+        raise LumiereError(f"No angle {ref!r} in {g.name}. Angles: " + ", ".join(f"{i + 1} {a.label} ({a.media})" for i, a in enumerate(g.angles)) + ".")
+    if video and g.angles[idx].audio_only:
+        raise LumiereError(f"{g.angles[idx].label} has no picture: it can be the sound but not the angle shown.")
+    return idx
+
+
+def _group_for(p: Project, group: Optional[str], clip: Optional[str]) -> Multicam:
+    if group:
+        return p.multicam(group)
+    if clip:
+        gid = p.find(clip)[1].multicam
+        if not gid:
+            raise LumiereError(f"Clip {clip} is not part of a multicam group.")
+        return p.multicam(gid)
+    if len(p.multicams) == 1:
+        return p.multicams[0]
+    if not p.multicams:
+        raise LumiereError("This project has no multicam group: create one with multicam_create.")
+    raise LumiereError("Several multicam groups: say which with 'group' (" + ", ".join(g.id for g in p.multicams) + ").")
+
+
+def _group_track(p: Project, g: Multicam) -> Track:
+    for t in p.tracks:
+        if t.kind == "video" and any(c.multicam == g.id for c in t.clips):
+            return t
+    raise LumiereError(f"{g.name} has no picture on the timeline any more.")
+
+
+def _angle_label(i: int, audio_only: bool) -> str:
+    return f"Micrófono {i + 1}" if audio_only else f"Cámara {chr(65 + i) if i < 26 else i + 1}"
+
+
+def _multicam_create(ctx: Ctx, o: MulticamCreate) -> dict:
+    p = ctx.p
+    angles: list[Angle] = []
+    for i, raw in enumerate(o.angles):
+        if "media" not in raw:
+            raise LumiereError("Each angle needs a media id: {media, start?, label?}.")
+        info = ctx.media(str(raw["media"]))
+        if info.get("kind") == "image":
+            raise LumiereError(f"{info.get('name')} is a picture: angles are recordings.")
+        audio_only = not info.get("has_video")
+        if audio_only and not info.get("has_audio"):
+            raise LumiereError(f"{info.get('name')} has neither picture nor sound.")
+        conf = raw.get("confidence")
+        angles.append(Angle(media=str(raw["media"]), start=int(round(_t(raw.get("start")) or 0)), audio_only=audio_only,
+                            label=str(raw.get("label") or _angle_label(i, audio_only))[:60], confidence=None if conf is None else float(conf)))
+    g = Multicam(name=o.name, angles=angles)
+    if o.id:
+        g.id = o.id
+    sound = [i for i, a in enumerate(angles) if ctx.media(a.media).get("has_audio")]
+    if o.master is not None:
+        g.master = _angle_ref(g, o.master)
+    elif sound:
+        g.master = next((i for i in sound if angles[i].audio_only), sound[0])
+    if not ctx.media(angles[g.master].media).get("has_audio"):
+        raise LumiereError(f"{angles[g.master].label} has no sound to use as the master.")
+    first = _angle_ref(g, o.angle, video=True) if o.angle is not None else next((i for i, a in enumerate(angles) if not a.audio_only), None)
+    if first is None:
+        raise LumiereError("A multicam group needs at least one angle with picture.")
+    lo = max(a.start for a in angles)
+    hi = min(a.start + int(ctx.media(a.media).get("duration_ms") or 0) for a in angles)
+    if o.from_ms is not None:
+        lo = max(lo, _t(o.from_ms))
+    if o.to_ms is not None:
+        hi = min(hi, _t(o.to_ms))
+    if hi - lo < 200:
+        raise LumiereError(f"The recordings barely overlap once synced ({max(0, hi - lo)} ms): check their offsets with multicam_sync.")
+    track = p.main_track()
+    if track is None:
+        track = Track(kind="video", name="Principal", role="main")
+        p.tracks.insert(0, track)
+    _unlocked(track)
+    a0 = angles[first]
+    start = _track_end(track) if o.at is None else ctx.snap(_t(o.at))
+    clip = Clip(media=a0.media, src_in=lo - a0.start, src_out=hi - a0.start, start=start, mute=True, multicam=g.id, label=a0.label)
+    info0 = ctx.media(a0.media)
+    same_orientation = ((info0.get("width") or 16) >= (info0.get("height") or 9)) == (p.canvas.width >= p.canvas.height)
+    clip.transform.fit = "cover" if same_orientation else "contain"
+    if o.at is not None:
+        _clear_range(track, clip.start, clip.end)
+    track.clips.append(clip)
+    master = angles[g.master]
+    sound_track = Track(kind="audio", name=f"Audio · {o.name}"[:60], role="voice")
+    p.tracks.append(sound_track)
+    sound_clip = Clip(media=master.media, src_in=lo - master.start, src_out=hi - master.start, start=clip.start, multicam=g.id, label=master.label)
+    sound_track.clips.append(sound_clip)
+    p.multicams.append(g)
+    return {"group": g.id, "clip": clip.id, "audio_clip": sound_clip.id, "track": track.id, "audio_track": sound_track.id, "start": clip.start,
+            "end": clip.end, "group_range": [lo, hi], "angles": [a.label for a in angles]}
+
+
+def _mc_repoint(ctx: Ctx, g: Multicam, c: Clip, new: int) -> bool:
+    """Show angle ``new`` in clip ``c`` (same timeline span, same moment of the event). False when it already does."""
+    old = g.angle_index(c.media)
+    if old == new:
+        return False
+    if c.reverse:
+        raise LumiereError("Reversed clips cannot change angle.")
+    a, b = g.angles[new], g.angles[old]
+    gt0, gt1 = c.src_in + b.start, c.src_out + b.start
+    lo, hi = gt0 - a.start, gt1 - a.start
+    dur = int(ctx.media(a.media).get("duration_ms") or 0)
+    if lo < -MIN_CLIP_MS or (dur and hi > dur + MIN_CLIP_MS):
+        raise LumiereError(f"{a.label} has no picture between group time {gt0} and {gt1} ms (it covers {a.start}–{a.start + dur} ms).")
+    c.media, c.src_in, c.src_out = a.media, max(0, lo), min(hi, dur) if dur else hi
+    c.label = a.label
+    c.reframe = None
+    return True
+
+
+def _mc_merge(track: Track, gid: str) -> None:
+    """Join neighbouring shots of the same angle that continue each other (a switch to the angle already shown leaves no seam)."""
+    track.clips.sort(key=lambda c: c.start)
+    out: list[Clip] = []
+    for c in track.clips:
+        prev = out[-1] if out else None
+        if (prev and c.multicam == gid and prev.multicam == gid and prev.media == c.media and abs(prev.end - c.start) <= 1
+                and abs(prev.src_out - c.src_in) <= 2 and prev.speed == c.speed and not c.reverse and not prev.reverse
+                and not c.transition_in and not prev.fade_out and not c.fade_in and prev.transform == c.transform
+                and prev.filters == c.filters and not prev.keyframes and not c.keyframes):
+            prev.src_out = c.src_out
+            continue
+        out.append(c)
+    track.clips = out
+
+
+def _mc_set_range(ctx: Ctx, g: Multicam, t0: int, t1: int, angle: int) -> int:
+    track = _group_track(ctx.p, g)
+    _unlocked(track)
+    mine = [c for c in track.clips if c.multicam == g.id]
+    lo, hi = min(c.start for c in mine), max(c.end for c in mine)
+    t0, t1 = max(t0, lo), min(t1, hi)
+    if t1 - t0 < MIN_CLIP_MS // 2:
+        return 0
+    for at in (t0, t1):
+        hit = next((c for c in track.clips if c.multicam == g.id and c.start < at < c.end), None)
+        if hit:
+            _split_clip(track, hit, at)
+    changed = 0
+    tol = MIN_CLIP_MS // 2
+    for c in sorted(track.clips, key=lambda c: c.start):
+        if c.multicam == g.id and c.start >= t0 - tol and c.end <= t1 + tol:
+            changed += _mc_repoint(ctx, g, c, angle)
+    _mc_merge(track, g.id)
+    return changed
+
+
+def _multicam_switch(ctx: Ctx, o: MulticamSwitch) -> dict:
+    p = ctx.p
+    g = _group_for(p, o.group, o.clip)
+    if o.cuts:
+        pts = sorted(((ctx.snap(_t(c[0])), _angle_ref(g, c[1], video=True)) for c in o.cuts if len(c) == 2), key=lambda x: x[0])
+        if not pts:
+            raise LumiereError("cuts is [[timeline_ms, angle], ...].")
+        track = _group_track(p, g)
+        end = max(c.end for c in track.clips if c.multicam == g.id)
+        changed = 0
+        for (t, ai), nxt in zip(pts, [x[0] for x in pts[1:]] + [end]):
+            changed += _mc_set_range(ctx, g, t, nxt, ai)
+        return {"group": g.id, "switches": len(pts), "changed_shots": changed}
+    if o.angle is None:
+        raise LumiereError("Say which angle: angle (media id, label or 1-based number).")
+    ai = _angle_ref(g, o.angle, video=True)
+    track = _group_track(p, g)
+    if o.at is not None:
+        t0 = ctx.snap(_t(o.at))
+        shot = next((c for c in track.clips if c.multicam == g.id and c.start <= t0 < c.end), None)
+        if shot is None:
+            raise LumiereError(f"{t0} ms is outside the group's picture.")
+        t1 = ctx.snap(_t(o.end)) if o.end is not None else shot.end
+    elif o.clip:
+        _, shot = p.find(o.clip)
+        t0, t1 = shot.start, shot.end if o.end is None else ctx.snap(_t(o.end))
+    else:
+        raise LumiereError("Say where: 'at' (timeline ms, usually the playhead) or 'clip'.")
+    changed = _mc_set_range(ctx, g, t0, t1, ai)
+    return {"group": g.id, "angle": g.angles[ai].label, "from": t0, "to": t1, "changed_shots": changed}
+
+
+def _multicam_set(ctx: Ctx, o: MulticamSet) -> dict:
+    p = ctx.p
+    g = _group_for(p, o.group, None)
+    if o.release:
+        for _, c in p.all_clips():
+            if c.multicam == g.id:
+                c.multicam = None
+        p.multicams.remove(g)
+        return {"group": g.id, "released": True}
+    out: dict[str, Any] = {"group": g.id}
+    if o.name is not None:
+        g.name = o.name
+    for key, value in (o.offsets or {}).items():
+        i = _angle_ref(g, key)
+        new = int(round(_t(value)))
+        delta = new - g.angles[i].start
+        if not delta:
+            continue
+        for _, c in p.all_clips():
+            if c.multicam == g.id and c.media == g.angles[i].media:
+                dur = int(ctx.media(c.media).get("duration_ms") or 0)
+                if c.src_in - delta < 0 or (dur and c.src_out - delta > dur + MIN_CLIP_MS):
+                    raise LumiereError(f"Moving {g.angles[i].label} by {-delta} ms leaves a clip outside its recording ({dur} ms long).")
+        for _, c in p.all_clips():
+            if c.multicam == g.id and c.media == g.angles[i].media:
+                c.src_in -= delta
+                c.src_out -= delta
+        g.angles[i].start = new
+        g.angles[i].confidence = None
+        out.setdefault("moved", {})[g.angles[i].label] = new
+    if o.master is not None:
+        i = _angle_ref(g, o.master)
+        if not ctx.media(g.angles[i].media).get("has_audio"):
+            raise LumiereError(f"{g.angles[i].label} has no sound.")
+        if i != g.master:
+            old = g.angles[g.master]
+            new_master = g.angles[i]
+            dur = int(ctx.media(new_master.media).get("duration_ms") or 0)
+            for t, c in p.all_clips():
+                if c.multicam == g.id and t.kind == "audio" and c.media == old.media:
+                    lo, hi = c.src_in + old.start - new_master.start, c.src_out + old.start - new_master.start
+                    if lo < -MIN_CLIP_MS or (dur and hi > dur + MIN_CLIP_MS):
+                        raise LumiereError(f"{new_master.label} has no sound for the whole stretch (it covers {new_master.start}–{new_master.start + dur} ms).")
+                    c.media, c.src_in, c.src_out, c.label = new_master.media, max(0, lo), min(hi, dur) if dur else hi, new_master.label
+            g.master = i
+        out["master"] = g.angles[i].label
+    return out
+
+
+def _prune_multicams(p: Project) -> None:
+    """A group whose clips are all gone leaves nothing behind."""
+    alive = {c.multicam for _, c in p.all_clips() if c.multicam}
+    p.multicams = [g for g in p.multicams if g.id in alive]
+
+
 HANDLERS: dict[str, Callable[[Ctx, Any], dict]] = {
     "add_media": _add_media, "add_text": _add_text, "split": _split, "trim": _trim, "move": _move, "delete": _delete,
     "delete_range": _delete_range, "cut_source": _cut_source, "keep_source": _keep_source, "set": _set, "speed": _speed,
@@ -1143,6 +1429,7 @@ HANDLERS: dict[str, Callable[[Ctx, Any], dict]] = {
     "track_delete": _track_delete, "canvas": _canvas, "marker_add": _marker_add, "marker_delete": _marker_delete, "captions": _captions,
     "duplicate": _duplicate, "detach_audio": _detach_audio, "close_gaps": _close_gaps, "replace_media": _replace_media,
     "sequence": _sequence, "keyframes": _keyframes, "slip": _slip, "roll": _roll, "insert_clips": _insert_clips, "notes": _notes,
+    "multicam_create": _multicam_create, "multicam_switch": _multicam_switch, "multicam_set": _multicam_set,
 }
 
 
@@ -1160,6 +1447,7 @@ def apply_ops(project: Project, ops: list[dict[str, Any]], media: MediaLookup) -
             raise type(error)(prefix + str(error)) from error
         work.sort()
         results.append({"op": op.op, **result})
+    _prune_multicams(work)
     try:
         final = Project.model_validate(work.dump())
     except ValidationError as error:

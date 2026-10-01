@@ -72,6 +72,13 @@ export default function CaptionsPanel() {
           <Seg value={cap.position} onChange={(v) => setCap({ position: v })} options={["top", "middle", "lower_third", "bottom"].map((p) => ({ value: p, label: t(`cappos_${p}`) }))} />
         </div>
         <Toggle checked={cap.uppercase} onChange={(v) => setCap({ uppercase: v })} label={t("uppercase")} />
+        <div style={{ margin: "12px 0 4px" }} data-testid="cap-speakers">
+          <span className="label">{t("cap_speakers")}</span>
+          <select className="field" value={cap.speaker_labels || "off"} onChange={(e) => setCap({ speaker_labels: e.target.value })} data-testid="cap-speaker-labels">
+            {["off", "color", "prefix", "both"].map((v) => <option key={v} value={v}>{t(`cap_speakers_${v}`)}</option>)}
+          </select>
+          <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{t("cap_speakers_help")}</div>
+        </div>
         <div style={{ marginTop: 10 }}>
           <SliderRow label={t("max_words")} value={cap.max_words} min={1} max={16} step={1} decimals={0} defaultValue={4} onChange={(v) => setCap({ max_words: Math.round(v) })} />
           <SliderRow label={t("size")} value={cap.size} min={0} max={200} step={1} decimals={0} defaultValue={0} onChange={(v) => setCap({ size: Math.round(v) })} />

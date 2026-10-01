@@ -13,6 +13,7 @@ import numpy as np
 from . import analyze
 from . import media as media_store
 from . import projects as project_store
+from . import speakers as speakers_mod
 from .analysis import audio as audio_an
 from .analysis import speech
 from .analysis import video as video_an
@@ -170,29 +171,80 @@ def cut_words(svc: "Services", p: Project, *, media: str, word_ids: Optional[lis
 
 def timeline_transcript(svc: "Services", p: Project, *, track: Optional[str] = None) -> dict[str, Any]:
     """The words heard on the timeline, in timeline order, with their timeline times and their media / word ids — what a text
-    editor shows. Media without a transcript are listed in ``missing``."""
+    editor shows. Media without a transcript are listed in ``missing``. With a speaker-separated transcript every word also
+    carries its speaker (``speaker`` id, ``speaker_name``, ``speaker_color``) and ``speakers`` lists them. The picture of a
+    multicam group is muted angle clips: its words are read from the group's master sound instead."""
     t = p.track(track) if track else p.main_track()
     if t is None:
-        return {"words": [], "missing": []}
+        return {"words": [], "missing": [], "speakers": []}
     out: list[dict[str, Any]] = []
     missing: list[str] = []
     cache: dict[str, Optional[dict]] = {}
-    for c in sorted(t.clips, key=lambda c: c.start):
-        if c.type != "media" or c.reverse:
+    tracks = [x for x in p.tracks if x.id in p.with_multicam_sound({t.id})]
+    for tr in tracks:
+        for c in sorted(tr.clips, key=lambda c: c.start):
+            if c.type != "media" or c.reverse or (c.multicam and tr.kind == "video"):
+                continue
+            if c.media not in cache:
+                cache[c.media] = analyze.transcript(svc, c.media)
+            tr_ = cache[c.media]
+            if tr_ is None:
+                if c.media not in missing and media_store.get(svc, c.media)["has_audio"]:
+                    missing.append(c.media)
+                continue
+            for w in tr_["words"]:
+                mid = (w["t0"] + w["t1"]) / 2
+                if c.src_in <= mid < c.src_out:
+                    item = {"id": w["id"], "media": c.media, "clip": c.id, "text": w["text"], "t": int(c.timeline_at(w["t0"])),
+                            "t1": int(c.timeline_at(w["t1"])), "p": w.get("p")}
+                    if w.get("speaker"):
+                        item.update(speaker=w["speaker"], speaker_name=speakers_mod.name_of(tr_, w["speaker"]),
+                                    speaker_color=speakers_mod.color_of(tr_, w["speaker"]))
+                    out.append(item)
+    if len(tracks) > 1:
+        out.sort(key=lambda w: w["t"])
+    listed = [{"media": m, "id": sid, "name": info.get("name") or sid, "color": info.get("color", "")}
+              for m, tr_ in cache.items() if tr_ for sid, info in (tr_.get("speakers") or {}).items()]
+    return {"track": t.id, "words": out, "missing": missing, "speakers": listed}
+
+
+def speaker_cut(svc: "Services", p: Project, *, speakers: list[str], media: Optional[str] = None, keep: bool = False) -> tuple[Project, dict[str, Any]]:
+    """Remove (or keep only) everything the given speakers say. Names or ids from the speaker list of the transcript
+    (media_analyze kinds=['speakers'] separates them)."""
+    if not speakers:
+        raise LumiereError("Give the speakers (names or ids like S1).")
+    if media:
+        mids = [media]
+    else:
+        main = p.main_track()
+        ids = p.with_multicam_sound({main.id}) if main else set()
+        mids = []
+        for tr in p.tracks:
+            if tr.id not in ids:
+                continue
+            for c in tr.clips:
+                if c.media and not (c.multicam and tr.kind == "video") and c.media not in mids and media_store.get(svc, c.media)["has_audio"]:
+                    mids.append(c.media)
+    transcripts = _need(svc, mids, "transcript", "Cutting by speaker")
+    before = p.duration
+    total = 0
+    found: list[str] = []
+    for mid, t in transcripts.items():
+        if not t.get("speakers"):
             continue
-        if c.media not in cache:
-            cache[c.media] = analyze.transcript(svc, c.media)
-        tr = cache[c.media]
-        if tr is None:
-            if c.media not in missing and media_store.get(svc, c.media)["has_audio"]:
-                missing.append(c.media)
+        try:
+            words = speakers_mod.words_of(t, speakers)
+        except NotFound:
             continue
-        for w in tr["words"]:
-            mid = (w["t0"] + w["t1"]) / 2
-            if c.src_in <= mid < c.src_out:
-                out.append({"id": w["id"], "media": c.media, "clip": c.id, "text": w["text"], "t": int(c.timeline_at(w["t0"])),
-                            "t1": int(c.timeline_at(w["t1"])), "p": w.get("p")})
-    return {"track": t.id, "words": out, "missing": missing}
+        if not words:
+            continue
+        p, _ = cut_words(svc, p, media=mid, word_ids=[w["id"] for w in words], keep=keep)
+        total += len(words)
+        found.append(mid)
+    if not found:
+        raise LumiereError("No transcript on the timeline has those speakers: run media_analyze with kinds=['speakers'] first, and check the names "
+                           "with speakers_get.", code="no_speakers")
+    return p, {"words": total, "speakers": speakers, "mode": "keep" if keep else "cut", "media": found, "before": ms_to_tc(before), "after": ms_to_tc(p.duration)}
 
 
 # ---------------------------------------------------------------- scenes
@@ -697,10 +749,21 @@ def short_from_range(svc: "Services", media: str, start_ms: int, end_ms: int, *,
     return {"project": pid, "notes": notes}
 
 
+def _multicam_command(name: str) -> Callable[..., tuple[Project, dict[str, Any]]]:
+    """Multicam commands live in multicam.py, which reads this module (timeline_transcript): bind them late."""
+    def run(svc: "Services", p: Project, **kwargs: Any) -> tuple[Project, dict[str, Any]]:
+        from . import multicam
+
+        return getattr(multicam, name)(svc, p, **kwargs)
+    return run
+
+
 COMMANDS: dict[str, Callable[..., tuple[Project, dict[str, Any]]]] = {
     "remove_silences": remove_silences, "remove_fillers": remove_fillers, "cut_words": cut_words, "split_scenes": split_scenes,
     "reframe": reframe, "captions": captions, "beat_sync": beat_sync, "match_loudness": match_loudness, "script_assemble": script_assemble,
-    "zoom_cuts": zoom_cuts,
+    "zoom_cuts": zoom_cuts, "speaker_cut": speaker_cut,
+    "multicam_create": _multicam_command("multicam_create"), "multicam_resync": _multicam_command("multicam_resync"),
+    "multicam_auto": _multicam_command("multicam_auto"),
 }
 
 
@@ -718,6 +781,7 @@ def run(svc: "Services", project_id: str, name: str, args: dict[str, Any], *, ac
         return {"project": project_id, "preview": True, "summary": summary, "duration_before": ms_to_tc(before), "duration_after": ms_to_tc(new.duration)}
     label = {"remove_silences": "Quitar silencios", "remove_fillers": "Quitar muletillas", "cut_words": "Editar por texto",
              "split_scenes": "Cortar por escenas", "reframe": "Reencuadre", "captions": "Subtítulos", "beat_sync": "Corte al ritmo",
-             "match_loudness": "Igualar volumen", "script_assemble": "Montaje desde guion", "zoom_cuts": "Zoom en los cortes"}[name]
+             "match_loudness": "Igualar volumen", "script_assemble": "Montaje desde guion", "zoom_cuts": "Zoom en los cortes", "speaker_cut": "Cortar por hablante",
+             "multicam_create": "Crear multicámara", "multicam_resync": "Resincronizar multicámara", "multicam_auto": "Cambio automático de cámara"}[name]
     rev = project_store.save(svc, project_id, new, label, actor)
     return {"project": project_id, "rev": rev, "summary": summary, "duration": ms_to_tc(new.duration), "duration_ms": new.duration}

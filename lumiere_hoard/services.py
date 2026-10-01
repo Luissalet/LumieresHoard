@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional
 
 from . import APP_ID, SERVICE, __version__
 from . import analyze, derive
+from . import speakers as speakers_mod
 from . import ffmpeg as ff
 from . import media as media_store
 from . import plan as plan_mod
@@ -82,6 +83,7 @@ class Services:
         self.jobs.register("prepare", lambda ctx: media_store.prepare_job(self, ctx))
         self.jobs.register("analyze", lambda ctx: analyze.analyze_job(self, ctx))
         self.jobs.register("transcribe", lambda ctx: analyze.transcribe_job(self, ctx))
+        self.jobs.register("diarize", lambda ctx: speakers_mod.diarize_job(self, ctx))
         self.jobs.register("render", lambda ctx: runner.render_job(self, ctx))
         self.jobs.register("copy_cut", lambda ctx: runner.copy_cut_job(self, ctx))
         self.jobs.register("stabilize", lambda ctx: derive.stabilize_job(self, ctx))
@@ -200,7 +202,7 @@ class Services:
         except LumiereError as error:
             ffinfo = {"error": str(error)}
         return {"service": SERVICE, "version": __version__, "counts": self.counts(), "model": model, "ffmpeg": ffinfo,
-                "speech": speech.engine_status(), "family": family.status(), "uptime_s": int(time.time() - self.started_at),
+                "speech": speech.engine_status(), "speakers": speakers_mod.status(), "family": family.status(), "uptime_s": int(time.time() - self.started_at),
                 "data_dir": str(self.config.data_dir) if self.config.data_dir_configured else "data", "schema": self.db.schema_version()}
 
     # ------------------------------------------------------------ renders

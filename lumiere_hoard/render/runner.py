@@ -112,6 +112,7 @@ class RenderContext:
         self.use_proxies = use_proxies
         self._luts: dict[str, str] = {}
         self._media: dict[str, C.MediaRef] = {}
+        self._words: dict[str, Optional[list[dict[str, Any]]]] = {}
         self._lock = threading.Lock()
 
     def media(self, mid: str) -> C.MediaRef:
@@ -134,8 +135,16 @@ class RenderContext:
             return self._luts[file]
 
     def words_for(self, mid: str) -> Optional[list[dict[str, Any]]]:
-        t = media_store.get_analysis(self.svc, mid, "transcript")
-        return t.get("words") if t else None
+        """Words of a media with their speaker's name and colour added when the transcript is speaker-separated."""
+        if mid not in self._words:
+            t = media_store.get_analysis(self.svc, mid, "transcript")
+            words = t.get("words") if t else None
+            table = (t or {}).get("speakers") or {}
+            if words and table:
+                words = [dict(w, speaker_name=(table.get(w.get("speaker")) or {}).get("name", ""), speaker_color=(table.get(w.get("speaker")) or {}).get("color", ""))
+                         for w in words]
+            self._words[mid] = words
+        return self._words[mid]
 
 
 def trimmed(project: Project, start: Optional[int], end: Optional[int]) -> Project:

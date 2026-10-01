@@ -289,6 +289,22 @@ def prepare_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
     return done
 
 
+def frame_path(svc: "Services", media_id: str, at_ms: int, width: int = 240) -> Path:
+    """A JPEG of the picture at ``at_ms`` of the media (made by the server, so the browser needs no codec; cached by 100 ms step).
+    The multicam angle viewer shows these."""
+    info = get(svc, media_id)
+    if not info["has_video"] and info["kind"] != "image":
+        raise LumiereError(f"{info['name']} has no picture.")
+    dur = info["duration_ms"] or 0
+    at = max(0, min(int(at_ms), max(0, dur - 40))) // 100 * 100 if info["kind"] != "image" else 0
+    width = max(64, min(int(width), 1280))
+    out = cache_dir(svc, media_id) / "frames" / f"{at}_{width}.jpg"
+    if not out.exists():
+        src = Path(proxy_path(svc, media_id) or info["path"])
+        ff.grab_frame(svc.tools(), src, at, out, width=width)
+    return out
+
+
 def play_path(svc: "Services", media_id: str) -> Path:
     """What the browser plays: the proxy when it exists, else the original."""
     info = get(svc, media_id)

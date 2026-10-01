@@ -125,6 +125,26 @@ copied_n: "{n} clips copiados", copied_n_1: "1 clip copiado", pasted_n: "{n} cli
   lbl_delete_gap: "Borrar sin cerrar hueco", lbl_detach: "Separar audio", lbl_duplicate: "Duplicar", lbl_effect: "Efecto", lbl_effect_param: "Ajustar efecto", lbl_effect_rm: "Quitar efecto",
   lbl_fade: "Fundido", lbl_keyframes: "Animación", lbl_marker: "Marcador", lbl_marker_del: "Quitar marcador", lbl_move: "Mover", lbl_move_n_1: "Mover clip", lbl_move_n: "Mover {n} clips", lbl_mute: "Silenciar clip",
   lbl_reverse: "Invertir clip", lbl_speed: "Velocidad", lbl_split: "Dividir", lbl_text_edit: "Editar texto", lbl_text_style: "Estilo del texto", lbl_track: "Pista", lbl_track_add: "Nueva pista",
+  // multicam
+  tool_multicam: "Multicámara", mc_create_help: "Elige dos o más grabaciones del mismo momento (cámaras o un micrófono aparte). Se sincronizan por el sonido y el audio de la grabación principal suena sin cortes.",
+  mc_no_media: "No hay vídeos ni audios con sonido en la biblioteca.", mc_pick_two: "Elige al menos dos grabaciones.", mc_default_name: "Multicámara", mc_measure: "Medir sincronía", mc_create: "Crear multicámara",
+  mc_created: "Multicámara creada con {n} grabaciones.", mc_sync_result: "Resultado de la sincronización", mc_sync_ok: "Las grabaciones coinciden por el sonido. Puedes ajustar el desfase a mano después.",
+  mc_angle: "Cámara", mc_offset: "Desfase", mc_confidence: "Confianza", mc_frames: "fotogramas", mc_manual: "A mano", mc_sound: "Sonido", mc_audio_only: "solo audio",
+  mc_viewer_help: "Pulsa una cámara para cortar a ella desde el cursor, en el instante", mc_cut_here: "Cortar a esta cámara en el cursor", mc_on_air: "En pantalla",
+  mc_range_marked: "Rango marcado {a}–{b}: poner cámara", mc_range_hint: "Marca entrada y salida (I / O) para cambiar de cámara solo en un rango.", mc_shots: "{n} planos", mc_shots_1: "1 plano",
+  mc_switch_label: "Cambiar de cámara", mc_offset_label: "Ajustar sincronía", mc_master_label: "Cambiar el sonido de la multicámara", mc_release_label: "Deshacer multicámara",
+  mc_resync: "Resincronizar", mc_resync_help: "Vuelve a medir el desfase por el sonido", mc_release: "Deshacer multicámara", mc_release_help: "Los clips quedan como clips normales",
+  mc_sync_title: "Sincronía y sonido", mc_offset_help: "Inicio de cada grabación en el reloj común, en ms. Cámbialo si el sonido no encajó; el clip se mueve con él.",
+  mc_auto_title: "Cambio automático por quién habla", mc_auto_help: "Corta entre cámaras siguiendo a quien habla, con plano mínimo para que no parpadee.",
+  mc_mode_loudness: "Volumen", mc_mode_speakers: "Hablante", mc_mode_help_loudness: "Gana la cámara cuyo micrófono suena más fuerte sobre su propio ruido de fondo.",
+  mc_mode_help_speakers: "Usa los hablantes de la transcripción y la cámara que mejor oye a cada uno.", mc_min_shot: "Plano mínimo (s)", mc_hysteresis: "Margen (dB)", mc_wide: "Plano general", mc_wide_none: "Sin plano general",
+  mc_auto_apply: "Cambiar automáticamente", mc_auto_done: "Cambio automático: {n} planos.", mc_auto_result: "{n} planos {d}", mc_new_group: "Otra multicámara",
+  // speakers
+  speakers_title: "Hablantes", speakers_split: "Separar hablantes", speakers_auto: "Auto", speakers_n: "Personas", speakers_rename: "Renombrar", speakers_assign: "Asignar a…", speakers_new: "Nuevo hablante…",
+  speakers_none: "Aún no se han separado los hablantes.", speakers_help: "Separa las voces de la transcripción: cada persona tiene su color y su nombre. Se usan en los subtítulos y para cortar o conservar lo que dice cada una.",
+  speakers_done: "Hablantes separados: {n}.", speakers_renamed: "Hablante renombrado.", speakers_assigned: "{n} palabras asignadas.", speakers_engine: "Motor", speakers_unnamed: "Sin hablante",
+  speakers_keep: "Quedarse solo con", speakers_cut: "Quitar a", speakers_cut_done: "Quitadas las partes de {name}.", speakers_keep_done: "Solo queda {name}.", speakers_prompt_name: "Nombre del hablante",
+  cap_speakers: "Hablantes", cap_speakers_off: "No mostrar", cap_speakers_color: "Color", cap_speakers_prefix: "Nombre", cap_speakers_both: "Color y nombre", cap_speakers_help: "Con varios hablantes: pinta cada línea de su color o la empieza con su nombre.",
   lbl_track_del: "Borrar pista", lbl_transform: "Ajustar transformación", lbl_transition: "Transición", lbl_transition_all: "Transición en todos los cortes", lbl_trim: "Recortar", lbl_volume: "Volumen",
 };
 
@@ -240,6 +260,26 @@ copied_n: "{n} clips copied", copied_n_1: "1 clip copied", pasted_n: "{n} clips 
   lbl_delete_gap: "Delete keeping the gap", lbl_detach: "Detach audio", lbl_duplicate: "Duplicate", lbl_effect: "Effect", lbl_effect_param: "Tune effect", lbl_effect_rm: "Remove effect",
   lbl_fade: "Fade", lbl_keyframes: "Animation", lbl_marker: "Marker", lbl_marker_del: "Remove marker", lbl_move: "Move", lbl_move_n_1: "Move clip", lbl_move_n: "Move {n} clips", lbl_mute: "Mute clip",
   lbl_reverse: "Reverse clip", lbl_speed: "Speed", lbl_split: "Split", lbl_text_edit: "Edit text", lbl_text_style: "Text style", lbl_track: "Track", lbl_track_add: "New track",
+  // multicam
+  tool_multicam: "Multicam", mc_create_help: "Pick two or more recordings of the same moment (cameras or a separate microphone). They are synced by sound and the main recording's audio plays without cuts.",
+  mc_no_media: "There are no videos or audios with sound in the library.", mc_pick_two: "Pick at least two recordings.", mc_default_name: "Multicam", mc_measure: "Measure sync", mc_create: "Create multicam",
+  mc_created: "Multicam created with {n} recordings.", mc_sync_result: "Sync result", mc_sync_ok: "The recordings match by sound. You can fine-tune the offset by hand afterwards.",
+  mc_angle: "Camera", mc_offset: "Offset", mc_confidence: "Confidence", mc_frames: "frames", mc_manual: "Manual", mc_sound: "Sound", mc_audio_only: "audio only",
+  mc_viewer_help: "Click a camera to cut to it from the playhead, at", mc_cut_here: "Cut to this camera at the playhead", mc_on_air: "On air",
+  mc_range_marked: "Marked range {a}–{b}: show camera", mc_range_hint: "Mark in and out (I / O) to switch camera only over a range.", mc_shots: "{n} shots", mc_shots_1: "1 shot",
+  mc_switch_label: "Switch camera", mc_offset_label: "Adjust sync", mc_master_label: "Change the multicam sound", mc_release_label: "Dissolve multicam",
+  mc_resync: "Re-sync", mc_resync_help: "Measure the offset by sound again", mc_release: "Dissolve multicam", mc_release_help: "The clips become ordinary clips",
+  mc_sync_title: "Sync and sound", mc_offset_help: "Start of each recording on the shared clock, in ms. Change it if the sound did not match; the clip moves with it.",
+  mc_auto_title: "Automatic switching by who speaks", mc_auto_help: "Cuts between cameras following whoever is speaking, with a minimum shot length so it does not flicker.",
+  mc_mode_loudness: "Loudness", mc_mode_speakers: "Speaker", mc_mode_help_loudness: "The camera whose microphone is loudest above its own background noise wins.",
+  mc_mode_help_speakers: "Uses the speakers of the transcript and the camera that hears each one best.", mc_min_shot: "Minimum shot (s)", mc_hysteresis: "Margin (dB)", mc_wide: "Wide shot", mc_wide_none: "No wide shot",
+  mc_auto_apply: "Switch automatically", mc_auto_done: "Automatic switching: {n} shots.", mc_auto_result: "{n} shots {d}", mc_new_group: "Another multicam",
+  // speakers
+  speakers_title: "Speakers", speakers_split: "Separate speakers", speakers_auto: "Auto", speakers_n: "People", speakers_rename: "Rename", speakers_assign: "Assign to…", speakers_new: "New speaker…",
+  speakers_none: "Speakers have not been separated yet.", speakers_help: "Separates the voices of the transcript: each person gets a colour and a name. Used in captions and to cut or keep what each one says.",
+  speakers_done: "Speakers separated: {n}.", speakers_renamed: "Speaker renamed.", speakers_assigned: "{n} words assigned.", speakers_engine: "Engine", speakers_unnamed: "No speaker",
+  speakers_keep: "Keep only", speakers_cut: "Remove", speakers_cut_done: "Removed the parts of {name}.", speakers_keep_done: "Only {name} is left.", speakers_prompt_name: "Speaker name",
+  cap_speakers: "Speakers", cap_speakers_off: "Do not show", cap_speakers_color: "Colour", cap_speakers_prefix: "Name", cap_speakers_both: "Colour and name", cap_speakers_help: "With several speakers: paint each line in their colour or start it with their name.",
   lbl_track_del: "Delete track", lbl_transform: "Adjust transform", lbl_transition: "Transition", lbl_transition_all: "Transition on every cut", lbl_trim: "Trim", lbl_volume: "Volume",
 };
 delete en.fx_add_;

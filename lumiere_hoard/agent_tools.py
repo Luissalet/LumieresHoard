@@ -10,7 +10,7 @@ from typing import Any, Callable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import analyze, commands, derive
+from . import analyze, commands, derive, multicam, speakers
 from . import media as media_store
 from . import plan as plan_mod
 from . import projects as project_store
@@ -29,6 +29,10 @@ Two ways to edit: (1) plan_create with the user's words ("quita los silencios, s
 (2) precise work: timeline_edit with operations (ids come from project_get), or edit_command for smart edits (remove_silences,
 remove_fillers, cut_words, split_scenes, reframe, captions, beat_sync, match_loudness). Times are ms or '1:23.5'.
 Text-based editing: timeline_transcript shows the words heard on the timeline with ids; text_cut removes words or keeps only some.
+Several people talking: media_analyze kinds=['speakers'] labels every word with its speaker (S1, S2...), speakers_edit renames them
+("Ana") or fixes who said what, edit_command speaker_cut removes or keeps one person's parts, captions can show names or colours.
+Several cameras of one event: multicam_sync measures their offset by sound, multicam_create builds the group (one continuous master
+sound), multicam_switch shows another angle at a time or range, multicam_auto cuts to whoever is speaking, multicam_get reads the group.
 Smart edits and captions need analyses (transcript, scenes, focus, beats, loudness): when one is missing the tool queues it and says so;
 check job_status and repeat. Every change is one undo step (timeline_history undo/redo). Deletes need confirm=true and only when the
 user asks. Never import or export outside the folders the user mentions. Renders run in the background; one at a time."""
@@ -65,8 +69,11 @@ class MediaDeleteArgs(MediaRef):
 
 
 class AnalyzeArgs(MediaRef):
-    kinds: list[Literal["scenes", "beats", "loudness", "motion", "focus", "transcript"]] = Field(..., min_length=1)
+    kinds: list[Literal["scenes", "beats", "loudness", "motion", "focus", "transcript", "speakers"]] = Field(..., min_length=1)
     force: bool = False
+    num_speakers: Optional[int] = Field(None, ge=1, le=12, description="speakers: how many people talk (empty = detected automatically).")
+    speakers: bool = Field(False, description="transcript: also separate the speakers right after transcribing.")
+    engine: Literal["auto", "builtin", "embeddings"] = Field("auto", description="speakers: auto = voice embeddings when installed (requirements-speakers.txt), else built in; builtin forces the built-in engine.")
     language: str = Field("", max_length=10, description="Transcript language (es, en...); empty = detect.")
     model: str = Field("", max_length=80, description="Whisper model; empty = the setting (large-v3-turbo on GPU).")
 
@@ -85,6 +92,67 @@ class TranscriptArgs(MediaRef):
 
 class TranscriptFixArgs(MediaRef):
     changes: list[dict[str, str]] = Field(..., min_length=1, max_length=500, description="[{id: 'w12', text: 'corrected'}]")
+
+
+class SpeakersEditArgs(MediaRef):
+    action: Literal["diarize", "rename", "assign", "merge", "clear"] = Field(..., description="diarize: (re)separate the voices; rename: names={'S1': 'Ana'}; "
+                                                                           "assign: say who spoke word_ids or a from_ms-to_ms range; merge: source into one speaker; "
+                                                                           "clear: back to a single voice.")
+    num_speakers: Optional[int] = Field(None, ge=1, le=12, description="diarize: how many people talk (empty = automatic).")
+    engine: Literal["auto", "builtin", "embeddings"] = Field("auto", description="diarize: builtin forces the built-in engine, embeddings requires the optional voice-embedding library.")
+    names: dict[str, str] = Field(default_factory=dict, description="rename: {speaker id or current name: new name}.")
+    speaker: str = Field("", max_length=40, description="assign: speaker id or name (a new name creates the speaker).")
+    word_ids: list[str] = Field(default_factory=list, max_length=5000, description="assign: transcript word ids.")
+    from_ms: Optional[int] = Field(None, ge=0, description="assign: start of the source range (media time, ms).")
+    to_ms: Optional[int] = Field(None, ge=0, description="assign: end of the source range.")
+    source: str = Field("", max_length=40, description="merge: the speaker that disappears.")
+    into: str = Field("", max_length=40, description="merge: the speaker that keeps all the words.")
+
+
+class MulticamSyncArgs(BaseModel):
+    media: list[str] = Field(..., min_length=2, max_length=12, description="Media ids of recordings of the same event (media_list).")
+    reference: Optional[str] = Field(None, description="Media id whose clock is the reference (default: the first).")
+    offsets: dict[str, float] = Field(default_factory=dict, description="Manual start in ms per media id, overriding the measurement.")
+
+
+class MulticamCreateArgs(BaseModel):
+    project: str = ProjectId
+    media: list[str] = Field(..., min_length=2, max_length=12, description="Media ids recorded at the same time (cameras, an external microphone).")
+    name: str = Field("Multicámara", max_length=80)
+    offsets: dict[str, float] = Field(default_factory=dict, description="Manual sync in ms per media id; the rest is measured by sound.")
+    master: Optional[str] = Field(None, description="Media id (or label) whose sound is heard throughout; default: the first with sound.")
+    angle: Optional[str] = Field(None, description="Angle shown first (media id, label or 1-based number).")
+    at: TimeVal = Field(None, description="Timeline time where the group starts; empty = the end of the main track.")
+
+
+class MulticamSwitchArgs(BaseModel):
+    project: str = ProjectId
+    angle: Optional[str | int] = Field(None, description="Angle to show: 1-based number, label ('Cámara B') or media id.")
+    at: TimeVal = Field(None, description="Timeline time where the new angle starts (the playhead).")
+    end: TimeVal = Field(None, description="Timeline time where it ends; empty = the end of that shot.")
+    clip: Optional[str] = Field(None, description="Or a clip of the group: its whole shot is switched.")
+    group: Optional[str] = Field(None, description="Group id (multicam_get); empty = the only one.")
+    cuts: Optional[list[list[Any]]] = Field(None, description="Many at once: [[timeline_ms, angle], ...]; each holds until the next.")
+
+
+class MulticamAutoArgs(BaseModel):
+    project: str = ProjectId
+    group: Optional[str] = None
+    mode: Literal["loudness", "speakers"] = Field("loudness", description="loudness: the camera whose own microphone is loudest above its noise; "
+                                                                           "speakers: the diarized speakers of the master sound, each mapped to a camera.")
+    min_shot_ms: int = Field(2000, ge=300, le=60000, description="No shot shorter than this.")
+    hysteresis_db: float = Field(4.0, ge=0, le=40, description="How much louder the other camera must be to cut (avoids flicker).")
+    dwell_ms: int = Field(400, ge=0, le=5000)
+    lead_ms: int = Field(150, ge=0, le=2000, description="Cut this long before the voice starts.")
+    wide: Optional[str] = Field(None, description="Angle to return to after long silences (e.g. a wide shot).")
+    speaker_map: dict[str, str] = Field(default_factory=dict, description="speakers mode: {speaker name: angle label}; empty = measured.")
+    start: TimeVal = None
+    end: TimeVal = None
+
+
+class MulticamGetArgs(BaseModel):
+    project: str = ProjectId
+    group: Optional[str] = None
 
 
 class HighlightsArgs(MediaRef):
@@ -131,7 +199,7 @@ class HistoryArgs(BaseModel):
 class CommandArgs(BaseModel):
     project: str = ProjectId
     command: Literal["remove_silences", "remove_fillers", "cut_words", "split_scenes", "reframe", "captions", "beat_sync", "match_loudness",
-                     "script_assemble", "zoom_cuts"]
+                     "script_assemble", "zoom_cuts", "speaker_cut", "multicam_create", "multicam_resync", "multicam_auto"]
     args: dict[str, Any] = Field(default_factory=dict, description="See the command list in plan docs / presets_list.")
     preview: bool = Field(False, description="Report what would change without saving.")
 
@@ -285,7 +353,8 @@ def run_media_delete(svc: Services, a: MediaDeleteArgs) -> dict:
 
 
 def run_media_analyze(svc: Services, a: AnalyzeArgs) -> dict:
-    return {"media": a.media, "jobs": analyze.schedule(svc, a.media, list(a.kinds), force=a.force, language=a.language, model=a.model)}
+    return {"media": a.media, "jobs": analyze.schedule(svc, a.media, list(a.kinds), force=a.force, language=a.language, model=a.model,
+                                                       num_speakers=a.num_speakers, speakers=a.speakers, engine=a.engine)}
 
 
 def run_media_silences(svc: Services, a: SilencesArgs) -> dict:
@@ -318,6 +387,62 @@ def run_transcript_get(svc: Services, a: TranscriptArgs) -> dict:
 
 def run_transcript_fix(svc: Services, a: TranscriptFixArgs) -> dict:
     return analyze.update_words(svc, a.media, a.changes)
+
+
+def run_speakers_get(svc: Services, a: MediaRef) -> dict:
+    return speakers.summary(svc, a.media)
+
+
+def run_speakers_edit(svc: Services, a: SpeakersEditArgs) -> dict:
+    if a.action == "diarize":
+        return {"media": a.media, "jobs": analyze.schedule(svc, a.media, ["speakers"], force=True, num_speakers=a.num_speakers, engine=a.engine),
+                "next": "When the job is done, read the result with speakers_get."}
+    if a.action == "rename":
+        if not a.names:
+            raise LumiereError("rename needs names, e.g. {'S1': 'Ana'}.")
+        return speakers.rename(svc, a.media, a.names)
+    if a.action == "assign":
+        if not a.speaker:
+            raise LumiereError("assign needs speaker.")
+        return speakers.assign(svc, a.media, a.speaker, word_ids=a.word_ids or None, from_ms=a.from_ms, to_ms=a.to_ms)
+    if a.action == "merge":
+        if not (a.source and a.into):
+            raise LumiereError("merge needs source and into.")
+        return speakers.merge(svc, a.media, a.source, a.into)
+    return speakers.clear(svc, a.media)
+
+
+def run_multicam_sync(svc: Services, a: MulticamSyncArgs) -> dict:
+    return multicam.sync(svc, list(a.media), reference=a.reference, offsets=a.offsets or None)
+
+
+def run_multicam_create(svc: Services, a: MulticamCreateArgs) -> dict:
+    args: dict[str, Any] = {"media": list(a.media), "name": a.name, "offsets": a.offsets or None, "master": a.master, "angle": a.angle, "at": _t(a.at)}
+    try:
+        return commands.run(svc, a.project, "multicam_create", {k: v for k, v in args.items() if v is not None}, actor="agent")
+    except commands.NeedsAnalysis as need:
+        return {"done": False, "needs": need.jobs, "message": str(need)}
+
+
+def run_multicam_switch(svc: Services, a: MulticamSwitchArgs) -> dict:
+    op: dict[str, Any] = {"op": "multicam_switch"}
+    for key, value in (("angle", a.angle), ("at", _t(a.at)), ("end", _t(a.end)), ("clip", a.clip), ("group", a.group), ("cuts", a.cuts)):
+        if value is not None:
+            op[key] = value
+    return project_store.edit(svc, a.project, [op], label="Cambiar de cámara", actor="agent")
+
+
+def run_multicam_auto(svc: Services, a: MulticamAutoArgs) -> dict:
+    args: dict[str, Any] = {"group": a.group, "mode": a.mode, "min_shot_ms": a.min_shot_ms, "hysteresis_db": a.hysteresis_db, "dwell_ms": a.dwell_ms,
+                            "lead_ms": a.lead_ms, "wide": a.wide, "speaker_map": a.speaker_map or None, "start": _t(a.start), "end": _t(a.end)}
+    try:
+        return commands.run(svc, a.project, "multicam_auto", {k: v for k, v in args.items() if v is not None}, actor="agent")
+    except commands.NeedsAnalysis as need:
+        return {"done": False, "needs": need.jobs, "message": str(need)}
+
+
+def run_multicam_get(svc: Services, a: MulticamGetArgs) -> dict:
+    return multicam.view(project_store.doc(svc, a.project), a.group)
 
 
 def run_highlights(svc: Services, a: HighlightsArgs) -> dict:
@@ -394,7 +519,8 @@ def run_timeline_transcript(svc: Services, a: TimelineTranscriptArgs) -> dict:
     out = commands.timeline_transcript(svc, p, track=a.track)
     words = out["words"]
     out["total_words"] = len(words)
-    out["words"] = [{"id": w["id"], "media": w["media"], "text": w["text"], "t": ms_to_tc(w["t"])} for w in words[a.offset: a.offset + a.limit]]
+    out["words"] = [{k: v for k, v in {"id": w["id"], "media": w["media"], "text": w["text"], "t": ms_to_tc(w["t"]), "speaker": w.get("speaker_name")}.items()
+                     if v is not None} for w in words[a.offset: a.offset + a.limit]]
     return out
 
 
@@ -529,8 +655,9 @@ TOOLS: list[Tool] = [
          "Keywords: media info, probe.", MediaRef, _ann(True), run_media_get),
     Tool("media_delete", "Remove a media from the library (needs confirm=true). Quitar de la biblioteca.\n"
          "The original file stays. Keywords: delete media.", MediaDeleteArgs, _ann(False, True, True), run_media_delete),
-    Tool("media_analyze", "Run analyses on a media: transcript, scenes, beats, loudness, motion, focus. Analizar vídeo.\n"
-         "Background jobs; results are cached. Sinónimos: transcribir, detectar escenas, ritmo.\nKeywords: analyze, transcribe, whisper, scenes, beats.",
+    Tool("media_analyze", "Run analyses on a media: transcript, speakers, scenes, beats, loudness, motion, focus. Analizar vídeo.\n"
+         "Background jobs; results are cached. kinds=['speakers'] tells who says each word. Sinónimos: transcribir, detectar escenas, ritmo, separar hablantes, quién habla.\n"
+         "Keywords: analyze, transcribe, whisper, scenes, beats, speakers, diarization.",
          AnalyzeArgs, _ann(False, False, True), run_media_analyze),
     Tool("media_silences", "Silent ranges of a media (automatic threshold from the noise floor). Silencios.\n"
          "Preview before remove_silences. Keywords: silence, pauses, dead air.", SilencesArgs, _ann(True), run_media_silences),
@@ -538,6 +665,26 @@ TOOLS: list[Tool] = [
          "Sinónimos: qué dice, texto del vídeo.\nKeywords: transcript, words, speech.", TranscriptArgs, _ann(True), run_transcript_get),
     Tool("transcript_fix", "Correct transcript words (captions use the corrected text). Corregir transcripción.\n"
          "Keywords: fix transcript, typo, captions text.", TranscriptFixArgs, _ann(False, False, True), run_transcript_fix),
+    Tool("speakers_get", "Who speaks in a media: speakers with names, colours, talk time and turns. Hablantes.\n"
+         "Needs media_analyze kinds=['speakers']. Sinónimos: quién habla, interlocutores, voces.\nKeywords: speakers, diarization, who speaks, voices.",
+         MediaRef, _ann(True), run_speakers_get),
+    Tool("speakers_edit", "Separate voices again, rename speakers (S1 -> Ana), fix who said what, merge or clear. Editar hablantes.\n"
+         "Captions and text cuts then use the names. Sinónimos: renombrar hablante, cambiar de quién es la frase, juntar voces.\n"
+         "Keywords: rename speaker, diarize, reassign speaker, merge speakers.", SpeakersEditArgs, _ann(False, False, False), run_speakers_edit),
+    Tool("multicam_sync", "Measure the time offset between recordings of one event by their sound. Sincronizar cámaras.\n"
+         "Reports confidence per recording; nothing is edited. Sinónimos: sincronizar audio, desfase entre cámaras.\nKeywords: multicam, sync, offset, cross-correlation.",
+         MulticamSyncArgs, _ann(True), run_multicam_sync),
+    Tool("multicam_create", "Group 2+ recordings of one event into a synced multicam clip with one master sound. Crear multicámara.\n"
+         "Syncs by audio (manual offsets allowed). Sinónimos: multicámara, varias cámaras, cámara A y B.\nKeywords: multicam, multi-camera, angles, sync.",
+         MulticamCreateArgs, _ann(False), run_multicam_create),
+    Tool("multicam_switch", "Show another camera angle at a time, for a range or a whole shot of a multicam group. Cambiar de cámara.\n"
+         "The sound never changes. Sinónimos: cortar a la cámara B, cambiar ángulo, plano.\nKeywords: switch angle, cut to camera, multicam.",
+         MulticamSwitchArgs, _ann(False, True, False), run_multicam_switch),
+    Tool("multicam_auto", "Cut between the cameras automatically by who is speaking (loudness or speakers). Cambio automático.\n"
+         "Minimum shot length, hysteresis, optional wide angle. Sinónimos: cambio automático por quién habla, montaje de entrevista.\n"
+         "Keywords: auto switch, active speaker, multicam, interview.", MulticamAutoArgs, _ann(False, True, False), run_multicam_auto),
+    Tool("multicam_get", "Read a project's multicam groups: angles, sync confidence, master sound, current shots. Ver multicámara.\n"
+         "Keywords: multicam, angles, shots.", MulticamGetArgs, _ann(True), run_multicam_get),
     Tool("highlights_find", "Find the best moments of a long video (sound, motion, cuts, speech). Mejores momentos.\n"
          "Sinónimos: highlights, clips virales, momentos clave, gameplay.\nKeywords: highlights, best moments, clips.", HighlightsArgs, _ann(True), run_highlights),
     Tool("short_from_range", "Make a vertical short (reframed, captions) from one range of a media. Crear corto vertical.\n"

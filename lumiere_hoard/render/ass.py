@@ -20,6 +20,8 @@ class Word:
     t1: int
     text: str
     clip: str
+    speaker: str = ""   # display name of who says it (speaker-separated transcripts), "" = unknown / single voice
+    color: str = ""     # #RRGGBB of that speaker
 
 
 def _ass_color(hex6: str, alpha: int = 0) -> str:
@@ -55,6 +57,7 @@ def timeline_words(project: Project, words_for: WordsFor, *, track_ids: Optional
     if not tracks:
         main = project.main_track()
         tracks = [main.id] if main else []
+    tracks = list(project.with_multicam_sound(set(tracks)))  # a multicam group's words come from its master sound
     end = project.duration
     out: list[Word] = []
     for t in project.tracks:
@@ -75,7 +78,7 @@ def timeline_words(project: Project, words_for: WordsFor, *, track_ids: Optional
                 text = str(w.get("text") or "").strip()
                 if b - a < 20 or not text or a >= end:
                     continue
-                out.append(Word(a, b, text, c.id))
+                out.append(Word(a, b, text, c.id, str(w.get("speaker_name") or w.get("speaker") or ""), str(w.get("speaker_color") or "")))
     out.sort(key=lambda w: w.t0)
     return out
 
@@ -89,7 +92,7 @@ def group_lines(words: list[Word], cap: Captions) -> list[list[Word]]:
         ends_sentence = bool(cur) and cur[-1].text[-1:] in ".?!…"
         new_len = chars + len(w.text) + (1 if cur else 0)
         if cur and (len(cur) >= cap.max_words or new_len > cap.max_chars or gap > 700 or (ends_sentence and len(cur) >= 2)
-                    or cur[-1].clip != w.clip and gap > 200):
+                    or cur[-1].clip != w.clip and gap > 200 or (cap.speaker_labels != "off" and cur[-1].speaker != w.speaker)):
             lines.append(cur)
             cur, chars = [], 0
             new_len = len(w.text)
@@ -102,6 +105,26 @@ def group_lines(words: list[Word], cap: Captions) -> list[list[Word]]:
 
 def _line_text(line: list[Word], upper: bool) -> list[str]:
     return [(_clean(w.text).upper() if upper else _clean(w.text)) for w in line]
+
+
+def _multi_speaker(words: list[Word]) -> bool:
+    return len({w.speaker for w in words if w.speaker}) > 1
+
+
+def _speaker_prefix(line: list[Word], cap: Captions, multi: bool, upper: bool) -> str:
+    """"Ana: " in front of a line of that speaker (only when the captions show names and several people speak)."""
+    if cap.speaker_labels in ("prefix", "both") and multi and line[0].speaker:
+        name = _clean(line[0].speaker)
+        return (name.upper() if upper else name) + ": "
+    return ""
+
+
+def _speaker_tag(line: list[Word], cap: Captions) -> str:
+    """ASS override that paints the line in its speaker's colour ("" when colours are off or the speaker has none)."""
+    if cap.speaker_labels in ("color", "both") and line[0].color:
+        h = line[0].color.lstrip("#")
+        return f"{{\\1c&H{h[4:6]}{h[2:4]}{h[0:2]}&}}"
+    return ""
 
 
 # ---------------------------------------------------------------- ASS
@@ -154,7 +177,9 @@ def build_ass(project: Project, words_for: WordsFor) -> tuple[str, dict[str, int
             outline_w = max(2, g["size"] * (0.09 if cap.style in ("bold", "pop") else 0.05))
             styles.append(_style_line("Cap", cap.font, g["size"], white, white, out, _ass_color("#000000", 0x80), cap.style != "clean", False, 1,
                                       outline_w, 2 if cap.style != "clean" else 1, g["align"], g["margin_h"], g["margin_h"], g["margin_v"]))
-        lines = group_lines(timeline_words(project, words_for), cap)
+        all_words = timeline_words(project, words_for)
+        lines = group_lines(all_words, cap)
+        multi = _multi_speaker(all_words)
         upper = cap.uppercase or cap.style in ("bold", "pop")
         for i, line in enumerate(lines):
             start = line[0].t0
@@ -163,12 +188,14 @@ def build_ass(project: Project, words_for: WordsFor) -> tuple[str, dict[str, int
             if stop - start < 60:
                 continue
             words = _line_text(line, upper)
+            tag = _speaker_tag(line, cap)
+            prefix = _speaker_prefix(line, cap, multi, upper)
             if cap.style == "karaoke":
                 parts = []
                 for j, w in enumerate(line):
                     nxt = line[j + 1].t0 if j + 1 < len(line) else w.t1
                     parts.append(f"{{\\kf{max(1, round((nxt - w.t0) / 10))}}}{words[j]}")
-                events.append(f"Dialogue: 0,{_ts(start)},{_ts(stop)},Cap,,0,0,0,,{' '.join(parts)}")
+                events.append(f"Dialogue: 0,{_ts(start)},{_ts(stop)},Cap,,0,0,0,,{tag}{prefix}{' '.join(parts)}")
                 counts["captions"] += 1
             elif cap.style == "pop":
                 for j, w in enumerate(line):
@@ -177,11 +204,11 @@ def build_ass(project: Project, words_for: WordsFor) -> tuple[str, dict[str, int
                     if b - a < 20:
                         continue
                     text = " ".join(
-                        (f"{{\\c{hl}\\fscx112\\fscy112\\t(0,90,\\fscx100\\fscy100)}}{t}{{\\r}}" if k == j else t) for k, t in enumerate(words))
-                    events.append(f"Dialogue: 0,{_ts(a)},{_ts(b)},Cap,,0,0,0,,{text}")
+                        (f"{{\\c{hl}\\fscx112\\fscy112\\t(0,90,\\fscx100\\fscy100)}}{t}{{\\r}}{tag}" if k == j else t) for k, t in enumerate(words))
+                    events.append(f"Dialogue: 0,{_ts(a)},{_ts(b)},Cap,,0,0,0,,{tag}{prefix}{text}")
                 counts["captions"] += 1
             else:
-                events.append(f"Dialogue: 0,{_ts(start)},{_ts(stop)},Cap,,0,0,0,,{{\\fad(60,60)}}{' '.join(words)}")
+                events.append(f"Dialogue: 0,{_ts(start)},{_ts(stop)},Cap,,0,0,0,,{{\\fad(60,60)}}{tag}{prefix}{' '.join(words)}")
                 counts["captions"] += 1
 
     n = 0
@@ -267,9 +294,11 @@ def _srt_ts(ms: int, sep: str = ",") -> str:
     return f"{h:02d}:{m:02d}:{s:02d}{sep}{f:03d}"
 
 
-def caption_cues(project: Project, words_for: WordsFor) -> list[tuple[int, int, str]]:
+def caption_cues(project: Project, words_for: WordsFor) -> list[tuple[int, int, str, str]]:
     cap = project.captions
-    lines = group_lines(timeline_words(project, words_for), cap)
+    all_words = timeline_words(project, words_for)
+    lines = group_lines(all_words, cap)
+    multi = _multi_speaker(all_words)
     end = project.duration
     cues = []
     for i, line in enumerate(lines):
@@ -277,19 +306,24 @@ def caption_cues(project: Project, words_for: WordsFor) -> list[tuple[int, int, 
         nxt = lines[i + 1][0].t0 if i + 1 < len(lines) else end
         stop = min(line[-1].t1 + 250, nxt, end)
         text = " ".join(w.text for w in line)
-        cues.append((start, stop, text.upper() if cap.uppercase else text))
+        text = text.upper() if cap.uppercase else text
+        if cap.speaker_labels in ("prefix", "both") and multi and line[0].speaker:
+            text = f"{line[0].speaker}: {text}"
+        cues.append((start, stop, text, line[0].color if cap.speaker_labels in ("color", "both") else ""))
     return cues
 
 
 def build_srt(project: Project, words_for: WordsFor) -> str:
     out = []
-    for i, (a, b, text) in enumerate(caption_cues(project, words_for), start=1):
+    for i, (a, b, text, color) in enumerate(caption_cues(project, words_for), start=1):
+        if color:
+            text = f'<font color="{color}">{text}</font>'
         out.append(f"{i}\n{_srt_ts(a)} --> {_srt_ts(b)}\n{text}\n")
     return "\n".join(out)
 
 
 def build_vtt(project: Project, words_for: WordsFor) -> str:
     out = ["WEBVTT", ""]
-    for a, b, text in caption_cues(project, words_for):
+    for a, b, text, _color in caption_cues(project, words_for):
         out.append(f"{_srt_ts(a, '.')} --> {_srt_ts(b, '.')}\n{text}\n")
     return "\n".join(out)
