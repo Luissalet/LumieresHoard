@@ -12,7 +12,7 @@ import os
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlsplit
 
 from . import analyze

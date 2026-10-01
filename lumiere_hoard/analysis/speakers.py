@@ -204,7 +204,6 @@ def agglomerate(points: np.ndarray, sizes: np.ndarray) -> tuple[list[tuple[int, 
     m = points.shape[0]
     d = np.sqrt(((points[:, None, :] - points[None, :, :]) ** 2).sum(axis=2))
     np.fill_diagonal(d, np.inf)
-    ids = list(range(m))
     size = {i: float(sizes[i]) for i in range(m)}
     alive = np.ones(m, dtype=bool)
     merges: list[tuple[int, int, float]] = []
@@ -423,8 +422,8 @@ def _embedding_labels(audio: np.ndarray, words: list[dict[str, Any]], embed: Cal
     lab = cut_tree(merges, m, k)
     labels = np.zeros(len(words), dtype=np.int64)
     centroids = [emb[lab == j].mean(axis=0) for j in range(k)]
-    for (a, b), l in zip(owners, lab):
-        labels[a:b] = l
+    for (a, b), lb in zip(owners, lab):
+        labels[a:b] = lb
     # words of chunks too short to embed: nearest embedded chunk
     covered = np.zeros(len(words), dtype=bool)
     for a, b in owners:
@@ -464,9 +463,9 @@ def diarize(audio: np.ndarray, words: list[dict[str, Any]], *, num_speakers: Opt
         res = cluster_words(x, valid, words, num_speakers=num_speakers, max_speakers=max_speakers, min_sep=MIN_SEPARATION)
     labels = np.asarray(res["labels"], dtype=np.int64)
     order: dict[int, int] = {}
-    for l in labels:
-        order.setdefault(int(l), len(order))
-    mapped = [order[int(l)] for l in labels]
+    for lab in labels:
+        order.setdefault(int(lab), len(order))
+    mapped = [order[int(lab)] for lab in labels]
     return {"labels": mapped, "k": len(order), "method": method, "confidence": res["confidence"], "heights": res.get("heights", [])}
 
 

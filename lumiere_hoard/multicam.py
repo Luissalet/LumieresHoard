@@ -17,7 +17,6 @@ import numpy as np
 from . import commands
 from . import media as media_store
 from . import projects as project_store
-from . import speakers as speakers_mod
 from .analysis import audio as audio_an
 from .analysis import multicam as mc
 from .errors import LumiereError, NotFound

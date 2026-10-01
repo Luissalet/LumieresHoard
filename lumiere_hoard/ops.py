@@ -1874,7 +1874,7 @@ def _fill_slot(ctx: Ctx, o: FillSlot) -> dict:
     if track.kind == "audio" and not info.get("has_audio"):
         raise LumiereError(f"{info.get('name')} has no sound: the slot {o.slot!r} is on an audio track.")
     full = o.rule == "full" or (o.rule == "auto" and o.slot.lower().startswith("main"))
-    old_start, old_end, old_total = c.start, c.end, p.duration
+    old_end, old_total = c.end, p.duration
     want = _t(o.length)
     if info.get("kind") == "image":
         span = int(round((want if want is not None else (c.duration if not full else 4000)) * c.speed))
