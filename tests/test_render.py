@@ -79,6 +79,15 @@ def test_vertical_reframe_render_and_frame_snapshot(services, lib):
 
     img = Image.open(frame)
     assert img.size == (360, 640)
+    from lumiere_hoard import agent_tools
+
+    shown = agent_tools.call_tool(services, "frame_snapshot", {"project": pid, "t": "0:01", "width": 320})
+    assert shown["_image"]["mime"] == "image/jpeg" and len(shown["_image"]["data"]) > 1000
+    assert [layer["layer"] for layer in shown["shows"]] == ["main"]
+    store.edit(services, pid, [{"op": "add_title", "text": "Hola", "at": 0, "duration": 2000}])
+    shown = agent_tools.call_tool(services, "frame_snapshot", {"project": pid, "t": 1000, "width": 320, "show": False})
+    assert [(layer["layer"], layer.get("text")) for layer in shown["shows"]] == [("text", "Hola"), ("main", None)]
+    assert "_image" not in agent_tools.call_tool(services, "frame_snapshot", {"project": pid, "t": 1000, "width": 320, "show": False})
     res = _render(services, pid, preset="web", end=3000)
     assert (res["width"], res["height"]) == (720, 1280)
 
@@ -91,8 +100,8 @@ def test_captions_burn_and_subtitle_files(services, lib):
     assert "Hola qué tal." in srt and "00:00:03,200" in srt  # «Vuelvo» moved 2 s earlier with the cut
     vtt, _ = runner.subtitles_export(services, pid, "vtt")
     assert vtt.startswith("WEBVTT")
-    res = _render(services, pid, preset="preview", end=2000)
-    assert res["qc"]["ok"]
+    res = _render(services, pid, preset="preview", end=2000, filename="Subtitulado.mp4")
+    assert res["qc"]["ok"] and Path(res["path"]).name == "Subtitulado.mp4"  # the chosen name, without a preset tag
 
 
 def test_copy_cut_lossless(services, lib):

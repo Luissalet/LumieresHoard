@@ -45,6 +45,12 @@ EXPORTS: dict[str, dict[str, Any]] = {
 LOUDNESS_TARGETS = {"social": -14.0, "youtube": -14.0, "podcast": -16.0, "broadcast": -23.0}
 
 
+def _strip_media_ext(name: str) -> str:
+    name = (name or "").strip()
+    stem, dot, ext = name.rpartition(".")
+    return stem if dot and stem and ext.lower() in {"mp4", "mov", "mkv", "webm", "gif", "mp3", "wav", "m4a", "m4v", "avi"} else name
+
+
 def export_presets() -> list[dict[str, Any]]:
     return [{"id": k, **v} for k, v in EXPORTS.items()]
 
@@ -171,11 +177,14 @@ def render_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
     fps = p.canvas.fps
     fps_expr = ff.fps_fraction(fps)
     audio_only = bool(spec.get("audio_only"))
-    name = safe_filename(params.get("filename") or project_store.summary(svc, svc.db.one("SELECT * FROM projects WHERE id = ?", (pid,)))["name"])
+    chosen = _strip_media_ext(params.get("filename") or "")
+    name = safe_filename(chosen or project_store.summary(svc, svc.db.one("SELECT * FROM projects WHERE id = ?", (pid,)))["name"])
     ext = {"mp4": ".mp4", "mov": ".mov", "gif": ".gif", "mp3": ".mp3", "wav": ".wav"}[spec["container"]]
     out_dir = Path(params["folder"]) if params.get("folder") else svc.config.renders_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{name}{'' if spec['container'] != 'mp4' or params.get('preset') == 'final' else '-' + params.get('preset', '')}{ext}"
+    # a name the person chose is used as given; automatic names say which version they are (-preview, -web...)
+    tag = "" if chosen or spec["container"] != "mp4" or params.get("preset") == "final" else "-" + params.get("preset", "")
+    out_path = out_dir / f"{name}{tag}{ext}"
     if out_path.exists() and not params.get("overwrite"):
         stem = out_path.stem
         n = 2
@@ -429,7 +438,7 @@ def copy_cut_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
             parts.append(part)
             ctx.progress(0.9 * (i + 1) / len(clips), f"{i + 1}/{len(clips)}")
         (work / "parts.txt").write_text("".join(f"file '{f}'\n" for f in parts), encoding="utf-8")
-        name = safe_filename(ctx.params.get("filename") or "corte")
+        name = safe_filename(_strip_media_ext(ctx.params.get("filename") or "") or "corte")
         out_dir = Path(ctx.params["folder"]) if ctx.params.get("folder") else svc.config.renders_dir
         out_dir.mkdir(parents=True, exist_ok=True)
         ext = Path(parts[0]).suffix

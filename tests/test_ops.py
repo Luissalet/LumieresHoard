@@ -197,3 +197,27 @@ def test_slip_roll_and_paste():
 def test_blur_fit_is_valid():
     p, res = build([{"op": "add_media", "media": "m1", "fit": "blur"}, {"op": "canvas", "preset": "reels"}])
     assert main_clips(p)[0].transform.fit == "blur"
+
+
+def test_op_aliases_and_argument_guesses():
+    from lumiere_hoard.ops import parse_op
+
+    op = parse_op({"op": "add_title", "text": "Hola", "at": 0, "duration_ms": 3000})
+    assert op.op == "add_text" and op.start == 0 and op.length == 3000
+    op = parse_op({"op": "remove_clip", "clip_ids": ["c1"]})
+    assert op.op == "delete" and op.clips == ["c1"]
+
+
+def test_op_errors_explain_the_fields():
+    import pytest
+
+    from lumiere_hoard.errors import LumiereError
+    from lumiere_hoard.ops import OP_NAMES, op_reference, parse_op
+
+    with pytest.raises(LumiereError) as error:
+        parse_op({"op": "addtext", "text": "x"})
+    assert "add_text {text" in str(error.value)
+    with pytest.raises(LumiereError) as error:
+        parse_op({"op": "split"})
+    assert "Expected: split {at, clip?}" in str(error.value)
+    assert len(op_reference().splitlines()) == len(OP_NAMES) == 31

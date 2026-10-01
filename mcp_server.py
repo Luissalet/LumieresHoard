@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 
 import httpx
 from mcp.server.fastmcp import FastMCP
-from mcp.types import TextContent, Tool as MCPTool, ToolAnnotations
+from mcp.types import ImageContent, TextContent, Tool as MCPTool, ToolAnnotations
 
 ROOT = Path(__file__).resolve().parent
 BASE_URL = os.environ.get("LUMIERE_URL", "http://127.0.0.1:5198").rstrip("/")
@@ -85,7 +85,12 @@ class LumiereBridge(FastMCP):
                 return [TextContent(type="text", text=json.dumps({"error": TOKEN_REFUSED.format(path=TOKEN_FILE)}, ensure_ascii=False))]
             if response.status_code >= 400:
                 return [TextContent(type="text", text=json.dumps({"error": body.get("error", f"Error {response.status_code}")}, ensure_ascii=False))]
-            return [TextContent(type="text", text=json.dumps(body, ensure_ascii=False))]
+            image = body.pop("_image", None) if isinstance(body, dict) else None
+            out: list = [TextContent(type="text", text=json.dumps(body, ensure_ascii=False))]
+            if isinstance(image, dict) and image.get("data"):
+                # a frame the assistant asked to look at travels as a picture, not as a path it may not be allowed to open
+                out.append(ImageContent(type="image", data=image["data"], mimeType=image.get("mime", "image/jpeg")))
+            return out
         except FileNotFoundError:
             # A missing token is not a stopped app: say which file is missing instead of offering to start it.
             if _healthy():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,7 @@ from . import media as media_store
 from . import plan as plan_mod
 from . import projects as project_store
 from .errors import LumiereError
-from .ops import OP_NAMES, PRESETS
+from .ops import OP_NAMES, PRESETS, op_reference
 from .render import filters as fx
 from .render import runner
 from .services import Services
@@ -110,7 +111,9 @@ class ProjectDeleteArgs(BaseModel):
 
 class EditArgs(BaseModel):
     project: str = ProjectId
-    ops: list[dict[str, Any]] = Field(..., min_length=1, max_length=500, description="Operations {op: ..., ...}: " + ", ".join(OP_NAMES))
+    ops: list[dict[str, Any]] = Field(..., min_length=1, max_length=500, description="Operations {op: ..., ...}: " + ", ".join(OP_NAMES) + ". Title over the start: {op: 'add_text', text, start: 0, "
+                                  "length: 3000, style: {size, color, position: top|middle|bottom, animation: fade|pop|slide_up|typewriter}}. "
+                                  "A wrong op or field returns every operation with its fields.")
     label: str = Field("", max_length=120, description="Name of the undo step.")
     base_rev: Optional[int] = Field(None, description="Fail if the project changed since this revision.")
 
@@ -184,6 +187,7 @@ class FrameArgs(BaseModel):
     project: str = ProjectId
     t: float | int | str = Field(..., description="Timeline time (ms or '0:12.5').")
     width: int = Field(640, ge=64, le=3840)
+    show: bool = Field(True, description="Also return the picture itself so it can be looked at (MCP image).")
 
 
 class SubtitlesArgs(BaseModel):
@@ -418,7 +422,41 @@ def run_renders(svc: Services, a: RendersArgs) -> dict:
 def run_frame(svc: Services, a: FrameArgs) -> dict:
     t = _t(a.t) or 0
     path = runner.render_frame(svc, a.project, t, width=a.width)
-    return {"path": str(path), "t": ms_to_tc(t), "url": f"/api/frames/{path.name}"}
+    out: dict = {"path": str(path), "t": ms_to_tc(t), "url": f"/api/frames/{path.name}", "shows": _frame_layers(svc, a.project, t)}
+    if a.show:
+        data = path.read_bytes()
+        if a.width > 960:  # keep the picture light; the file on disk has the full size
+            data = runner.render_frame(svc, a.project, t, width=960).read_bytes()
+        out["_image"] = {"mime": "image/jpeg", "data": base64.b64encode(data).decode("ascii")}
+    return out
+
+
+def _frame_layers(svc: Services, project: str, t: int) -> list[dict]:
+    """What the project draws at t, top layer first, so an assistant looking at the frame knows which text comes from the
+    edit (titles, burned-in captions) and which was already in the footage."""
+    p = project_store.doc(svc, project)
+    layers: list[dict] = []
+    if p.captions.enabled:
+        try:
+            words = commands.timeline_transcript(svc, p)["words"]
+        except Exception:  # noqa: BLE001 - no transcript yet: captions draw nothing
+            words = []
+        near = [w["text"] for w in words if abs(w["t"] - t) <= 1500]
+        layers.append({"layer": "captions", "style": p.captions.style, "position": p.captions.position,
+                       "text_near": " ".join(near)[:200], "note": "burned in by this project from the transcript"})
+    for track in reversed(p.tracks):
+        if track.hidden or track.kind == "audio":
+            continue
+        for c in track.clips:
+            if c.start <= t < c.end:
+                item: dict = {"layer": "text" if c.type == "text" else track.role, "track": track.id, "clip": c.id}
+                if c.type == "text":
+                    item.update(text=(c.text or "")[:200], position=c.style.position if c.style else None)
+                else:
+                    info = svc.db.one("SELECT name FROM media WHERE id = ?", (c.media,))
+                    item["media"] = info["name"] if info else c.media
+                layers.append(item)
+    return layers
 
 
 def run_subtitles(svc: Services, a: SubtitlesArgs) -> dict:
@@ -450,7 +488,7 @@ def run_freeze(svc: Services, a: FreezeArgs) -> dict:
 def run_presets(svc: Services, a: Empty) -> dict:
     return {"canvas_presets": PRESETS, "export_presets": runner.export_presets(), "transitions": list(TRANSITIONS),
             "effects": {k: {p: v[0] for p, v in spec.items()} for k, spec in fx.SPECS.items()},
-            "caption_styles": ["clean", "bold", "karaoke", "pop", "boxed", "minimal"], "operations": OP_NAMES, "commands": plan_mod.COMMAND_DOCS}
+            "caption_styles": ["clean", "bold", "karaoke", "pop", "boxed", "minimal"], "operations": OP_NAMES, "operation_fields": op_reference().split("\n"), "commands": plan_mod.COMMAND_DOCS}
 
 
 def run_settings(svc: Services, a: SettingsArgs) -> dict:
@@ -489,8 +527,9 @@ TOOLS: list[Tool] = [
          "Keywords: timeline, outline, clips, tracks.", ProjectGetArgs, _ann(True), run_project_get),
     Tool("project_delete", "Delete a project and its history (needs confirm=true). Borrar proyecto.\nKeywords: delete project.",
          ProjectDeleteArgs, _ann(False, True, True), run_project_delete),
-    Tool("timeline_edit", "Edit the timeline with operations (split, trim, move, delete, text, speed...). Editar timeline.\n"
-         "All or nothing, one undo step. Sinónimos: cortar, recortar, mover, añadir texto.\nKeywords: edit, cut, trim, split, ops.",
+    Tool("timeline_edit", "Edit the timeline with operations (split, trim, move, delete, titles, speed...). Editar timeline.\n"
+         "All or nothing, one undo step. Sinónimos: cortar, recortar, mover, añadir texto, título, rótulo.\n"
+         "Keywords: edit, cut, trim, split, title, text overlay, ops.",
          EditArgs, _ann(False, True, False), run_edit),
     Tool("timeline_history", "Undo, redo, list or restore history steps of a project. Deshacer.\n"
          "Sinónimos: deshacer, rehacer, historial, volver atrás.\nKeywords: undo, redo, history.", HistoryArgs, _ann(False, False, False), run_history),
@@ -571,4 +610,9 @@ def call_tool(svc: Services, name: str, arguments: dict | None, *, caller: Optio
         raise KeyError(f"Unknown tool: {name}")
     args = tool.input_model.model_validate(arguments or {})
     result = tool.run(svc, args)
-    return cap_result(result) if cap else result
+    image = result.pop("_image", None) if isinstance(result, dict) else None
+    if cap:
+        result = cap_result(result)
+    if image:
+        result["_image"] = image  # a picture is never trimmed; the MCP bridge turns it into an image block
+    return result

@@ -279,19 +279,86 @@ Op = Union[AddMedia, AddText, Split, Trim, Move, Delete, DeleteRange, CutSource,
            FilterRemove, TrackAdd, TrackSet, TrackDelete, CanvasOp, MarkerAdd, MarkerDelete, CaptionsOp, Duplicate, DetachAudio, CloseGaps,
            ReplaceMedia, Sequence, KeyframesOp, Slip, Roll, InsertClips, Notes]
 _ADAPTER = TypeAdapter(Op)
-OP_NAMES = sorted(m.model_fields["op"].annotation.__args__[0] for m in Op.__args__)  # type: ignore[union-attr]
+OP_MODELS: dict[str, type[BaseModel]] = {m.model_fields["op"].annotation.__args__[0]: m for m in Op.__args__}  # type: ignore[union-attr]
+OP_NAMES = sorted(OP_MODELS)
+
+# names assistants reach for first; each maps to exactly one operation
+OP_ALIASES = {
+    "add_title": "add_text", "title": "add_text", "text": "add_text", "add_titles": "add_text", "text_add": "add_text", "add_label": "add_text",
+    "add_clip": "add_media", "add_video": "add_media", "add_audio": "add_media", "add_image": "add_media", "add_music": "add_media",
+    "remove": "delete", "remove_clip": "delete", "delete_clip": "delete", "delete_clips": "delete", "ripple_delete": "delete",
+    "split_clip": "split", "razor": "split", "move_clip": "move", "trim_clip": "trim",
+    "marker": "marker_add", "add_marker": "marker_add", "chapter": "marker_add", "add_transition": "transition", "add_filter": "filter_add",
+    "effect": "filter_add", "add_effect": "filter_add", "set_clip": "set", "update": "set", "set_speed": "speed", "add_track": "track_add",
+    "insert": "insert_clips", "subtitles": "captions", "set_canvas": "canvas", "resize": "canvas", "close_gap": "close_gaps",
+}
+# argument names assistants guess; renamed only when the operation has the target field and not the guessed one
+_ARG_ALIASES = {
+    "duration": "length", "duration_ms": "length", "len": "length", "len_ms": "length", "length_ms": "length",
+    "start_ms": "start", "at_ms": "at", "clip_id": "clip", "media_id": "media", "track_id": "track", "clip_ids": "clips",
+    "content": "text", "title": "text",
+}
+
+
+def _type_hint(annotation: Any) -> str:
+    args = getattr(annotation, "__args__", None) or ()
+    literals = [a for a in args if isinstance(a, str)]
+    if getattr(annotation, "__origin__", None) is Literal or (literals and len(literals) == len(args)):
+        return "|".join(literals)
+    for a in args:
+        inner = _type_hint(a)
+        if "|" in inner:
+            return inner
+    return ""
+
+
+def op_signature(name: str) -> str:
+    """One line per operation, generated from its model so it never drifts: add_text {text, start?, length?, ...}."""
+    model = OP_MODELS[name]
+    parts = []
+    for field, info in model.model_fields.items():
+        if field == "op":
+            continue
+        hint = _type_hint(info.annotation)
+        parts.append(f"{field}{'' if info.is_required() else '?'}{': ' + hint if hint else ''}")
+    return f"{name} {{{', '.join(parts)}}}"
+
+
+def op_reference(names: Optional[list[str]] = None) -> str:
+    return "\n".join(op_signature(n) for n in (names or OP_NAMES))
+
+
+def _normalise(raw: dict[str, Any]) -> dict[str, Any]:
+    name = OP_ALIASES.get(str(raw["op"]).strip().lower(), str(raw["op"]).strip().lower())
+    out = dict(raw, op=name)
+    model = OP_MODELS.get(name)
+    if model is None:
+        return out
+    fields = model.model_fields
+    for guess, target in _ARG_ALIASES.items():
+        if guess in out and guess not in fields and target in fields and target not in out:
+            out[target] = out.pop(guess)
+    if "at" in out and "at" not in fields and "start" in fields and "start" not in out:
+        out["start"] = out.pop("at")
+    return out
 
 
 def parse_op(raw: dict[str, Any]) -> BaseModel:
     if not isinstance(raw, dict) or "op" not in raw:
-        raise LumiereError("Each operation is an object with an 'op' field.")
-    if raw["op"] not in OP_NAMES:
-        raise LumiereError(f"Unknown operation {raw['op']!r}. Known: {', '.join(OP_NAMES)}.", code="unknown_op")
+        raise LumiereError("Each operation is an object with an 'op' field. Operations:\n" + op_reference(), code="bad_op")
+    raw = _normalise(raw)
+    model = OP_MODELS.get(raw["op"])
+    if model is None:
+        import difflib
+
+        close = difflib.get_close_matches(raw["op"], OP_NAMES, n=3, cutoff=0.4)
+        hint = ("Closest: " + "; ".join(op_signature(n) for n in close) + "\n") if close else ""
+        raise LumiereError(f"Unknown operation {raw['op']!r}. {hint}All operations:\n{op_reference()}", code="unknown_op")
     try:
-        return _ADAPTER.validate_python(raw)
+        return model.model_validate(raw)
     except ValidationError as error:
-        issues = "; ".join(f"{'.'.join(str(p) for p in e['loc'][1:]) or 'input'}: {e['msg']}" for e in error.errors())
-        raise LumiereError(f"{raw['op']}: {issues}") from error
+        issues = "; ".join(f"{'.'.join(str(p) for p in e['loc']) or 'input'}: {e['msg']}" for e in error.errors())
+        raise LumiereError(f"{raw['op']}: {issues}. Expected: {op_signature(raw['op'])}", code="bad_op") from error
 
 
 # ------------------------------------------------------------------ helpers
@@ -515,7 +582,10 @@ def _add_text(ctx: Ctx, o: AddText) -> dict:
     if track.kind != "text":
         raise LumiereError("Text goes on a text track.")
     _unlocked(track)
-    style = TextStyle(**o.style)
+    given = dict(o.style)
+    if "size" not in given:  # a title reads the same on a phone at 1080x1920 and on a 4K frame
+        given["size"] = max(48, min(600, round(min(p.canvas.width, p.canvas.height) * 0.09)))
+    style = TextStyle(**given)
     clip = Clip(type="text", text=o.text, start=ctx.snap(_t(o.start) or 0), length=max(MIN_CLIP_MS, _t(o.length) or 3000), style=style,
                 transform=Transform(x=o.x, y=o.y))
     _clear_range(track, clip.start, clip.end)
