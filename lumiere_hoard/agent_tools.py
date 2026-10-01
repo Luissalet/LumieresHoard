@@ -10,13 +10,15 @@ from typing import Any, Callable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import analyze, commands, derive
+from . import analyze, commands, derive, family_events
+from . import subtitles as subtitles_mod
 from . import media as media_store
 from . import plan as plan_mod
 from . import projects as project_store
 from .errors import LumiereError
 from .ops import OP_NAMES, PRESETS, op_reference
 from .render import filters as fx
+from .render import formats as formats_mod
 from .render import runner
 from .services import Services
 from .timeline import TRANSITIONS
@@ -31,7 +33,14 @@ remove_fillers, cut_words, split_scenes, reframe, captions, beat_sync, match_lou
 Text-based editing: timeline_transcript shows the words heard on the timeline with ids; text_cut removes words or keeps only some.
 Smart edits and captions need analyses (transcript, scenes, focus, beats, loudness): when one is missing the tool queues it and says so;
 check job_status and repeat. Every change is one undo step (timeline_history undo/redo). Deletes need confirm=true and only when the
-user asks. Never import or export outside the folders the user mentions. Renders run in the background; one at a time."""
+user asks. Never import or export outside the folders the user mentions. Renders run in the background; one at a time.
+Several outputs at once: render_start with formats (['16:9','9:16','1:1']) makes one file per canvas in a single job, from copies (the project is
+not changed; reframe auto|center|blur says how the picture is framed where the shape differs); every file has its own quality check.
+Translated subtitles: subtitles_translate (needs the transcript and the local model; a job; cues keep the original timing) then
+subtitles_export with language (srt, vtt, ass; dual = original plus translation) or render_start with captions_language (+ captions_dual) to burn them in;
+a translation goes stale when the transcript or the cuts change: translate again, unchanged cues are reused.
+""" + family_events.contract_text() + '''
+Family events sent: ''' + ", ".join(family_events.EMITS) + ". Accepted: " + ", ".join(family_events.ACCEPTS) + "."
 
 
 class Empty(BaseModel):
@@ -173,6 +182,12 @@ class RenderArgs(BaseModel):
     lufs: Optional[float] = Field(-999, description="Loudness target (-14 social/YouTube, -16 podcast); null = untouched; omit = preset.")
     subtitles: bool = Field(False, description="Also write an .srt next to the video.")
     mode: Literal["render", "copy"] = Field("render", description="copy: lossless cut at keyframes (one source, no effects).")
+    formats: list[str | dict[str, Any]] = Field(default_factory=list, max_length=6, description="Several canvases in ONE job, one file each: "
+                                                "['16:9','9:16','1:1'], presets (reels, youtube, square) or {aspect|width,height, reframe}. The project is not changed.")
+    reframe: Literal["auto", "center", "blur"] = Field("auto", description="Framing where an output's shape differs from the project's: auto = the camera "
+                                                       "path the clip has (else the subject analysis, else centred), center, blur = whole picture over a blurred fill.")
+    captions_language: str = Field("", max_length=40, description="Burn the subtitles translated into this language (en, fr, 'inglés'); translates first if needed.")
+    captions_dual: bool = Field(False, description="With captions_language: the original line and its translation under it.")
 
 
 class JobArgs(BaseModel):
@@ -198,6 +213,33 @@ class SubtitlesArgs(BaseModel):
     project: str = ProjectId
     format: Literal["srt", "vtt", "ass"] = "srt"
     path: str = Field("", max_length=2000, description="Write to this file (in a folder the user named); empty = return the text.")
+    language: str = Field("", max_length=40, description="Export the translation into this language (subtitles_translate first); empty = the original.")
+    dual: bool = Field(False, description="With language: two lines, the original and its translation.")
+
+
+class SubtitlesTranslateArgs(BaseModel):
+    project: str = ProjectId
+    language: str = Field("", max_length=40, description="Target language: en, fr, de, pt, it, ca... or its name ('inglés'). Needed except for status.")
+    action: Literal["translate", "status", "show", "fix", "delete"] = Field("translate", description="translate: queue the job; status: which languages exist and "
+                                                                         "whether they are up to date; show: read the translated cues; fix: correct cues; delete.")
+    glossary: dict[str, str] = Field(default_factory=dict, description="Fixed translations {'term': 'translation'}.")
+    keep: list[str] = Field(default_factory=list, max_length=80, description="Names and terms that must NOT be translated.")
+    force: bool = Field(False, description="Translate again even when it is up to date.")
+    wait_s: float = Field(0, ge=0, le=3600, description="Wait this long for the job and return its result (0 = return the job at once).")
+    changes: list[dict[str, Any]] = Field(default_factory=list, max_length=500, description="fix: [{n: cue number, text: 'corrected'}].")
+    offset: int = Field(0, ge=0)
+    limit: int = Field(60, ge=1, le=300)
+
+
+class MediaReceiveArgs(BaseModel):
+    path: str = Field("", max_length=2000, description="A media file on this machine (inside the folders the app may read).")
+    url: str = Field("", max_length=2000, description="Or file:// or http://127.0.0.1:port/... (an app on this machine serving the file).")
+    name: str = Field("", max_length=200, description="Name in the library.")
+    project: str = Field("", max_length=40, description="Add the media at the end of this project.")
+    create_project: str | bool = Field(False, description="Or start a new project with it (true, or its name).")
+    preset: str = Field("", max_length=30, description="Canvas of a new project (reels, youtube, square...); empty = by the media's shape.")
+    transcribe: bool = Field(False, description="Queue the transcription.")
+    source: str = Field("", max_length=80, description="The app that sends it.")
 
 
 class ShortArgs(MediaRef):
@@ -423,8 +465,12 @@ def run_plan_apply(svc: Services, a: PlanApplyArgs) -> dict:
 def run_render(svc: Services, a: RenderArgs) -> dict:
     lufs: Any = "default" if a.lufs == -999 else a.lufs
     job = svc.start_render(a.project, preset=a.preset, start=_t(a.start), end=_t(a.end), filename=a.filename, folder=a.folder, lufs=lufs,
-                           subtitles=a.subtitles, mode=a.mode)
-    return {"job": job["id"], "state": job["state"], "label": job["label"]}
+                           subtitles=a.subtitles, mode=a.mode, formats=a.formats or None, reframe=a.reframe, captions_language=a.captions_language,
+                           captions_dual=a.captions_dual)
+    out = {"job": job["id"], "state": job["state"], "label": job["label"]}
+    if a.formats:
+        out["outputs"] = formats_mod.formats_info(list(a.formats), a.reframe)
+    return out
 
 
 def run_job_status(svc: Services, a: JobArgs) -> dict:
@@ -482,7 +528,7 @@ def _frame_layers(svc: Services, project: str, t: int) -> list[dict]:
 
 
 def run_subtitles(svc: Services, a: SubtitlesArgs) -> dict:
-    text, _ = runner.subtitles_export(svc, a.project, a.format)
+    text, _ = runner.subtitles_export(svc, a.project, a.format, language=a.language, dual=a.dual)
     if a.path:
         dest = Path(a.path).expanduser()
         media_store._check_root(svc, dest.parent)
@@ -490,7 +536,36 @@ def run_subtitles(svc: Services, a: SubtitlesArgs) -> dict:
             raise LumiereError(f"The folder {dest.parent} does not exist.")
         dest.write_text(text, encoding="utf-8")
         return {"path": str(dest), "bytes": len(text.encode())}
-    return {"format": a.format, "text": text}
+    return {"format": a.format, "language": a.language or None, "text": text}
+
+
+def run_subtitles_translate(svc: Services, a: SubtitlesTranslateArgs) -> dict:
+    if a.action == "status":
+        return subtitles_mod.status(svc, a.project)
+    if not a.language:
+        raise LumiereError("Say the language (en, fr, 'inglés'...).", code="language_required")
+    if a.action == "show":
+        return subtitles_mod.show(svc, a.project, a.language, a.offset, a.limit)
+    if a.action == "fix":
+        if not a.changes:
+            raise LumiereError("fix needs changes: [{n, text}].")
+        return subtitles_mod.fix(svc, a.project, a.language, a.changes)
+    if a.action == "delete":
+        return subtitles_mod.delete(svc, a.project, a.language)
+    job = subtitles_mod.start_translation(svc, a.project, a.language, glossary=a.glossary, keep=a.keep, force=a.force)
+    if a.wait_s:
+        job = svc.jobs.wait(job["id"], a.wait_s)
+    out: dict[str, Any] = {"job": job["id"], "state": job["state"], "label": job["label"]}
+    if job["state"] in ("done", "failed", "canceled"):
+        out["result" if job["state"] == "done" else "error"] = job["result"] if job["state"] == "done" else job["error"]
+    else:
+        out["hint"] = "Follow it with job_status; then subtitles_export with language, or render_start with captions_language."
+    return out
+
+
+def run_media_receive(svc: Services, a: MediaReceiveArgs) -> dict:
+    return family_events.receive_media(svc, path=a.path, url=a.url, name=a.name, project=a.project, create_project=a.create_project, preset=a.preset,
+                                       transcribe=a.transcribe, source=a.source)
 
 
 def run_short(svc: Services, a: ShortArgs) -> dict:
@@ -510,7 +585,9 @@ def run_freeze(svc: Services, a: FreezeArgs) -> dict:
 def run_presets(svc: Services, a: Empty) -> dict:
     return {"canvas_presets": PRESETS, "export_presets": runner.export_presets(), "transitions": list(TRANSITIONS),
             "effects": {k: {p: v[0] for p, v in spec.items()} for k, spec in fx.SPECS.items()},
-            "caption_styles": ["clean", "bold", "karaoke", "pop", "boxed", "minimal"], "operations": OP_NAMES, "operation_fields": op_reference().split("\n"), "commands": plan_mod.COMMAND_DOCS}
+            "caption_styles": ["clean", "bold", "karaoke", "pop", "boxed", "minimal"],
+            "multi_formats": [{"id": a, "width": w, "height": h} for a, (w, h) in formats_mod.ASPECT_SIZES.items()], "reframe_modes": list(formats_mod.REFRAMES),
+            "subtitle_languages": {c: n for c, (n, _) in subtitles_mod.LANGUAGES.items()}, "family": family_events.contract(), "operations": OP_NAMES, "operation_fields": op_reference().split("\n"), "commands": plan_mod.COMMAND_DOCS}
 
 
 def run_settings(svc: Services, a: SettingsArgs) -> dict:
@@ -568,7 +645,8 @@ TOOLS: list[Tool] = [
     Tool("plan_apply", "Apply a plan (optionally edited) as one undo step; exports in it are queued. Aplicar plan.\n"
          "Runs in the background. Keywords: apply plan, run.", PlanApplyArgs, _ann(False, True, False), run_plan_apply),
     Tool("render_start", "Export the project to a video file (MP4, HEVC, ProRes, GIF, MP3...). Exportar vídeo.\n"
-         "GPU encoder when available. Sinónimos: renderizar, sacar el vídeo, descargar.\nKeywords: render, export, mp4.", RenderArgs, _ann(False), run_render),
+         "GPU encoder when available. Sinónimos: renderizar, sacar el vídeo, descargar, varios formatos a la vez, 16:9 y 9:16, subtítulos traducidos.\n"
+         "Keywords: render, export, mp4, multi-format, aspect ratios, burned translated captions.", RenderArgs, _ann(False), run_render),
     Tool("job_status", "State and progress of a background job (or the active ones). Estado de tareas.\n"
          "Keywords: job, progress, render status.", JobArgs, _ann(True), run_job_status),
     Tool("job_cancel", "Cancel a background job (render, transcription, analysis). Cancelar tarea.\nKeywords: cancel, stop.",
@@ -579,6 +657,12 @@ TOOLS: list[Tool] = [
          "Use it to look at the edit. Keywords: frame, snapshot, preview image.", FrameArgs, _ann(False, False, True), run_frame),
     Tool("subtitles_export", "Export the captions as SRT, VTT or ASS (to a file or as text). Exportar subtítulos.\n"
          "Keywords: srt, vtt, subtitles file.", SubtitlesArgs, _ann(False, False, True), run_subtitles),
+    Tool("subtitles_translate", "Translate the project's subtitles with the local model (keeps the timing). Traducir subtítulos.\n"
+         "Background job; stored per language. Sinónimos: subtítulos en inglés, traducción, doblar subtítulos, subtítulos bilingües.\n"
+         "Keywords: translate subtitles, translation, srt, language, glossary, dual language.", SubtitlesTranslateArgs, _ann(False, False, True), run_subtitles_translate),
+    Tool("media_receive", "Receive a media file from another app (path or local URL), optionally into a project. Recibir medio.\n"
+         "Family import: used by sibling apps through the hub. Sinónimos: importar desde otra app, pasar vídeo, enviar a Lumiere.\n"
+         "Keywords: receive media, family, hub, import from app, send to editor.", MediaReceiveArgs, _ann(False, False, True), run_media_receive),
     Tool("clip_stabilize", "Stabilize a shaky clip (background job; the clip is pointed at the stable copy). Estabilizar.\n"
          "Keywords: stabilize, shaky, gimbal.", StabilizeArgs, _ann(False), run_stabilize),
     Tool("clip_freeze", "Insert a freeze frame of a clip at a time. Congelar imagen.\nKeywords: freeze frame, still.", FreezeArgs, _ann(False), run_freeze),

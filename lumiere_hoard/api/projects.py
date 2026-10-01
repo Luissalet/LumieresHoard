@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 from .. import commands, derive
+from .. import subtitles as subs
 from .. import plan as plan_mod
 from .. import projects as store
 from ..render import runner
@@ -68,6 +69,21 @@ class RenderBody(BaseModel):
     lufs: Any = "default"
     subtitles: bool = False
     mode: str = "render"
+    formats: list[Any] = Field(default_factory=list)
+    reframe: str = "auto"
+    captions_language: str = ""
+    captions_dual: bool = False
+
+
+class TranslateBody(BaseModel):
+    language: str
+    glossary: dict[str, str] = Field(default_factory=dict)
+    keep: list[str] = Field(default_factory=list)
+    force: bool = False
+
+
+class TranslationFixBody(BaseModel):
+    changes: list[dict[str, Any]]
 
 
 class FreezeBody(BaseModel):
@@ -184,9 +200,36 @@ def frame(request: Request, project_id: str, t: str = "0", width: int = 960):
 
 
 @router.get("/projects/{project_id}/subtitles.{fmt}")
-def subtitles(request: Request, project_id: str, fmt: str):
-    text, mime = runner.subtitles_export(services(request), project_id, fmt)
-    return Response(text, media_type=mime, headers={"Content-Disposition": f'attachment; filename="subtitulos.{fmt}"'})
+def subtitles(request: Request, project_id: str, fmt: str, language: str = "", dual: bool = False):
+    text, mime = runner.subtitles_export(services(request), project_id, fmt, language=language, dual=dual)
+    name = f"subtitulos{'.' + subs.resolve_language(language)[0] if language else ''}.{fmt}"
+    return Response(text, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.get("/projects/{project_id}/subtitles")
+def subtitle_status(request: Request, project_id: str):
+    """Translations of the project's captions: which languages, and whether each still matches the captions."""
+    return subs.status(services(request), project_id)
+
+
+@router.post("/projects/{project_id}/subtitles/translate")
+def subtitle_translate(request: Request, project_id: str, body: TranslateBody):
+    return subs.start_translation(services(request), project_id, body.language, glossary=body.glossary, keep=body.keep, force=body.force)
+
+
+@router.get("/projects/{project_id}/subtitles/{language}")
+def subtitle_show(request: Request, project_id: str, language: str, offset: int = 0, limit: int = 200):
+    return subs.show(services(request), project_id, language, offset, limit)
+
+
+@router.patch("/projects/{project_id}/subtitles/{language}")
+def subtitle_fix(request: Request, project_id: str, language: str, body: TranslationFixBody):
+    return subs.fix(services(request), project_id, language, body.changes)
+
+
+@router.delete("/projects/{project_id}/subtitles/{language}")
+def subtitle_delete(request: Request, project_id: str, language: str):
+    return subs.delete(services(request), project_id, language)
 
 
 @router.get("/projects/{project_id}/edl")
@@ -213,8 +256,9 @@ def render(request: Request, project_id: str, body: RenderBody):
     svc = services(request)
     start = None if body.start in (None, "") else (parse_time(body.start) if isinstance(body.start, str) else int(body.start))
     end = None if body.end in (None, "") else (parse_time(body.end) if isinstance(body.end, str) else int(body.end))
-    return svc.start_render(project_id, preset=body.preset, start=start, end=end, filename=body.filename, folder=body.folder, lufs=body.lufs,
-                            subtitles=body.subtitles, mode=body.mode)
+    return svc.start_render(project_id, preset=body.preset, start=start, end=end, filename=body.filename, folder=body.folder,
+                            lufs=body.lufs, subtitles=body.subtitles, mode=body.mode, formats=body.formats or None, reframe=body.reframe,
+                            captions_language=body.captions_language, captions_dual=body.captions_dual)
 
 
 @router.get("/projects/{project_id}/plans")

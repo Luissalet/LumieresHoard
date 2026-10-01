@@ -16,6 +16,8 @@ from . import analyze, derive
 from . import ffmpeg as ff
 from . import media as media_store
 from . import plan as plan_mod
+from . import family_events
+from . import subtitles as subtitles_mod
 from .config import Config
 from .db import Database
 from .errors import LumiereError
@@ -86,6 +88,7 @@ class Services:
         self.jobs.register("copy_cut", lambda ctx: runner.copy_cut_job(self, ctx))
         self.jobs.register("stabilize", lambda ctx: derive.stabilize_job(self, ctx))
         self.jobs.register("plan_apply", lambda ctx: plan_mod.apply_job(self, ctx))
+        self.jobs.register("translate_subtitles", lambda ctx: subtitles_mod.translate_job(self, ctx))
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -146,6 +149,16 @@ class Services:
                     pass
         if job["state"] == "failed":
             self.emit("lumiere.job.failed", {"id": job["id"], "kind": job["kind"], "error": clip(job["error"], 160)})
+            # the events other apps react to: a render or a transcription that did not finish
+            if job["kind"] in ("render", "copy_cut"):
+                self.emit("lumiere.render.failed", {"job": job["id"], "project": job.get("project_id"), "preset": job["params"].get("preset", "copy"),
+                                                    "error": clip(job["error"], 200)})
+            elif job["kind"] == "transcribe":
+                self.emit("lumiere.media.transcription_failed", {"job": job["id"], "id": job.get("media_id"), "error": clip(job["error"], 200)})
+        elif job["state"] == "done" and job["kind"] == "copy_cut":
+            r = job["result"]
+            self.emit("lumiere.render.done", {"id": r.get("id"), "project": job.get("project_id"), "preset": "copy", "path": r.get("path"),
+                                              "duration_ms": r.get("duration_ms"), "ok": True, "job": job["id"]})
 
     # ------------------------------------------------------------ settings
     def get_settings(self) -> dict[str, Any]:
@@ -200,17 +213,23 @@ class Services:
         except LumiereError as error:
             ffinfo = {"error": str(error)}
         return {"service": SERVICE, "version": __version__, "counts": self.counts(), "model": model, "ffmpeg": ffinfo,
-                "speech": speech.engine_status(), "family": family.status(), "uptime_s": int(time.time() - self.started_at),
+                "speech": speech.engine_status(), "family": {**family.status(), "emits": list(family_events.EMITS), "accepts": list(family_events.ACCEPTS)}, "uptime_s": int(time.time() - self.started_at),
                 "data_dir": str(self.config.data_dir) if self.config.data_dir_configured else "data", "schema": self.db.schema_version()}
 
     # ------------------------------------------------------------ renders
     def start_render(self, project_id: str, *, preset: str = "final", start: Any = None, end: Any = None, filename: str = "",
-                     folder: str = "", lufs: Any = "default", subtitles: bool = False, mode: str = "render") -> dict[str, Any]:
+                     folder: str = "", lufs: Any = "default", subtitles: bool = False, mode: str = "render", formats: Any = None,
+                     reframe: str = "auto", captions_language: str = "", captions_dual: bool = False) -> dict[str, Any]:
+        """Queue an export. ``formats`` ([16:9, 9:16, 1:1...]) renders the project once per canvas in this one job;
+        ``captions_language`` burns the translated captions (``captions_dual``: original and translation, two lines)."""
         from . import projects as project_store
+        from .render import formats as formats_mod
         from .util import parse_time
 
         project_store.doc(self, project_id)
         if mode == "copy":
+            if formats or captions_language:
+                raise LumiereError("A lossless cut cannot change the canvas or burn captions: use mode=render.", code="copy_not_possible")
             return self.jobs.submit("copy_cut", {"project": project_id, "filename": filename, "folder": folder}, label="Corte sin recodificar",
                                     project_id=project_id, dedupe=False)
         if preset not in runner.EXPORTS:
@@ -230,6 +249,25 @@ class Services:
                 raise LumiereError("lufs must be between -40 and -5, or null to leave the loudness alone.")
             params["lufs"] = None if lufs is None else float(lufs)
         label = f"Exportar {runner.EXPORTS[preset]['label']}"
+        if formats:
+            if runner.EXPORTS[preset].get("audio_only"):
+                raise LumiereError("Several formats are canvases of a picture: choose a video preset (not audio only).", code="bad_format")
+            parsed = formats_mod.parse_formats(list(formats), reframe or "auto")
+            params["formats"] = [{"width": f.width, "height": f.height, "reframe": f.reframe} for f in parsed]
+            label = f"Exportar {len(parsed)} formatos ({', '.join(f.label.split(' ·')[0] for f in parsed)})"
+        if captions_language:
+            from . import subtitles as subs
+
+            if runner.EXPORTS[preset].get("audio_only"):
+                raise LumiereError("Burned captions need a video preset.", code="bad_format")
+            code, name = subs.resolve_language(captions_language)
+            if not subs.source_cues(self, project_store.doc(self, project_id)):
+                raise LumiereError("There are no captions to translate: the project has no transcript on its captioned tracks. "
+                                   "Transcribe the media first (media_analyze: transcript).", code="no_transcript")
+            params["captions_language"] = code
+            if captions_dual:
+                params["captions_dual"] = True
+            label += f" · subtítulos {name}"
         return self.jobs.submit("render", params, label=label, project_id=project_id, dedupe=False)
 
     def base_url(self) -> str:

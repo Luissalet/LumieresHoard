@@ -112,7 +112,8 @@ def transcribe_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
                 pass
     ctx.check()
     media_store.put_analysis(svc, mid, "transcript", result, {"model": result["model"], "language": result["language"]})
-    svc.emit("lumiere.media.transcribed", {"id": mid, "words": len(result["words"]), "language": result["language"]})
+    svc.emit("lumiere.media.transcribed", {"id": mid, "name": clip(info["name"], 80), "words": len(result["words"]), "language": result["language"],
+                                           "duration_ms": info["duration_ms"], "model": result.get("model"), "job": ctx.id})
     return {"words": len(result["words"]), "language": result["language"], "model": result["model"], "device": result["device"]}
 
 
