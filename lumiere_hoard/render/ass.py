@@ -12,6 +12,8 @@ from typing import Any, Callable, Optional
 from ..timeline import Captions, Clip, Project, TextStyle
 
 WordsFor = Callable[[str], Optional[list[dict[str, Any]]]]  # media id -> [{t0, t1, text, id?}] in source ms
+# Ready-made caption cues (translations): (start ms, stop ms, lines). The first line is drawn normally, further lines smaller and highlighted.
+CueLines = list[tuple[int, int, list[str]]]
 
 
 @dataclass
@@ -152,8 +154,10 @@ def _style_line(name: str, font: str, size: int, primary: str, secondary: str, o
             f"{border_style},{outline_w:.1f},{shadow:.1f},{align},{ml},{mr},{mv},1")
 
 
-def build_ass(project: Project, words_for: WordsFor) -> tuple[str, dict[str, int]]:
-    """The ASS document for the whole timeline and counts {captions, titles}. Times are timeline ms."""
+def build_ass(project: Project, words_for: WordsFor, cues: Optional[CueLines] = None) -> tuple[str, dict[str, int]]:
+    """The ASS document for the whole timeline and counts {captions, titles}. Times are timeline ms. With ``cues`` (a
+    translation) the captions are those cues instead of the words heard: one static event per cue, so the timing is
+    exactly the one the cues carry."""
     W, H = project.canvas.width, project.canvas.height
     styles: list[str] = []
     events: list[str] = []
@@ -177,10 +181,21 @@ def build_ass(project: Project, words_for: WordsFor) -> tuple[str, dict[str, int
             outline_w = max(2, g["size"] * (0.09 if cap.style in ("bold", "pop") else 0.05))
             styles.append(_style_line("Cap", cap.font, g["size"], white, white, out, _ass_color("#000000", 0x80), cap.style != "clean", False, 1,
                                       outline_w, 2 if cap.style != "clean" else 1, g["align"], g["margin_h"], g["margin_h"], g["margin_v"]))
-        all_words = timeline_words(project, words_for)
-        lines = group_lines(all_words, cap)
+        all_words = timeline_words(project, words_for) if cues is None else []
+        lines = group_lines(all_words, cap) if cues is None else []
         multi = _multi_speaker(all_words)
         upper = cap.uppercase or cap.style in ("bold", "pop")
+        for a, b, parts in (cues or []):
+            a, b = max(0, int(a)), min(int(b), end)
+            if b - a < 60 or not parts:
+                continue
+            second = white if cap.style == "karaoke" else hl
+            shown = [(_clean(x).upper() if upper else _clean(x)) for x in parts if x.strip()]
+            if not shown:
+                continue
+            text = shown[0] + "".join(f"\\N{{\\fs{max(8, int(g['size'] * 0.78))}\\c{second}}}{x}" for x in shown[1:])
+            events.append(f"Dialogue: 0,{_ts(a)},{_ts(b)},Cap,,0,0,0,,{{\\fad(60,60)}}{text}")
+            counts["captions"] += 1
         for i, line in enumerate(lines):
             start = line[0].t0
             next_start = lines[i + 1][0].t0 if i + 1 < len(lines) else end
@@ -294,7 +309,21 @@ def _srt_ts(ms: int, sep: str = ",") -> str:
     return f"{h:02d}:{m:02d}:{s:02d}{sep}{f:03d}"
 
 
+def raw_cues(project: Project, words_for: WordsFor) -> list[tuple[int, int, str]]:
+    """The caption cues as heard (no upper-casing, no speaker labels): what a translation answers one by one."""
+    lines = group_lines(timeline_words(project, words_for), project.captions)
+    end = project.duration
+    cues = []
+    for i, line in enumerate(lines):
+        start = line[0].t0
+        nxt = lines[i + 1][0].t0 if i + 1 < len(lines) else end
+        stop = min(line[-1].t1 + 250, nxt, end)
+        cues.append((start, stop, " ".join(w.text for w in line)))
+    return cues
+
+
 def caption_cues(project: Project, words_for: WordsFor) -> list[tuple[int, int, str, str]]:
+    """(start, stop, text, speaker colour or '') with the caption settings applied: case and speaker names or colours."""
     cap = project.captions
     all_words = timeline_words(project, words_for)
     lines = group_lines(all_words, cap)
@@ -313,17 +342,24 @@ def caption_cues(project: Project, words_for: WordsFor) -> list[tuple[int, int, 
     return cues
 
 
-def build_srt(project: Project, words_for: WordsFor) -> str:
+def _cue_texts(project: Project, words_for: WordsFor, cues: Optional[CueLines]) -> list[tuple[int, int, str, str]]:
+    if cues is None:
+        return caption_cues(project, words_for)
+    up = project.captions.uppercase
+    return [(a, b, "\n".join((x.upper() if up else x) for x in parts), "") for a, b, parts in cues]
+
+
+def build_srt(project: Project, words_for: WordsFor, cues: Optional[CueLines] = None) -> str:
     out = []
-    for i, (a, b, text, color) in enumerate(caption_cues(project, words_for), start=1):
+    for i, (a, b, text, color) in enumerate(_cue_texts(project, words_for, cues), start=1):
         if color:
             text = f'<font color="{color}">{text}</font>'
         out.append(f"{i}\n{_srt_ts(a)} --> {_srt_ts(b)}\n{text}\n")
     return "\n".join(out)
 
 
-def build_vtt(project: Project, words_for: WordsFor) -> str:
+def build_vtt(project: Project, words_for: WordsFor, cues: Optional[CueLines] = None) -> str:
     out = ["WEBVTT", ""]
-    for a, b, text, _color in caption_cues(project, words_for):
+    for a, b, text, _color in _cue_texts(project, words_for, cues):
         out.append(f"{_srt_ts(a, '.')} --> {_srt_ts(b, '.')}\n{text}\n")
     return "\n".join(out)

@@ -93,6 +93,14 @@ export const api = {
   sequencePrepare: (id) => request("POST", `/api/projects/${e(id)}/sequence/prepare`),
   frameUrl: (id, t, width, stamp) => `/api/projects/${e(id)}/frame?t=${Math.round(t)}&width=${Math.round(width)}&v=${stamp ?? ""}`,
 
+  // translated subtitles
+  subtitles: (id) => request("GET", `/api/projects/${e(id)}/subtitles`),
+  subtitlesTranslate: (id, body) => request("POST", `/api/projects/${e(id)}/subtitles/translate`, { body }),
+  subtitlesShow: (id, language, params) => request("GET", `/api/projects/${e(id)}/subtitles/${e(language)}`, { params }),
+  subtitlesFix: (id, language, changes) => request("PATCH", `/api/projects/${e(id)}/subtitles/${e(language)}`, { body: { changes } }),
+  subtitlesDelete: (id, language) => request("DELETE", `/api/projects/${e(id)}/subtitles/${e(language)}`),
+  subtitlesUrl: (id, fmt, language, dual) => `/api/projects/${e(id)}/subtitles.${fmt}?language=${e(language || "")}&dual=${dual ? "true" : "false"}`,
+
   // plans
   plans: (id) => request("GET", `/api/projects/${e(id)}/plans`),
   planCreate: (id, body) => request("POST", `/api/projects/${e(id)}/plans`, { body }),

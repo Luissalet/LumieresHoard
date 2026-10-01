@@ -9,6 +9,7 @@ import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -16,11 +17,13 @@ from .. import ffmpeg as ff
 from .. import media as media_store
 from .. import projects as project_store
 from ..analysis import audio as audio_an
+from .. import subtitles as subtitles_mod
 from ..errors import LumiereError
 from ..ops import delete_range
 from ..timeline import Project, clone, validate
 from ..util import clip, dumps, ms_to_tc, new_id, safe_filename
 from . import compiler as C
+from . import formats as F
 from . import sequences
 from .ass import build_ass, build_srt, build_vtt
 
@@ -193,7 +196,56 @@ def trimmed(project: Project, start: Optional[int], end: Optional[int]) -> Proje
     return p
 
 
+@dataclass
+class Target:
+    """One file a render job writes: the project shaped for one canvas (the project itself for a plain export)."""
+
+    project: Project
+    key: str = ""             # 16x9, 9x16... empty for a single plain export
+    label: str = ""
+    width: int = 0            # output size
+    height: int = 0
+    notes: Optional[dict[str, Any]] = None
+
+
+def render_event(info: dict[str, Any], job_id: str) -> dict[str, Any]:
+    """The family event that says a render is ready: where it is and how it checked out."""
+    qc = info.get("qc") or {}
+    event = {"id": info["id"], "project": info["project"], "preset": info["preset"], "path": info["path"], "duration_ms": info["duration_ms"],
+             "width": info["width"], "height": info["height"], "bytes": info["bytes"], "seconds": info["seconds"], "ok": qc.get("ok", True),
+             "problems": (qc.get("problems") or [])[:3], "job": job_id}
+    if qc.get("integrated_lufs") is not None:
+        event["lufs"] = qc["integrated_lufs"]
+    if info.get("variant"):
+        event["variant"] = info["variant"]
+    return event
+
+
+def _targets(svc: "Services", p: Project, spec: dict[str, Any], params: dict[str, Any], audio_only: bool, cue_lines: Optional[list]) -> list[Target]:
+    """What to render: the project once, or one adapted copy per requested canvas."""
+    def shown(project: Project) -> Project:
+        if cue_lines is not None and not project.captions.enabled:
+            project = project.model_copy(update={"captions": project.captions.model_copy(update={"enabled": True})})
+        return project
+
+    raw = params.get("formats")
+    if not raw:
+        W, H = _out_size(p.canvas.width, p.canvas.height, spec)
+        return [Target(shown(p), width=W, height=H)]
+    if audio_only or spec["container"] in ("mp3", "wav"):
+        raise LumiereError("Several formats are canvases of a picture: choose a video preset (not audio only).", code="bad_format")
+    look = project_store.media_lookup(svc)
+    out = []
+    for fmt in F.parse_formats(raw, params.get("reframe") or "auto"):
+        v, notes = F.variant_project(svc, p, fmt, look)
+        W, H = _out_size(fmt.width, fmt.height, spec)
+        out.append(Target(shown(v), fmt.key, fmt.label, W, H, notes))
+    return out
+
+
 def render_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
+    """One export: the sound masters, the sound pass and the loudness once, then the picture and the mux for every output
+    (one for a plain export, one per canvas with ``formats``). The project is never changed: outputs are made from copies."""
     params = ctx.params
     pid = params["project"]
     spec = dict(EXPORTS[params.get("preset", "final")])
@@ -208,15 +260,27 @@ def render_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
     total = p.duration
     if total < 40:
         raise LumiereError("The timeline is empty.", code="empty_timeline")
+    audio_only = bool(spec.get("audio_only"))
+    # translated captions: the translation is made first when it is missing or out of date (the model is needed then)
+    lang = params.get("captions_language") or ""
+    cue_lines = None
+    if lang:
+        if audio_only:
+            raise LumiereError("Burned captions need a video preset.", code="bad_format")
+        if not subtitles_mod.is_fresh(svc, pid, lang, p0):
+            ctx.progress(0.01, "traduciendo subtítulos", force=True)
+            subtitles_mod.translate(svc, pid, lang, progress=lambda x, d: ctx.progress(0.01 + 0.1 * x, d, force=True), check=ctx.check)
+        cue_lines = subtitles_mod.shift_cues(subtitles_mod.translated_cues(svc, pid, lang, dual=bool(params.get("captions_dual")), p=p0),
+                                             int(params.get("start") or 0), total)
+    targets = _targets(svc, p, spec, params, audio_only, cue_lines)
+    multi = bool(params.get("formats"))
     tools = svc.tools()
-    rid = params.get("render_id") or new_id("rnd")
-    work = svc.config.work_dir / rid
+    rid0 = params.get("render_id") or new_id("rnd")
+    work = svc.config.work_dir / rid0
     work.mkdir(parents=True, exist_ok=True)
     rc = RenderContext(svc, p, work, use_proxies=bool(spec.get("proxies")))
-    W, H = _out_size(p.canvas.width, p.canvas.height, spec)
     fps = p.canvas.fps
     fps_expr = ff.fps_fraction(fps)
-    audio_only = bool(spec.get("audio_only"))
     chosen = _strip_media_ext(params.get("filename") or "")
     name = safe_filename(chosen or project_store.summary(svc, svc.db.one("SELECT * FROM projects WHERE id = ?", (pid,)))["name"])
     ext = {"mp4": ".mp4", "mov": ".mov", "gif": ".gif", "mp3": ".mp3", "wav": ".wav"}[spec["container"]]
@@ -224,137 +288,175 @@ def render_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     # a name the person chose is used as given; automatic names say which version they are (-preview, -web...)
     tag = "" if chosen or spec["container"] != "mp4" or params.get("preset") == "final" else "-" + params.get("preset", "")
-    out_path = out_dir / f"{name}{tag}{ext}"
-    if out_path.exists() and not params.get("overwrite"):
-        stem = out_path.stem
-        n = 2
-        while out_path.exists():
-            out_path = out_dir / f"{stem} ({n}){ext}"
-            n += 1
     t_start = time.time()
+    outputs: list[dict[str, Any]] = []
     try:
         # 0. nested sequences (each one rendered once, then read like a media)
         rc.prepare(ctx)
-        # 1. sound masters
+        # 1. sound: masters, the sound pass and the loudness, once for every output
         ag = C.audio_graph(p, total, rc.media, rc.master_name)
         for i, (mid, stream) in enumerate(ag.sources):
             ctx.check()
-            ctx.progress(0.02 + 0.08 * i / max(1, len(ag.sources)), f"audio {i + 1}/{len(ag.sources)}", force=True)
+            ctx.progress(0.12 + 0.04 * i / max(1, len(ag.sources)), f"audio {i + 1}/{len(ag.sources)}", force=True)
             if not mid.startswith("prj_"):
                 media_store.audio_master(svc, mid, stream, handle=ctx.handle())
-        # 2. picture
-        chunk_files: list[str] = []
-        if not audio_only:
-            ass, counts = build_ass(p, rc.words_for)
-            ass_name = None
-            if counts["captions"] or counts["titles"]:
-                (work / "subs.ass").write_text(ass, encoding="utf-8")
-                ass_name = "subs.ass"
-            out = C.Output(W, H, fps, fps_expr, use_proxies=rc.use_proxies, factor=W / p.canvas.width)
-            hwdec = svc.hwdec_enabled() and not rc.use_proxies
-            cx = C.ChainCtx(out, rc.lut_name, lambda c: None, hwdec=hwdec)
-            plan = C.plan_chunks(p, total, fps)
-            vargs, encoder = _video_args(svc, spec.get("codec", "h264"), spec.get("quality", "high"), fps, W, H)
-            frames_total = sum(b - a for a, b in plan)
-            done_frames = [0]
-            progress_lock = threading.Lock()
-            chunk_ext = ".mov" if spec.get("codec") == "prores" else ".mp4"
-
-            def run_chunk(i: int, f0: int, f1: int) -> str:
-                ctx.check()
-                g = C.chunk_graph(p, i, f0, f1, out, rc.media, cx, ass_name)
-                gfile = f"graph_{i:04d}.txt"
-                (work / gfile).write_text(g.graph, encoding="utf-8")
-                fname = f"chunk_{i:04d}{chunk_ext}"
-                args = [a for inp in g.inputs for a in inp] + _script_flag(tools, gfile) + [
-                    "-map", f"[{g.out_label}]", "-frames:v", str(f1 - f0), "-r", fps_expr, *vargs, "-an"]
-                if chunk_ext == ".mp4":
-                    args += ["-video_track_timescale", "90000"]
-                args.append(fname)
-                last = [0.0]
-
-                def prog(x: float) -> None:
-                    with progress_lock:
-                        delta = x - last[0]
-                        last[0] = x
-                        done_frames[0] += delta * (f1 - f0)
-                        ctx.progress(0.10 + 0.75 * done_frames[0] / frames_total, f"picture {int(done_frames[0])}/{frames_total} frames")
-
-                ff.run(tools, args, duration_ms=int((f1 - f0) * 1000 / fps), progress=prog, handle=ctx.handle(), cwd=work)
-                return fname
-
-            workers = 1 if len(plan) == 1 else svc.config.render_workers
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(run_chunk, i, a, b): i for i, (a, b) in enumerate(plan)}
-                results: dict[int, str] = {}
-                try:
-                    for fut in as_completed(futures):
-                        results[futures[fut]] = fut.result()
-                except BaseException:
-                    ctx.cancelled = True
-                    for h in ctx.handles:
-                        h.cancel()
-                    raise
-            chunk_files = [results[i] for i in range(len(plan))]
-            (work / "chunks.txt").write_text("".join(f"file '{f}'\n" for f in chunk_files), encoding="utf-8")
-        # 3. sound pass
         ctx.check()
-        ctx.progress(0.86, "sound", force=True)
+        ctx.progress(0.16, "sound", force=True)
         (work / "audio_graph.txt").write_text(ag.graph, encoding="utf-8")
         audio_wav = work / "audio.wav"
         ff.run(tools, _script_flag(tools, str(work / "audio_graph.txt")) + ["-map", "[aout]", "-c:a", "pcm_s16le", "-ar", "48000", str(audio_wav)],
-               duration_ms=total, progress=lambda x: ctx.progress(0.86 + 0.06 * x, "sound"), handle=ctx.handle(), cwd=svc.config.cache_dir)
-        # 4. loudness
+               duration_ms=total, progress=lambda x: ctx.progress(0.16 + 0.05 * x, "sound"), handle=ctx.handle(), cwd=svc.config.cache_dir)
         af: list[str] = []
         loud_info: dict[str, Any] = {}
         target = spec.get("lufs")
         if target is not None and ag.clips:
-            ctx.progress(0.92, "loudness", force=True)
+            ctx.progress(0.21, "loudness", force=True)
             m = audio_an.loudnorm_measure(tools, audio_wav, float(target), handle=ctx.handle())
             if m and m.get("input_i") not in (None, "-inf") and float(m["input_i"]) > -70:
                 af = ["-af", (f"loudnorm=I={target}:TP=-1.5:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}:"
                               f"measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true,aresample=48000")]
                 loud_info = {"measured_lufs": float(m["input_i"]), "target_lufs": target}
-        # 5. mux
-        ctx.check()
-        ctx.progress(0.95, "mux", force=True)
-        tmp_out = work / f"out{ext}"
-        if audio_only:
-            acodec = ["-c:a", "libmp3lame", "-b:a", spec["abr"]] if spec["container"] == "mp3" else ["-c:a", "pcm_s16le"]
-            ff.run(tools, ["-i", str(audio_wav), *af, *acodec, str(tmp_out)], duration_ms=total, handle=ctx.handle())
-        elif spec["container"] == "gif":
-            mute = work / f"video{'.mp4'}"
-            ff.run(tools, ["-f", "concat", "-safe", "0", "-i", "chunks.txt", "-c", "copy", str(mute)], cwd=work, handle=ctx.handle())
-            gfps = spec.get("gif_fps", 15)
-            ff.run(tools, ["-i", str(mute), "-vf", f"fps={gfps},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
-                           "-loop", "0", str(tmp_out)], handle=ctx.handle())
-        else:
-            acodec = ["-c:a", "pcm_s16le"] if spec["container"] == "mov" else ["-c:a", "aac", "-b:a", spec.get("abr") or "192k"]
-            extra = ["-movflags", "+faststart"] if spec["container"] == "mp4" else []
-            ff.run(tools, ["-f", "concat", "-safe", "0", "-i", "chunks.txt", "-i", str(audio_wav), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
-                           *af, *acodec, "-t", ff.seconds(total), *extra, str(tmp_out)], duration_ms=total, cwd=work, handle=ctx.handle(),
-                   progress=lambda x: ctx.progress(0.95 + 0.04 * x, "mux"))
-        shutil.move(str(tmp_out), out_path)
-        # 6. check
-        qc = quality_check(svc, out_path, total, W if not audio_only else 0, H if not audio_only else 0, audio_only=audio_only,
-                           gif=spec["container"] == "gif")
-        qc.update(loud_info)
-        info = {"id": rid, "project": pid, "path": str(out_path), "bytes": out_path.stat().st_size, "duration_ms": total,
-                "duration": ms_to_tc(total), "width": W if not audio_only else 0, "height": H if not audio_only else 0, "preset": params.get("preset", "final"),
-                "encoder": None if audio_only else encoder, "seconds": round(time.time() - t_start, 1), "qc": qc,
-                "url": f"/api/renders/{rid}/file"}
-        svc.db.execute("INSERT INTO renders(id, project_id, job_id, preset, mode, path, bytes, duration_ms, width, height, qc, created_ts) "
-                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                       (rid, pid, ctx.id, info["preset"], "final", str(out_path), info["bytes"], total, info["width"], info["height"], dumps(qc), time.time()))
-        if params.get("subtitles") and p.captions.enabled:
-            srt = out_path.with_suffix(".srt")
-            srt.write_text(build_srt(p, rc.words_for), encoding="utf-8")
-            info["subtitles"] = str(srt)
-        svc.emit("lumiere.render.done", {"id": rid, "project": pid, "preset": info["preset"], "seconds": info["seconds"], "ok": qc.get("ok", True)})
-        return info
+        # 2. every output: picture and mux
+        span = 0.77
+        for n, tg in enumerate(targets):
+            lo = 0.22 + span * n / len(targets)
+            hi = 0.22 + span * (n + 1) / len(targets)
+            rid = rid0 if n == 0 else new_id("rnd")
+            suffix = f"-{tg.key}" if tg.key else ""
+            out_path = out_dir / f"{name}{tag}{suffix}{ext}"
+            if out_path.exists() and not params.get("overwrite"):
+                stem = out_path.stem
+                k = 2
+                while out_path.exists():
+                    out_path = out_dir / f"{stem} ({k}){ext}"
+                    k += 1
+            twork = work / tg.key if multi else work
+            twork.mkdir(parents=True, exist_ok=True)
+            prefix = f"{tg.label} ({n + 1}/{len(targets)}) · " if multi else ""
+            info = _render_target(svc, ctx, params, spec, tg, rid, out_path, twork, audio_wav, af, loud_info, total, audio_only, lo, hi, prefix, cue_lines,
+                                  RenderContext(svc, tg.project, twork, use_proxies=bool(spec.get("proxies"))), tools, fps, fps_expr, ext, t_start)
+            outputs.append(info)
+            svc.emit("lumiere.render.done", render_event(info, ctx.id))
+        first = outputs[0]
+        if not multi:
+            return first
+        return {**first, "outputs": outputs, "formats": [o["variant"] for o in outputs], "seconds": round(time.time() - t_start, 1),
+                "ok": all(o["qc"].get("ok", True) for o in outputs)}
     finally:
         if not params.get("keep_work"):
             shutil.rmtree(work, ignore_errors=True)
+
+
+def _render_target(svc: "Services", ctx: "JobCtx", params: dict[str, Any], spec: dict[str, Any], tg: Target, rid: str, out_path: Path, work: Path,
+                   audio_wav: Path, af: list[str], loud_info: dict[str, Any], total: int, audio_only: bool, lo: float, hi: float, prefix: str,
+                   cue_lines: Optional[list], rc: RenderContext, tools: ff.Tools, fps: float, fps_expr: str, ext: str, t_start: float) -> dict[str, Any]:
+    """The picture chunks (in parallel), the mux and the quality check of one output."""
+    pid = params["project"]
+    p = tg.project
+    W, H = tg.width, tg.height
+    at = lambda x: lo + (hi - lo) * x  # noqa: E731  progress inside this output
+    encoder = None
+    chunk_files: list[str] = []
+    ctx.check()
+    if not audio_only:
+        rc.prepare(ctx)  # nested sequences: made once (cached), read like media by every output
+        ass, counts = build_ass(p, rc.words_for, cue_lines)
+        ass_name = None
+        if counts["captions"] or counts["titles"]:
+            (work / "subs.ass").write_text(ass, encoding="utf-8")
+            ass_name = "subs.ass"
+        out = C.Output(W, H, fps, fps_expr, use_proxies=rc.use_proxies, factor=W / p.canvas.width)
+        hwdec = svc.hwdec_enabled() and not rc.use_proxies
+        cx = C.ChainCtx(out, rc.lut_name, lambda c: None, hwdec=hwdec)
+        plan = C.plan_chunks(p, total, fps)
+        vargs, encoder = _video_args(svc, spec.get("codec", "h264"), spec.get("quality", "high"), fps, W, H)
+        frames_total = sum(b - a for a, b in plan)
+        done_frames = [0]
+        progress_lock = threading.Lock()
+        chunk_ext = ".mov" if spec.get("codec") == "prores" else ".mp4"
+
+        def run_chunk(i: int, f0: int, f1: int) -> str:
+            ctx.check()
+            g = C.chunk_graph(p, i, f0, f1, out, rc.media, cx, ass_name)
+            gfile = f"graph_{i:04d}.txt"
+            (work / gfile).write_text(g.graph, encoding="utf-8")
+            fname = f"chunk_{i:04d}{chunk_ext}"
+            args = [a for inp in g.inputs for a in inp] + _script_flag(tools, gfile) + [
+                "-map", f"[{g.out_label}]", "-frames:v", str(f1 - f0), "-r", fps_expr, *vargs, "-an"]
+            if chunk_ext == ".mp4":
+                args += ["-video_track_timescale", "90000"]
+            args.append(fname)
+            last = [0.0]
+
+            def prog(x: float) -> None:
+                with progress_lock:
+                    delta = x - last[0]
+                    last[0] = x
+                    done_frames[0] += delta * (f1 - f0)
+                    ctx.progress(at(0.9 * done_frames[0] / frames_total), f"{prefix}picture {int(done_frames[0])}/{frames_total} frames")
+
+            ff.run(tools, args, duration_ms=int((f1 - f0) * 1000 / fps), progress=prog, handle=ctx.handle(), cwd=work)
+            return fname
+
+        workers = 1 if len(plan) == 1 else svc.config.render_workers
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(run_chunk, i, a, b): i for i, (a, b) in enumerate(plan)}
+            results: dict[int, str] = {}
+            try:
+                for fut in as_completed(futures):
+                    results[futures[fut]] = fut.result()
+            except BaseException:
+                ctx.cancelled = True
+                for h in ctx.handles:
+                    h.cancel()
+                raise
+        chunk_files = [results[i] for i in range(len(plan))]
+        (work / "chunks.txt").write_text("".join(f"file '{f}'\n" for f in chunk_files), encoding="utf-8")
+    # mux
+    ctx.check()
+    ctx.progress(at(0.92), f"{prefix}mux", force=True)
+    tmp_out = work / f"out{ext}"
+    if audio_only:
+        acodec = ["-c:a", "libmp3lame", "-b:a", spec["abr"]] if spec["container"] == "mp3" else ["-c:a", "pcm_s16le"]
+        ff.run(tools, ["-i", str(audio_wav), *af, *acodec, str(tmp_out)], duration_ms=total, handle=ctx.handle())
+    elif spec["container"] == "gif":
+        mute = work / f"video{'.mp4'}"
+        ff.run(tools, ["-f", "concat", "-safe", "0", "-i", "chunks.txt", "-c", "copy", str(mute)], cwd=work, handle=ctx.handle())
+        gfps = spec.get("gif_fps", 15)
+        ff.run(tools, ["-i", str(mute), "-vf", f"fps={gfps},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
+                       "-loop", "0", str(tmp_out)], handle=ctx.handle())
+    else:
+        acodec = ["-c:a", "pcm_s16le"] if spec["container"] == "mov" else ["-c:a", "aac", "-b:a", spec.get("abr") or "192k"]
+        extra = ["-movflags", "+faststart"] if spec["container"] == "mp4" else []
+        ff.run(tools, ["-f", "concat", "-safe", "0", "-i", "chunks.txt", "-i", str(audio_wav), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+                       *af, *acodec, "-t", ff.seconds(total), *extra, str(tmp_out)], duration_ms=total, cwd=work, handle=ctx.handle(),
+               progress=lambda x: ctx.progress(at(0.92 + 0.07 * x), f"{prefix}mux"))
+    shutil.move(str(tmp_out), out_path)
+    # check
+    qc = quality_check(svc, out_path, total, W if not audio_only else 0, H if not audio_only else 0, audio_only=audio_only,
+                       gif=spec["container"] == "gif")
+    qc.update(loud_info)
+    info = {"id": rid, "project": pid, "path": str(out_path), "bytes": out_path.stat().st_size, "duration_ms": total,
+            "duration": ms_to_tc(total), "width": W if not audio_only else 0, "height": H if not audio_only else 0, "preset": params.get("preset", "final"),
+            "encoder": None if audio_only else encoder, "seconds": round(time.time() - t_start, 1), "qc": qc,
+            "url": f"/api/renders/{rid}/file"}
+    if tg.key:
+        info.update({"variant": tg.key, "format": tg.label, "reframe": (tg.notes or {}).get("reframe"), "framing": tg.notes})
+    svc.db.execute("INSERT INTO renders(id, project_id, job_id, preset, mode, path, bytes, duration_ms, width, height, qc, created_ts, variant) "
+                   "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                   (rid, pid, ctx.id, info["preset"], "final", str(out_path), info["bytes"], total, info["width"], info["height"], dumps(qc), time.time(),
+                    tg.key))
+    lang = params.get("captions_language") or ""
+    if params.get("subtitles") and p.captions.enabled and not lang:
+        srt = out_path.with_suffix(".srt")
+        srt.write_text(build_srt(p, rc.words_for), encoding="utf-8")
+        info["subtitles"] = str(srt)
+    if params.get("subtitles") and lang and cue_lines is not None:
+        code = subtitles_mod.resolve_language(lang)[0]
+        srt = out_path.with_suffix(f".{code}.srt")
+        srt.write_text(build_srt(p, rc.words_for, cue_lines), encoding="utf-8")
+        info["subtitles"] = str(srt)
+    return info
 
 
 def quality_check(svc: "Services", path: Path, expect_ms: int, W: int, H: int, *, audio_only: bool = False, gif: bool = False) -> dict[str, Any]:
@@ -513,21 +615,25 @@ def renders_list(svc: "Services", project_id: Optional[str] = None, limit: int =
     for r in svc.db.query(sql, args):
         out.append({"id": r["id"], "project": r["project_id"], "preset": r["preset"], "mode": r["mode"], "path": r["path"], "bytes": r["bytes"],
                     "duration_ms": r["duration_ms"], "width": r["width"], "height": r["height"], "qc": json.loads(r["qc"] or "{}"),
-                    "exists": Path(r["path"]).exists(), "created_ts": r["created_ts"], "url": f"/api/renders/{r['id']}/file"})
+                    "exists": Path(r["path"]).exists(), "created_ts": r["created_ts"], "url": f"/api/renders/{r['id']}/file",
+                    "variant": r["variant"] or None, "job": r["job_id"]})
     return out
 
 
-def subtitles_export(svc: "Services", project_id: str, fmt: str) -> tuple[str, str]:
+def subtitles_export(svc: "Services", project_id: str, fmt: str, language: str = "", dual: bool = False) -> tuple[str, str]:
+    """The captions as srt, vtt or ass. With ``language``: the stored translation of that language (``dual``: the original
+    line and its translation under it); the timing of every cue is the original's."""
     p = project_store.doc(svc, project_id)
     rc = RenderContext(svc, p, svc.config.work_dir)
+    cues = subtitles_mod.translated_cues(svc, project_id, language, dual=dual, p=p) if language else None
     if fmt == "srt":
-        return build_srt(p, rc.words_for), "application/x-subrip"
+        return build_srt(p, rc.words_for, cues), "application/x-subrip"
     if fmt == "vtt":
-        return build_vtt(p, rc.words_for), "text/vtt"
+        return build_vtt(p, rc.words_for, cues), "text/vtt"
     if fmt == "ass":
         cap = p.captions.model_copy()
         p.captions = cap.model_copy(update={"enabled": True})
-        return build_ass(p, rc.words_for)[0], "text/plain"
+        return build_ass(p, rc.words_for, cues)[0], "text/plain"
     raise LumiereError("Subtitles are srt, vtt or ass.")
 
 

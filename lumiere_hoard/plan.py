@@ -19,6 +19,7 @@ from . import analyze
 from . import commands
 from . import media as media_store
 from . import projects as project_store
+from . import subtitles as subtitles_mod
 from .errors import LumiereError, NotFound
 from .ops import OP_NAMES, PRESETS, apply_ops, parse_op
 from .render.runner import EXPORTS
@@ -92,7 +93,9 @@ SYSTEM = """You are the edit planner of a local video editor. Turn the person's 
 Answer with JSON only: {"steps": [{"kind": "op"|"command"|"export", "name": "...", "args": {...}, "explain": "one short sentence in the person's language"}], "notes": "what you could not do or assumed"}.
 - Use only the ids in the context. Never invent media, clips or tracks. Times in milliseconds or '1:23.5'.
 - Prefer commands for smart work (silences, fillers, captions, reframe, beat sync); ops for precise changes.
-- export steps: name = preset (""" + ", ".join(EXPORTS) + """), args {start?, end?}. Only export when asked.
+- export steps: name = preset (""" + ", ".join(EXPORTS) + """), args {start?, end?, formats?: ['16:9','9:16','1:1'] (one file per canvas in ONE export, the project is not changed; use it instead of
+  a reframe step when the person wants several shapes), reframe?: 'auto'|'center'|'blur', captions_language?: 'en' (burn the subtitles translated into
+  that language), captions_dual?: true (original and translation)}. Only export when asked.
 - Keep the order that makes sense: cuts before captions, reframe before titles, export last.
 - If something cannot be done, leave it out and say so in notes. Do not explain beyond that."""
 
@@ -218,8 +221,24 @@ def rules_plan(svc: "Services", project_id: str, instruction: str) -> PlanOut:
         add("command", "remove_fillers", {}, "Quitar las muletillas", "fillers")
     if re.search(r"escena|scene", text):
         add("command", "split_scenes", {"mode": "markers" if re.search(r"marca|marker", text) else "split"}, "Cortar en los cambios de escena", "scenes")
+    # several shapes in ONE export (copies of the project; nothing is reframed in the project itself)
+    formats: Optional[list[str]] = None
+    if re.search(r"varios formatos|todos los formatos|multi ?formato|distintos formatos|diferentes formatos|several formats|all (?:the )?formats|"
+                 r"(?:16[:x/]9|9[:x/]16|1[:x/]1|4[:x/]5)\s*(?:,|y|and|e|\+)\s*(?:16[:x/]9|9[:x/]16|1[:x/]1|4[:x/]5)", text):
+        named = [a for a, pat in (("16:9", r"16[:x/]9|horizontal|youtube"), ("9:16", r"9[:x/]16|vertical|reels?|tiktok|shorts?"),
+                                  ("1:1", r"1[:x/]1|cuadrad|square"), ("4:5", r"4[:x/]5")) if re.search(pat, text)]
+        formats = named if len(named) >= 2 else ["16:9", "9:16", "1:1"]
+    # subtitles translated into a language, burned into the export
+    language: Optional[str] = None
+    if re.search(r"traduc|translat|subtitul\w*\s+(?:en|al|in|to|into)\s|subtitles?\s+(?:in|into)\s|bilingu|dos idiomas|two languages", text):
+        for code, (name, aliases) in subtitles_mod.LANGUAGES.items():
+            if any(re.search(rf"\b{re.escape(_fold(word))}\b", text) for word in (name, *aliases)):
+                language = code
+                break
     aspect = None
-    if re.search(r"vertical|9[:x/]16|reels?|tiktok|shorts?|historia|stories", text):
+    if formats:
+        pass
+    elif re.search(r"vertical|9[:x/]16|reels?|tiktok|shorts?|historia|stories", text):
         aspect = "9:16"
     elif re.search(r"cuadrad|1[:x/]1|square", text):
         aspect = "1:1"
@@ -292,14 +311,28 @@ def rules_plan(svc: "Services", project_id: str, instruction: str) -> PlanOut:
                 steps.append(Step(kind="op", name="track_set", args={"track": music_track.id, "props": {"duck": True, "volume_db": -8}},
                                   explain="La música baja cuando se habla"))
     export = None
-    if re.search(r"exporta|renderiz|render|descarg|saca el video|export", text):
+    if re.search(r"exporta|renderiz|render|descarg|saca el video|export", text) or formats or language:
         export = "final"
         for word, preset in (("gif", "gif"), ("mp3", "audio_mp3"), ("wav", "audio_wav"), ("prores", "master"), ("hevc", "hevc"), ("h265", "hevc"),
                              ("ligero", "web"), ("whatsapp", "web"), ("720", "web"), ("preview", "preview"), ("previa", "preview")):
             if word in text:
                 export = preset
                 break
-        add("export", export, {}, f"Exportar ({EXPORTS[export]['label']})", "export")
+        args: dict[str, Any] = {}
+        explain = f"Exportar ({EXPORTS[export]['label']})"
+        if formats and not EXPORTS[export].get("audio_only"):
+            args["formats"] = formats
+            if re.search(r"desenfoc|borros|blur|sin recortar|entero|completo", text):
+                args["reframe"] = "blur"
+            elif re.search(r"centr", text):
+                args["reframe"] = "center"
+            explain += f" en {', '.join(formats)} a la vez"
+        if language and not EXPORTS[export].get("audio_only"):
+            args["captions_language"] = language
+            if re.search(r"bilingu|dual|dos idiomas|doble|both languages|two languages", text):
+                args["captions_dual"] = True
+            explain += f" con subtítulos traducidos ({language})"
+        add("export", export, args, explain, "export")
     notes = "" if steps else "No he entendido ninguna acción concreta. Prueba con frases como «quita los silencios», «hazlo vertical», «pon subtítulos», «recorta los primeros 5 segundos» o «exporta en 720p»."
     return PlanOut(steps=steps, notes=notes)
 

@@ -101,6 +101,18 @@ MIGRATIONS: list[str] = [
       applied_ts REAL
     );
     """,
+    # 2: translated subtitles per project and language; which output of a multi-format export a render is
+    """
+    CREATE TABLE translations (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      language TEXT NOT NULL,
+      signature TEXT NOT NULL,           -- fingerprint of the source cues (text and timing) this translation answers
+      data TEXT NOT NULL,
+      updated_ts REAL NOT NULL,
+      PRIMARY KEY (project_id, language)
+    );
+    ALTER TABLE renders ADD COLUMN variant TEXT NOT NULL DEFAULT '';
+    """,
 ]
 
 
