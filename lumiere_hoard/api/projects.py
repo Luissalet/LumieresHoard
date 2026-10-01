@@ -1,0 +1,242 @@
+"""/api/projects — timeline documents, edits, undo, smart commands, plans, frames, subtitles and renders."""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse, PlainTextResponse, Response
+from pydantic import BaseModel, Field
+
+from .. import commands, derive
+from .. import plan as plan_mod
+from .. import projects as store
+from ..render import runner
+from ..util import parse_time
+from .deps import services, tool
+
+router = APIRouter(prefix="/api")
+
+
+class CreateBody(BaseModel):
+    name: str = Field("Proyecto", max_length=120)
+    preset: Optional[str] = None
+    media: list[str] = Field(default_factory=list)
+    from_project: Optional[str] = None
+    template: bool = False
+
+
+class PatchBody(BaseModel):
+    name: Optional[str] = None
+    template: Optional[bool] = None
+
+
+class EditBody(BaseModel):
+    ops: list[dict[str, Any]]
+    label: str = ""
+    base_rev: Optional[int] = None
+
+
+class CommandBody(BaseModel):
+    command: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    preview: bool = False
+
+
+class TextCutBody(BaseModel):
+    media: str
+    word_ids: list[str] = Field(default_factory=list)
+    phrase: str = ""
+    keep: bool = False
+
+
+class PlanBody(BaseModel):
+    instruction: str
+    use_model: bool = True
+
+
+class PlanStepsBody(BaseModel):
+    steps: list[dict[str, Any]]
+
+
+class RenderBody(BaseModel):
+    preset: str = "final"
+    start: Any = None
+    end: Any = None
+    filename: str = ""
+    folder: str = ""
+    lufs: Any = "default"
+    subtitles: bool = False
+    mode: str = "render"
+
+
+class FreezeBody(BaseModel):
+    clip: str
+    at: Any
+    length: Any = 2000
+
+
+class StabilizeBody(BaseModel):
+    clip: str
+    smoothing: int = 15
+
+
+@router.get("/projects")
+def list_projects(request: Request, templates: Optional[bool] = None):
+    return {"projects": store.list_projects(services(request), templates)}
+
+
+@router.post("/projects")
+def create(request: Request, body: CreateBody):
+    return store.create(services(request), body.name, preset=body.preset, media=body.media or None, template=body.template,
+                        from_project=body.from_project)
+
+
+@router.get("/projects/{project_id}")
+def get(request: Request, project_id: str):
+    return store.view(services(request), project_id)
+
+
+@router.patch("/projects/{project_id}")
+def patch(request: Request, project_id: str, body: PatchBody):
+    svc = services(request)
+    if body.name is not None:
+        store.rename(svc, project_id, body.name)
+    if body.template is not None:
+        store.set_template(svc, project_id, body.template)
+    return store.view(svc, project_id)
+
+
+@router.delete("/projects/{project_id}")
+def delete(request: Request, project_id: str):
+    return store.delete(services(request), project_id)
+
+
+@router.post("/projects/{project_id}/edit")
+def edit(request: Request, project_id: str, body: EditBody):
+    svc = services(request)
+    res = store.edit(svc, project_id, body.ops, label=body.label, base_rev=body.base_rev)
+    return {**res, "view": store.view(svc, project_id)}
+
+
+@router.post("/projects/{project_id}/undo")
+def undo(request: Request, project_id: str):
+    svc = services(request)
+    store.undo(svc, project_id)
+    return store.view(svc, project_id)
+
+
+@router.post("/projects/{project_id}/redo")
+def redo(request: Request, project_id: str):
+    svc = services(request)
+    store.redo(svc, project_id)
+    return store.view(svc, project_id)
+
+
+@router.get("/projects/{project_id}/history")
+def history(request: Request, project_id: str):
+    return store.history(services(request), project_id)
+
+
+@router.post("/projects/{project_id}/history/{seq}")
+def restore(request: Request, project_id: str, seq: int):
+    svc = services(request)
+    store.restore(svc, project_id, seq)
+    return store.view(svc, project_id)
+
+
+@router.get("/projects/{project_id}/outline")
+def outline(request: Request, project_id: str):
+    return store.outline(services(request), project_id)
+
+
+@router.post("/projects/{project_id}/command")
+def command(request: Request, project_id: str, body: CommandBody):
+    svc = services(request)
+    try:
+        res = commands.run(svc, project_id, body.command, body.args, preview=body.preview)
+    except commands.NeedsAnalysis as need:
+        return {"done": False, "needs": need.jobs, "message": str(need)}
+    return {**res, "done": True, "view": None if body.preview else store.view(svc, project_id)}
+
+
+@router.get("/projects/{project_id}/transcript")
+def timeline_transcript(request: Request, project_id: str, track: Optional[str] = None):
+    svc = services(request)
+    return commands.timeline_transcript(svc, store.doc(svc, project_id), track=track)
+
+
+@router.post("/projects/{project_id}/text-cut")
+def text_cut(request: Request, project_id: str, body: TextCutBody):
+    svc = services(request)
+    try:
+        res = commands.run(svc, project_id, "cut_words", {"media": body.media, "word_ids": body.word_ids or None, "text": body.phrase or None,
+                                                           "keep": body.keep})
+    except commands.NeedsAnalysis as need:
+        return {"done": False, "needs": need.jobs, "message": str(need)}
+    return {**res, "done": True, "view": store.view(svc, project_id)}
+
+
+@router.get("/projects/{project_id}/frame")
+def frame(request: Request, project_id: str, t: str = "0", width: int = 960):
+    path = runner.render_frame(services(request), project_id, parse_time(t) if ":" in t or t.endswith("s") else int(float(t)), width=width)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/projects/{project_id}/subtitles.{fmt}")
+def subtitles(request: Request, project_id: str, fmt: str):
+    text, mime = runner.subtitles_export(services(request), project_id, fmt)
+    return Response(text, media_type=mime, headers={"Content-Disposition": f'attachment; filename="subtitulos.{fmt}"'})
+
+
+@router.get("/projects/{project_id}/edl")
+def edl(request: Request, project_id: str):
+    return PlainTextResponse(runner.edl_export(services(request), project_id), headers={"Content-Disposition": 'attachment; filename="montaje.edl"'})
+
+
+@router.post("/projects/{project_id}/freeze")
+def freeze(request: Request, project_id: str, body: FreezeBody):
+    svc = services(request)
+    at = parse_time(body.at) if isinstance(body.at, str) else int(body.at)
+    length = parse_time(body.length) if isinstance(body.length, str) else int(body.length)
+    derive.freeze_frame(svc, project_id, body.clip, at, length)
+    return store.view(svc, project_id)
+
+
+@router.post("/projects/{project_id}/stabilize")
+def stabilize(request: Request, project_id: str, body: StabilizeBody):
+    return tool(request, "clip_stabilize", project=project_id, clip=body.clip, smoothing=body.smoothing)
+
+
+@router.post("/projects/{project_id}/render")
+def render(request: Request, project_id: str, body: RenderBody):
+    svc = services(request)
+    start = None if body.start in (None, "") else (parse_time(body.start) if isinstance(body.start, str) else int(body.start))
+    end = None if body.end in (None, "") else (parse_time(body.end) if isinstance(body.end, str) else int(body.end))
+    return svc.start_render(project_id, preset=body.preset, start=start, end=end, filename=body.filename, folder=body.folder, lufs=body.lufs,
+                            subtitles=body.subtitles, mode=body.mode)
+
+
+@router.get("/projects/{project_id}/plans")
+def plans(request: Request, project_id: str):
+    return {"plans": plan_mod.list_plans(services(request), project_id)}
+
+
+@router.post("/projects/{project_id}/plans")
+def plan_create(request: Request, project_id: str, body: PlanBody):
+    return plan_mod.create(services(request), project_id, body.instruction, use_model=body.use_model)
+
+
+@router.patch("/plans/{plan_id}")
+def plan_update(request: Request, plan_id: str, body: PlanStepsBody):
+    return plan_mod.update(services(request), plan_id, body.steps)
+
+
+@router.post("/plans/{plan_id}/apply")
+def plan_apply(request: Request, plan_id: str):
+    return tool(request, "plan_apply", plan=plan_id)
+
+
+@router.post("/plans/{plan_id}/discard")
+def plan_discard(request: Request, plan_id: str):
+    return plan_mod.discard(services(request), plan_id)

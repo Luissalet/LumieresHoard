@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumiere-hoard"
+version = "0.1.0"
+description = "A local video editor: multitrack timeline, text-based editing, automatic cuts, reframing and captions, natural-language edit plans, ffmpeg renders with GPU encoding, exposed to assistants through MCP."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Luissalet" }]
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "pydantic>=2.7",
+  "httpx>=0.27",
+  "mcp>=1.10,<2",
+  "python-multipart>=0.0.9",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+speech = ["faster-whisper>=1.0"]
+faces = ["opencv-python-headless>=4.9"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+lumiere-hoard = "lumiere_hoard.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["lumiere_hoard*"]
+
+[tool.setuptools.package-data]
+lumiere_hoard = ["static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning", "ignore::FutureWarning"]
