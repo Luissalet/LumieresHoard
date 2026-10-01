@@ -19,6 +19,26 @@ export const FX_RANGES = {
   echo: { delay_ms: [20, 2000, 10], decay: [0, 0.9, 0.01] },
 };
 
+// Defaults of the picture effects (mirrors render/filters.py SPECS): the GL preview fills the parameters a clip does not carry.
+export const FX_DEFAULTS = {
+  eq: { brightness: 0, contrast: 1, saturation: 1, gamma: 1 },
+  lut: { file: "" },
+  grayscale: {},
+  sepia: {},
+  vignette: { strength: 0.5 },
+  blur: { radius: 6 },
+  sharpen: { amount: 1 },
+  denoise: { strength: 4 },
+  hflip: {},
+  vflip: {},
+  chromakey: { color: "#00FF00", similarity: 0.12, blend: 0.05 },
+  vintage: {},
+  warm: { amount: 0.5 },
+  cool: { amount: 0.5 },
+  contrast_pop: { amount: 0.5 },
+  pixelate: { size: 16 },
+};
+
 export const AUDIO_FX = new Set(["audio_denoise", "voice_enhance", "highpass", "lowpass", "compressor", "pitch", "echo"]);
 
 export const FONTS = ["Arial", "Arial Black", "Verdana", "Tahoma", "Trebuchet MS", "Georgia", "Times New Roman", "Impact", "Courier New", "Comic Sans MS", "Segoe UI"];
