@@ -60,6 +60,36 @@ def conversation(turns: list[tuple[str, int]], seed: int = 1, gap: tuple[float, 
     return audio.astype(np.float32), words
 
 
+def natural_talk(turns: list[tuple[str, float]], seed: int = 1, drift: float = 0.05, loud: float = 0.25, couple: float = 0.3) -> tuple[np.ndarray, list[dict]]:
+    """Longer, messier speech than ``conversation``: turns [(speaker, seconds)], short words (0.12-0.55 s) with almost no pause
+    between them (as a transcriber times them), a pitch that wanders slowly (about ``drift`` either way) and loudness that wanders too, the way one real
+    person's delivery varies over minutes. Returns (audio, words [{t0, t1, text, speaker}])."""
+    rng = np.random.default_rng(seed)
+    chunks: list[np.ndarray] = [np.zeros(int(0.3 * SR))]
+    words: list[dict] = []
+    t = 0.3
+    pitch_walk = loud_walk = 0.0  # slow random walks (a bell-shaped spread of values, like a real delivery), not a regular wave
+    for who, seconds in turns:
+        end = t + seconds
+        while t < end:
+            dur = float(rng.choice([0.12, 0.16, 0.2, 0.28, 0.35, 0.45, 0.55], p=[0.1, 0.15, 0.2, 0.25, 0.15, 0.1, 0.05]))
+            keep = float(np.exp(-(dur + 0.1) / 20.0))
+            pitch_walk = keep * pitch_walk + float(np.sqrt(1 - keep * keep)) * rng.normal()
+            loud_walk = keep * loud_walk + float(np.sqrt(1 - keep * keep)) * rng.normal()
+            wander = 1 + drift * float(np.clip(pitch_walk, -2.5, 2.5)) / 1.5
+            voice = {"f0": VOICES[who]["f0"] * wander, "formants": tuple(f * (1 + couple * (wander - 1)) for f in VOICES[who]["formants"])}
+            gain = 0.4 * float(np.clip(1 + loud * loud_walk, 0.4, 1.6)) * rng.uniform(0.8, 1.2)
+            chunks.append(voice_word(voice, dur, rng) * gain)
+            words.append({"t0": int(round(t * 1000)), "t1": int(round((t + dur) * 1000)), "text": f"w{len(words) + 1}", "speaker": who})
+            g = float(rng.choice([0.0, 0.0, 0.01, 0.03, 0.08, 0.4], p=[0.3, 0.2, 0.2, 0.15, 0.1, 0.05]))
+            chunks.append(np.zeros(int(g * SR)))
+            t += dur + g
+    chunks.append(np.zeros(int(0.4 * SR)))
+    audio = np.concatenate(chunks)
+    audio += rng.normal(0, 0.002, audio.size)
+    return audio.astype(np.float32), words
+
+
 def write_wav(path: Path, audio: np.ndarray, sr: int = SR) -> None:
     pcm = (np.clip(audio, -1, 1) * 32767).astype(np.int16)
     with wave.open(str(path), "wb") as w:

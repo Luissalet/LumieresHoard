@@ -15,7 +15,7 @@ from lumiere_hoard.errors import LumiereError
 from lumiere_hoard.render import ass, runner
 
 from conftest import make_services, needs_ffmpeg
-from synth import SR, conversation, video_with_audio, write_wav
+from synth import SR, conversation, natural_talk, video_with_audio, write_wav
 
 
 def accuracy(labels: list[int], truth: list[str]) -> float:
@@ -60,6 +60,45 @@ def test_number_of_speakers_is_respected():
 def test_one_voice_stays_one_speaker():
     audio, words = conversation([("B", 14)], seed=2)
     assert engine.diarize(audio, words)["k"] == 1
+
+
+# Real speech is messier than the clean synthetic turns above: short words timed back to back, a pitch and a loudness that
+# wander over minutes, turns of 3-15 s. A transcript of ONE person used to come out as two speakers (the second one made of
+# stray single words), so these checks use that kind of material.
+
+@pytest.mark.parametrize("who,seed", [("A", 2), ("B", 4), ("C", 1)])
+def test_a_long_natural_single_voice_stays_one_speaker(who, seed):
+    audio, words = natural_talk([(who, 150)], seed=seed)
+    assert len(words) > 400
+    res = engine.diarize(audio, words)
+    assert res["k"] == 1 and set(res["labels"]) == {0} and res["confidence"] == 0.0
+
+
+def test_single_short_words_do_not_become_a_speaker():
+    # a monologue cut into one-word turns: no speaker may be made of a few isolated words
+    audio, words = natural_talk([("A", 90)], seed=7)
+    res = engine.diarize(audio, words)
+    assert res["k"] == 1
+    forced = engine.diarize(audio, words, num_speakers=2)
+    changes = sum(1 for a, b in zip(forced["labels"], forced["labels"][1:]) if a != b)
+    assert changes <= 12  # even when two are demanded, the changes are smoothed into a few long stretches, not 100+ flickers
+
+
+@pytest.mark.parametrize("pair,turns,seed", [(("A", "B"), [3, 9, 5, 14, 4, 7, 12, 6], 2), (("B", "C"), [5, 12, 3, 9, 14, 6, 8, 4], 3), (("A", "C"), [8, 4, 11, 6, 15, 3, 9, 5], 6)])
+def test_natural_two_voices_with_long_turns(pair, turns, seed):
+    audio, words = natural_talk([(pair[i % 2], s) for i, s in enumerate(turns)], seed=seed)
+    truth = [w["speaker"] for w in words]
+    res = engine.diarize(audio, words)
+    assert res["k"] == 2 and accuracy(list(res["labels"]), truth) > 0.9
+    assert accuracy(list(engine.diarize(audio, words, num_speakers=2)["labels"]), truth) > 0.9
+
+
+def test_natural_three_voices():
+    audio, words = natural_talk([("ABC"[i % 3], s) for i, s in enumerate([5, 9, 7, 12, 4, 8, 14, 6, 10, 3, 9, 11])], seed=4)
+    truth = [w["speaker"] for w in words]
+    res = engine.diarize(audio, words)
+    assert res["k"] == 3 and accuracy(list(res["labels"]), truth) > 0.9
+    assert accuracy(list(engine.diarize(audio, words, num_speakers=3)["labels"]), truth) > 0.9
 
 
 def test_labels_follow_the_order_of_first_appearance(talk):

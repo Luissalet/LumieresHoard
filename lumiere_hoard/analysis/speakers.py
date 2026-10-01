@@ -1,14 +1,17 @@
 """Who speaks when: speaker separation (diarization) of a word-level transcript, entirely local.
 
-Two engines share one clustering core:
+Two engines:
 
 * **embeddings** (optional, ``requirements-speakers.txt``): when speechbrain's ECAPA model or resemblyzer is installed, every
   speech segment gets a voice embedding and segments are grouped by cosine distance. Nothing is downloaded from a gated source.
-* **built in** (always there): per word, spectral features computed with numpy only (cepstral means of a log-mel
-  filterbank and the median pitch), then agglomerative clustering with an automatic number of speakers (or the number the
-  person gives), a re-assignment of every word to the nearest voice and a light smoothing of isolated flips. It is an
-  approximation: clearly different voices separate well, similar voices of the same pitch may merge, and one voice
-  seldom splits (the number of speakers is only raised when the gap between voices is clear).
+* **built in** (always there): numpy only. A voice is a long-term trait, so it is measured over *turns*, never over single
+  words: (1) consecutive words are grouped into segments (a pause over 300 ms or 6 s ends one; shorter in a short clip) and each
+  gets the level-weighted mean of its log-mel cepstra plus the median pitch; (2) the segments are split by 2-means, and a cut
+  counts as two voices only when the gap between its halves beats what chance produces in ONE voice with that many segments
+  (a Gaussian null with the same spread) and each voice keeps a real share of the talk; (3) the changes of speaker are placed
+  with a Viterbi pass over ~1 s pieces and then over single words, with a penalty per change, so a one-word flicker never becomes
+  a turn. One real person with natural prosody stays one speaker; clearly different voices separate; voices a couple of
+  semitones apart may merge (ask for the number of speakers if you know it).
 
 Everything here is a pure function of the audio samples and the words; ``speakers.py`` does the storing.
 """
@@ -29,8 +32,7 @@ NFFT = 512
 PITCH_WIN = 640    # 40 ms: two periods of the lowest voice
 PITCH_NFFT = 2048
 N_MEL = 26
-N_CEP = 4         # c1..c4: the broad spectral shape (brightness, first resonances); finer coefficients mostly follow the vowel being said
-F0_WEIGHT = 6.0   # the pitch counts this many cepstral coefficients: it is the cue that separates voices best
+N_CEP = 13        # c1..c13: the long-term spectral shape of a voice (averaged over seconds the vowels cancel out and the voice stays)
 MAX_SPEAKERS = 8
 PALETTE = ["#4FC3F7", "#FFB74D", "#81C784", "#F06292", "#BA68C8", "#4DB6AC", "#FFD54F", "#A1887F"]
 
@@ -120,83 +122,319 @@ def frame_features(audio: np.ndarray, frames: Optional[np.ndarray] = None, block
     return {"frames": idx, "cep": cep, "f0": f0, "voicing": voicing, "level": level}
 
 
-def word_features(audio: np.ndarray, words: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray]:
-    """One feature row per word (c1..c12 minus the file's mean, log pitch) and a ``valid`` mask. Words without enough sound
-    (very short, or under the noise floor) are invalid; the caller gives them the speaker of their neighbours."""
-    n = len(words)
-    spans = []
-    need: list[np.ndarray] = []
-    for w in words:
-        a = int(max(0, round(w["t0"] / 10)))
-        b = int(max(a + 1, round(w["t1"] / 10)))
-        spans.append((a, b))
-        need.append(np.arange(a, b))
-    if not need:
-        return np.zeros((0, N_CEP + 1)), np.zeros(0, dtype=bool)
-    frames = np.unique(np.concatenate(need))
-    ff = frame_features(audio, frames)
-    pos = {int(f): i for i, f in enumerate(ff["frames"])}
-    # the frames are all inside words: "active" means not far below the loud ones (word edges and breaths are skipped)
-    active_floor = float(np.percentile(ff["level"], 95)) - 28.0 if ff["level"].size else -100.0
-    active_all = ff["level"] > active_floor
-    mean_cep = ff["cep"][active_all].mean(axis=0) if active_all.any() else np.zeros(N_CEP)
-    feats = np.zeros((n, N_CEP + 1), dtype=np.float64)
+# ---------------------------------------------------------------- units: what gets a voice measurement
+
+def frame_table(audio: np.ndarray, words: list[dict[str, Any]]) -> dict[str, Any]:
+    """Frame features over the span of the words, plus the level below which a frame is not speech (breaths, room noise)."""
+    a = max(0, int(min(w["t0"] for w in words) / 10))
+    b = int(max(w["t1"] for w in words) / 10) + 2
+    ff = frame_features(audio, np.arange(a, b))
+    floor = float(np.percentile(ff["level"], 95)) - 28.0 if ff["level"].size else -100.0
+    return {"ff": ff, "floor": floor, "start": int(ff["frames"][0]) if ff["frames"].size else a}
+
+
+def unit_features(ft: dict[str, Any], spans: list[tuple[int, int]], min_frames: int = 12) -> tuple[np.ndarray, np.ndarray]:
+    """One feature row per time span (ms): the level-weighted mean cepstrum of its voiced speech frames and the median pitch, plus
+    a ``valid`` mask (spans with too little voiced speech get no measurement and take the evidence of their neighbours)."""
+    ff, floor, s0 = ft["ff"], ft["floor"], ft["start"]
+    level = ff["level"].astype(np.float64)
+    act = level > floor
+    voiced = act & (ff["f0"] > 0)
+    w_voi = np.where(voiced, np.clip(level - floor + 1.0, 1.0, None), 0.0)
+    w_act = np.where(act, np.clip(level - floor + 1.0, 1.0, None), 0.0)
+    cep = ff["cep"].astype(np.float64)
+    zero = np.zeros((1, N_CEP))
+    c_voi = np.concatenate([zero, np.cumsum(cep * w_voi[:, None], axis=0)])
+    c_act = np.concatenate([zero, np.cumsum(cep * w_act[:, None], axis=0)])
+    s_voi = np.concatenate([[0.0], np.cumsum(w_voi)])
+    s_act = np.concatenate([[0.0], np.cumsum(w_act)])
+    n_voi = np.concatenate([[0], np.cumsum(voiced)])
+    n_act = np.concatenate([[0], np.cumsum(act)])
+    strong = voiced & (ff["voicing"] > 0.6)
+    logf0 = np.where(strong, np.log(np.maximum(ff["f0"], 1.0)), np.nan)
+    n = len(spans)
+    feats = np.zeros((n, N_CEP + 1))
     valid = np.zeros(n, dtype=bool)
-    logf0_all = np.full(n, np.nan)
-    for i, (a, b) in enumerate(spans):
-        rows = np.array([pos[f] for f in range(a, b) if f in pos], dtype=np.int64)
-        if rows.size == 0:
+    for i, (t0, t1) in enumerate(spans):
+        lo = int(np.clip(round(t0 / 10) - s0, 0, level.size))
+        hi = int(np.clip(max(round(t1 / 10), round(t0 / 10) + 1) - s0, lo, level.size))
+        if n_voi[hi] - n_voi[lo] >= min_frames:
+            feats[i, :N_CEP] = (c_voi[hi] - c_voi[lo]) / (s_voi[hi] - s_voi[lo])
+        elif n_act[hi] - n_act[lo] >= min_frames:
+            feats[i, :N_CEP] = (c_act[hi] - c_act[lo]) / (s_act[hi] - s_act[lo])
+        else:
+            feats[i, N_CEP] = np.nan
             continue
-        rows = rows[active_all[rows]]
-        if rows.size < 3:
-            continue
-        vf = rows[ff["f0"][rows] > 0]
-        use = vf if vf.size >= 3 else rows
-        wts = np.clip(ff["level"][use] - active_floor + 1.0, 1.0, None)
-        feats[i, :N_CEP] = (ff["cep"][use] * wts[:, None]).sum(axis=0) / wts.sum() - mean_cep
-        if vf.size >= 3:
-            logf0_all[i] = float(np.log(np.median(ff["f0"][vf])))
+        pitch = logf0[lo:hi]
+        pitch = pitch[~np.isnan(pitch)]
+        feats[i, N_CEP] = float(np.median(pitch)) if pitch.size >= 6 else np.nan
         valid[i] = True
-    known = ~np.isnan(logf0_all)
-    fill = float(np.median(logf0_all[known])) if known.any() else 0.0
-    feats[:, N_CEP] = np.where(known, logf0_all, fill)
     return feats, valid
 
 
-def standardise(feats: np.ndarray, valid: np.ndarray) -> np.ndarray:
-    """Robust z-scores (median / MAD) over the valid rows, the pitch column weighted up."""
-    out = np.zeros_like(feats)
-    ref = feats[valid] if valid.any() else feats
-    med = np.median(ref, axis=0)
-    spread = 1.4826 * np.median(np.abs(ref - med), axis=0)
-    spread = np.where(spread < 1e-6, ref.std(axis=0) + 1e-6, spread)
-    out = (feats - med) / spread
-    out[:, N_CEP] *= F0_WEIGHT
+def group_words(words: list[dict[str, Any]], *, gap_ms: int, max_ms: int, speech_ms: int = 0, within: Optional[list[tuple[int, int]]] = None) -> list[tuple[int, int]]:
+    """Index ranges [a, b) of consecutive words: a pause longer than ``gap_ms`` ends a group, and so does the group reaching
+    ``max_ms`` in length or ``speech_ms`` of speech. ``within`` splits only inside the given ranges."""
+    out: list[tuple[int, int]] = []
+    for lo, hi in within or [(0, len(words))]:
+        a, speech = lo, 0
+        for i in range(lo, hi):
+            speech += max(0, words[i]["t1"] - words[i]["t0"])
+            last = i == hi - 1
+            if last or words[i + 1]["t0"] - words[i]["t1"] > gap_ms or words[i + 1]["t1"] - words[a]["t0"] > max_ms or (speech_ms and speech >= speech_ms):
+                out.append((a, i + 1))
+                a, speech = i + 1, 0
     return out
 
 
-# ---------------------------------------------------------------- clustering
+def span_of(words: list[dict[str, Any]], groups: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    return [(words[a]["t0"], words[b - 1]["t1"]) for a, b in groups]
 
-def _kmeans_micro(x: np.ndarray, k: int, iters: int = 6) -> tuple[np.ndarray, np.ndarray]:
-    """Farthest-point initialised k-means: (centroids, assignment). Deterministic."""
-    n = x.shape[0]
-    cent = [x[0]]
-    d = np.sum((x - cent[0]) ** 2, axis=1)
-    for _ in range(1, k):
-        i = int(np.argmax(d))
-        cent.append(x[i])
-        d = np.minimum(d, np.sum((x - x[i]) ** 2, axis=1))
-    c = np.array(cent)
-    assign = np.zeros(n, dtype=np.int64)
-    for _ in range(iters):
-        dist = ((x[:, None, :] - c[None, :, :]) ** 2).sum(axis=2)
-        assign = dist.argmin(axis=1)
+
+def standardise(feats: np.ndarray, valid: np.ndarray) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray, float]]:
+    """Centre and scale the feature columns on the valid rows (a missing pitch becomes the median pitch). Returns the matrix and
+    the transform, so atoms and words are measured on the same scale as the segments."""
+    f = feats.copy()
+    known = ~np.isnan(f[:, N_CEP])
+    fill = float(np.median(f[valid & known, N_CEP])) if (valid & known).any() else 0.0
+    f[:, N_CEP] = np.where(known, f[:, N_CEP], fill)
+    ref = f[valid] if valid.any() else f
+    med = np.median(ref, axis=0)
+    sd = ref.std(axis=0) + 1e-9
+    return (f - med) / sd, (med, sd, fill)
+
+
+def apply_transform(feats: np.ndarray, tr: tuple[np.ndarray, np.ndarray, float]) -> np.ndarray:
+    med, sd, fill = tr
+    f = feats.copy()
+    f[:, N_CEP] = np.where(np.isnan(f[:, N_CEP]), fill, f[:, N_CEP])
+    return (f - med) / sd
+
+
+# ---------------------------------------------------------------- how many voices, and which segments are whose
+
+SPLIT_D = 3.45       # two groups are two voices when the gap between them is this many (pooled) spreads along the line joining them...
+SPLIT_D_SMALL = 4.0  # ...plus this / n for few segments: a single voice's natural variation (pitch, loudness, room) peaks around 3.3
+NULL_MARGIN = 0.5    # added to the chance level of the gap
+NULL_CAP = 4.6       # with a handful of segments (a short clip) chance alone reaches any gap; a real conversation still has to pass this one
+FEW_SEGMENTS = 20
+MIN_SPLIT = 6        # segments a group needs before it may be split again
+MIN_SHARE = 0.08     # a voice that speaks less than this share of the talk, or less than MIN_TALK_MS, is a stray piece of another voice
+MIN_TALK_MS = 4000
+SWITCH_COST = 9.0    # log-likelihood a change of speaker must win to be believed: a one-second blip does not
+PCA_DIMS = 4
+
+
+def _pca(z: np.ndarray, dims: int) -> np.ndarray:
+    c = z - z.mean(axis=0)
+    _, _, vt = np.linalg.svd(c, full_matrices=False)
+    return c @ vt[: max(1, min(dims, vt.shape[0]))].T
+
+
+def _two_means(y: np.ndarray, restarts: int = 8) -> tuple[np.ndarray, float]:
+    """The best split into two groups (k-means, deterministic restarts) and how clean it is: the distance between the group centres
+    over the pooled spread of the groups along the line that joins them (about 2.6 for one Gaussian blob cut in half)."""
+    rng = np.random.default_rng(0)
+    best: Optional[tuple[float, np.ndarray, np.ndarray]] = None
+    for _ in range(restarts):
+        c = y[rng.choice(y.shape[0], 2, replace=False)].copy()
+        a = np.zeros(y.shape[0], dtype=np.int64)
+        for _ in range(40):
+            a = ((y[:, None, :] - c[None, :, :]) ** 2).sum(axis=2).argmin(axis=1)
+            for j in (0, 1):
+                if (a == j).any():
+                    c[j] = y[a == j].mean(axis=0)
+        sse = float(((y - c[a]) ** 2).sum())
+        if best is None or sse < best[0]:
+            best = (sse, a, c.copy())
+    assert best is not None
+    _, a, c = best
+    if min((a == 0).sum(), (a == 1).sum()) < 2:
+        return a, 0.0
+    axis = c[0] - c[1]
+    axis = axis / (np.linalg.norm(axis) + 1e-12)
+    p = y @ axis
+    d = np.sqrt(2.0) * abs(p[a == 0].mean() - p[a == 1].mean()) / np.sqrt(p[a == 0].var() + p[a == 1].var() + 1e-12)
+    return a, float(d)
+
+
+def null_gap(z: np.ndarray, sims: int = 40, quantile: float = 0.95) -> float:
+    """How big a gap 2-means finds by chance in ONE voice with this many segments and this spread of features: the same cut on
+    random Gaussian data with the same covariance. With few segments chance alone produces big gaps, so the bar rises."""
+    n = z.shape[0]
+    _, sv, vt = np.linalg.svd(z - z.mean(axis=0), full_matrices=False)
+    scale = sv / np.sqrt(max(n - 1, 1))
+    rng = np.random.default_rng(7)
+    out = []
+    for _ in range(sims):
+        r = rng.normal(size=(n, scale.size)) * scale
+        out.append(_two_means(_pca(r, PCA_DIMS), restarts=3)[1])
+    return float(np.quantile(out, quantile))
+
+
+def chance_bar(z: np.ndarray, short_clip: bool) -> float:
+    """The gap a cut of these segments must exceed to count as two voices: what chance produces in one voice, plus a margin (capped
+    for a short clip, where chance could reach any gap and no conversation would ever pass)."""
+    bar = null_gap(z) + NULL_MARGIN
+    return min(bar, NULL_CAP) if short_clip else bar
+
+
+def split_segments(z: np.ndarray, *, num_speakers: Optional[int], max_speakers: int) -> tuple[np.ndarray, list[float]]:
+    """Group the segments (rows of ``z``) into voices: by repeatedly cutting the loosest group in two. Without a given number, a
+    group is cut only while the cut passes the separation test; with one, until that many groups exist."""
+    n = z.shape[0]
+    lab = np.zeros(n, dtype=np.int64)
+    seps: list[float] = []
+    k = 1
+    limit = max(1, min(num_speakers or max_speakers, MAX_SPEAKERS, n))
+    tried: set[int] = set()
+    while k < limit:
+        best: Optional[tuple[float, int, np.ndarray]] = None
         for j in range(k):
-            m = assign == j
-            if m.any():
-                c[j] = x[m].mean(axis=0)
-    return c, assign
+            idx = np.flatnonzero(lab == j)
+            if j in tried or idx.size < (2 if num_speakers else MIN_SPLIT):
+                continue
+            a, d = _two_means(_pca(z[idx], PCA_DIMS))
+            seps.append(round(d, 2))
+            need = 0.0 if num_speakers else max(SPLIT_D + SPLIT_D_SMALL / idx.size, chance_bar(z[idx], n < FEW_SEGMENTS))
+            # with a given number the loosest group is cut (most scatter around its centre); without one, the clearest cut wins
+            rank = float(((z[idx] - z[idx].mean(0)) ** 2).sum()) if num_speakers else d
+            if (d >= need and min((a == 0).sum(), (a == 1).sum()) >= (1 if num_speakers else 3)) and (best is None or rank > best[0]):
+                best = (rank, j, idx[a == 1])
+            elif not num_speakers:
+                tried.add(j)
+        if best is None:
+            break
+        lab[best[2]] = k
+        k += 1
+    return lab, seps
 
+
+def _viterbi(ll: np.ndarray, cost: float) -> np.ndarray:
+    """Most likely speaker path through ``ll`` (units x speakers log-likelihoods) when every change of speaker costs ``cost``."""
+    n, k = ll.shape
+    score = ll[0].copy()
+    back = np.zeros((n, k), dtype=np.int64)
+    for i in range(1, n):
+        stay = score
+        jump = score.max() - cost
+        arg = int(score.argmax())
+        take = stay >= jump
+        back[i] = np.where(take, np.arange(k), arg)
+        score = np.where(take, stay, jump) + ll[i]
+    path = np.zeros(n, dtype=np.int64)
+    path[-1] = int(score.argmax())
+    for i in range(n - 1, 0, -1):
+        path[i - 1] = back[i, path[i]]
+    return path
+
+
+def _fit(f: np.ndarray, lab: np.ndarray, ok: np.ndarray, k: int, shrink: float = 0.35) -> tuple[np.ndarray, np.ndarray]:
+    """Voice centres and the shared within-voice precision matrix (shrunk towards its diagonal: few segments, many features)."""
+    d = f.shape[1]
+    mu = np.zeros((k, d))
+    resid = []
+    for j in range(k):
+        sel = ok & (lab == j)
+        if sel.any():
+            mu[j] = f[sel].mean(axis=0)
+            resid.append(f[sel] - mu[j])
+        elif ok.any():
+            mu[j] = f[ok].mean(axis=0)
+    r = np.concatenate(resid) if resid else np.zeros((1, d))
+    cov = r.T @ r / max(1, r.shape[0])
+    cov = (1 - shrink) * cov + shrink * np.diag(np.diag(cov)) + 1e-6 * np.eye(d)
+    return mu, np.linalg.inv(cov)
+
+
+def _loglik(f: np.ndarray, ok: np.ndarray, mu: np.ndarray, prec: np.ndarray) -> np.ndarray:
+    diff = f[:, None, :] - mu[None, :, :]
+    ll = -0.5 * np.einsum("nkd,de,nke->nk", diff, prec, diff)
+    ll[~ok] = 0.0  # no measurement: no opinion, the neighbours decide
+    return ll
+
+
+def refine(f: np.ndarray, ok: np.ndarray, lab: np.ndarray, k: int, cost: float, rounds: int = 3) -> tuple[np.ndarray, np.ndarray]:
+    """Viterbi re-segmentation: fit the voices on the current labels, find the best path with a cost per change, repeat."""
+    ll = np.zeros((f.shape[0], k))
+    for _ in range(rounds):
+        mu, prec = _fit(f, lab, ok, k)
+        ll = _loglik(f, ok, mu, prec)
+        new = _viterbi(ll, cost)
+        if (new == lab).all():
+            break
+        lab = new
+    return lab, ll
+
+
+def diarize_builtin(audio: np.ndarray, words: list[dict[str, Any]], *, num_speakers: Optional[int], max_speakers: int) -> dict[str, Any]:
+    """Built-in engine: cluster speech *turns* (3-6 s stretches), not words; then place the changes of speaker with a Viterbi pass
+    over ~1 s pieces, then over single words near the changes. See the module docstring."""
+    n = len(words)
+    ft = frame_table(audio, words)
+    talk_ms = sum(max(0, w["t1"] - w["t0"]) for w in words)
+    # turns are up to 6 s; in a short clip they are cut shorter so that there are enough of them to tell voices apart
+    segs = group_words(words, gap_ms=300, max_ms=int(min(6000, max(1200, talk_ms / 24))))
+    atoms = group_words(words, gap_ms=300, max_ms=2500, speech_ms=1000, within=segs)
+    f_seg, ok_seg = unit_features(ft, span_of(words, segs))
+    f_atom, ok_atom = unit_features(ft, span_of(words, atoms))
+    f_word, ok_word = unit_features(ft, span_of(words, [(i, i + 1) for i in range(n)]), min_frames=5)
+    if ok_seg.sum() < 2 or ok_atom.sum() < 2:
+        return {"labels": np.zeros(n, dtype=np.int64), "k": 1, "confidence": 0.0, "heights": []}
+    z_seg, tr = standardise(f_seg, ok_seg)
+    z_atom = apply_transform(f_atom, tr)
+    z_word = apply_transform(f_word, tr)
+    # 1) which voices: split the valid segments
+    valid_idx = np.flatnonzero(ok_seg)
+    lab_v, seps = split_segments(z_seg[valid_idx], num_speakers=num_speakers, max_speakers=max_speakers)
+    k = int(lab_v.max()) + 1
+    lab_seg = np.zeros(len(segs), dtype=np.int64)
+    lab_seg[valid_idx] = lab_v
+    for i in np.flatnonzero(~ok_seg):  # a segment without a measurement follows the nearest measured one
+        lab_seg[i] = lab_seg[valid_idx[np.argmin(np.abs(valid_idx - i))]]
+    lab_atom = np.zeros(len(atoms), dtype=np.int64)
+    seg_of_word = np.zeros(n, dtype=np.int64)
+    for s, (a, b) in enumerate(segs):
+        seg_of_word[a:b] = s
+    for i, (a, _b) in enumerate(atoms):
+        lab_atom[i] = lab_seg[seg_of_word[a]]
+    dur = np.array([max(0, w["t1"] - w["t0"]) for w in words], dtype=np.float64)
+    atom_of_word = np.zeros(n, dtype=np.int64)
+    for i, (a, b) in enumerate(atoms):
+        atom_of_word[a:b] = i
+    while True:
+        # 2) when they change: one-second pieces, then words
+        if k > 1:
+            lab_atom, _ = refine(z_atom, ok_atom, lab_atom, k, SWITCH_COST)
+        lab_word = lab_atom[atom_of_word]
+        if k > 1:
+            lab_word, _ = refine(z_word, ok_word, lab_word, k, SWITCH_COST * 0.8)
+        talk = np.array([dur[lab_word == j].sum() for j in range(k)])
+        if num_speakers or k == 1:
+            break
+        least = max(MIN_SHARE * talk.sum(), min(MIN_TALK_MS, 0.2 * talk.sum()))  # in a short clip a few seconds are a fair share
+        weak = [j for j in range(k) if talk[j] < least]
+        if not weak:
+            break
+        # a "voice" with almost no talk is a stray piece of another one: fold it into the nearest voice and look again
+        drop = min(weak, key=lambda j: talk[j])
+        mu, _ = _fit(z_atom, lab_atom, ok_atom, k)
+        near = min((j for j in range(k) if j != drop), key=lambda j: float(np.linalg.norm(mu[j] - mu[drop])))
+        lab_atom = np.where(lab_atom == drop, near, lab_atom)
+        lab_atom = np.where(lab_atom > drop, lab_atom - 1, lab_atom)
+        k -= 1
+    ll = np.zeros((len(atoms), max(k, 1)))
+    conf = 0.0
+    if k > 1:
+        mu, prec = _fit(z_atom, lab_atom, ok_atom, k)
+        ll = _loglik(z_atom, ok_atom, mu, prec)
+        two = np.sort(ll[ok_atom], axis=1)
+        margin = two[:, -1] - two[:, -2]
+        conf = float(np.mean(margin / (margin + 4.0)))
+    return {"labels": lab_word, "k": k, "confidence": round(conf, 3), "heights": seps}
+
+
+# ---------------------------------------------------------------- clustering
 
 def agglomerate(points: np.ndarray, sizes: np.ndarray) -> tuple[list[tuple[int, int, float]], int]:
     """Average-linkage clustering of weighted points: the merges [(a, b, height), ...] in order (ids >= len(points) are earlier
@@ -245,94 +483,6 @@ def cut_tree(merges: list[tuple[int, int, float]], m: int, k: int) -> np.ndarray
     for i in range(m):
         out[i] = roots.setdefault(find(i), len(roots))
     return out
-
-
-def separation(points: np.ndarray, labels: np.ndarray, k: int, min_words: int) -> float:
-    """The weakest pairwise separation between the ``k`` clusters: centre distance over the sum of the clusters' radii (0 when a
-    cluster is too small to be a voice). A voice split in two by chance scores about 1; two real voices score 2 or more."""
-    cents, rad, ok = [], [], True
-    for j in range(k):
-        sel = labels == j
-        if sel.sum() < min_words:
-            ok = False
-            break
-        c = points[sel].mean(axis=0)
-        cents.append(c)
-        rad.append(float(np.sqrt(np.mean(np.sum((points[sel] - c) ** 2, axis=1)))))
-    if not ok:
-        return 0.0
-    return min(float(np.linalg.norm(cents[a] - cents[b]) / (rad[a] + rad[b] + 1e-9)) for a in range(k) for b in range(a + 1, k))
-
-
-def smooth_labels(labels: np.ndarray, d: np.ndarray, words: list[dict[str, Any]], max_gap_ms: int = 160) -> np.ndarray:
-    """Relabel a word that differs from both neighbours when they agree, they are close in time and its own evidence is weak."""
-    out = labels.copy()
-    n = len(words)
-    for i in range(1, n - 1):
-        if out[i - 1] == out[i + 1] != out[i]:
-            near = words[i]["t0"] - words[i - 1]["t1"] <= max_gap_ms and words[i + 1]["t0"] - words[i]["t1"] <= max_gap_ms
-            order = np.sort(d[i])
-            weak = order[0] > 0.0 and (order[1] - order[0]) / (order[1] + order[0] + 1e-9) < 0.18 if order.size > 1 else False
-            short = words[i]["t1"] - words[i]["t0"] < 220
-            if near and (weak or short) and d[i, out[i - 1]] <= 1.6 * d[i, out[i]]:
-                out[i] = out[i - 1]
-    return out
-
-
-def cluster_words(x: np.ndarray, valid: np.ndarray, words: list[dict[str, Any]], *, num_speakers: Optional[int], max_speakers: int,
-                  min_sep: float) -> dict[str, Any]:
-    """Labels for every word (invalid words take their neighbours') from the standardised features ``x``."""
-    n = len(words)
-    idx = np.flatnonzero(valid)
-    if idx.size == 0:
-        return {"labels": np.zeros(n, dtype=np.int64), "k": 1, "confidence": 0.0, "heights": []}
-    pts = x[idx]
-    if idx.size > 220:
-        cents, assign = _kmeans_micro(pts, 160)
-        sizes = np.bincount(assign, minlength=cents.shape[0]).astype(np.float64)
-        keep = sizes > 0
-        remap = -np.ones(cents.shape[0], dtype=np.int64)
-        remap[keep] = np.arange(int(keep.sum()))
-        cents, sizes, assign = cents[keep], sizes[keep], remap[assign]
-    else:
-        cents, sizes, assign = pts.copy(), np.ones(pts.shape[0]), np.arange(pts.shape[0])
-    merges, m = agglomerate(cents, sizes)
-    info: dict[str, Any] = {"heights": []}
-    if num_speakers:
-        k = int(max(1, min(num_speakers, m, MAX_SPEAKERS)))
-    else:
-        k = 1
-        min_words = max(3, int(0.05 * pts.shape[0]))
-        for kk in range(2, min(max_speakers, MAX_SPEAKERS, m) + 1):
-            sep = separation(pts, cut_tree(merges, m, kk)[assign], kk, min_words)
-            info["heights"].append(round(sep, 2))
-            if sep >= min_sep:
-                k = kk
-    micro_label = cut_tree(merges, m, k)
-    lab = micro_label[assign]
-    # re-assign every word to the nearest voice (centroids from the words, not from the micro clusters), twice
-    cent = np.array([np.average(pts[lab == j], axis=0) if (lab == j).any() else pts.mean(axis=0) for j in range(k)])
-    for _ in range(2):
-        d_all = np.sqrt(((x[:, None, :] - cent[None, :, :]) ** 2).sum(axis=2))
-        lab_all = d_all.argmin(axis=1)
-        for j in range(k):
-            sel = valid & (lab_all == j)
-            if sel.any():
-                cent[j] = x[sel].mean(axis=0)
-    d_all = np.sqrt(((x[:, None, :] - cent[None, :, :]) ** 2).sum(axis=2))
-    labels = d_all.argmin(axis=1)
-    if k > 1:
-        labels = smooth_labels(labels, d_all, words)
-    # words without evidence: the nearest valid word in time
-    if (~valid).any():
-        for i in np.flatnonzero(~valid):
-            j = idx[np.argmin(np.abs(idx - i))]
-            labels[i] = labels[j]
-    conf = 0.0
-    if k > 1:
-        two = np.sort(d_all[valid], axis=1)
-        conf = float(np.mean((two[:, 1] - two[:, 0]) / (two[:, 1] + two[:, 0] + 1e-9)))
-    return {"labels": labels, "k": k, "confidence": round(conf, 3), "heights": info.get("heights", [])}
 
 
 # ---------------------------------------------------------------- optional embedding engines
@@ -458,9 +608,7 @@ def diarize(audio: np.ndarray, words: list[dict[str, Any]], *, num_speakers: Opt
                 res = None
     if res is None:
         method = "builtin"
-        feats, valid = word_features(audio, words)
-        x = standardise(feats, valid)
-        res = cluster_words(x, valid, words, num_speakers=num_speakers, max_speakers=max_speakers, min_sep=MIN_SEPARATION)
+        res = diarize_builtin(audio, words, num_speakers=num_speakers, max_speakers=max_speakers)
     labels = np.asarray(res["labels"], dtype=np.int64)
     order: dict[int, int] = {}
     for lab in labels:
@@ -468,5 +616,3 @@ def diarize(audio: np.ndarray, words: list[dict[str, Any]], *, num_speakers: Opt
     mapped = [order[int(lab)] for lab in labels]
     return {"labels": mapped, "k": len(order), "method": method, "confidence": res["confidence"], "heights": res.get("heights", [])}
 
-
-MIN_SEPARATION = 1.65  # clusters count as different voices when their centres are this far apart relative to their radii
