@@ -170,7 +170,7 @@ def test_model_failure_falls_back_to_rules(services, talk, proj):
 def test_script_assemble_words_and_meaning(tmp_path, media_dir):
     from lumiere_hoard import media as ms
 
-    answer = json.dumps({"parts": [{"segment": 1, "ranges": [[1, 1]]}, {"segment": 2, "ranges": [[3, 3]]}], "notes": "parte 3 no está"})
+    answer = "1: 1-1\n2: 3, 1\n3: -\nNOTE: parte 3 no está"
     link = FakeLink(responder=lambda messages: answer)
     svc = make_services(tmp_path, link=link)
     svc.start()

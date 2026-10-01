@@ -5,6 +5,7 @@ raises NeedsAnalysis with the jobs it queued."""
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import numpy as np
@@ -501,8 +502,6 @@ def _meaning_alignment(svc: "Services", media: str, segments: list, transcript: 
     """Ask the local model which sentences of a free talk deliver each script part (cached per script text)."""
     import hashlib
 
-    from .generate import chat_json
-
     sents = [s for s in transcript.get("segments") or [] if s.get("text")]
     if not sents:
         raise LumiereError("The transcript has no sentences.")
@@ -515,28 +514,42 @@ def _meaning_alignment(svc: "Services", media: str, segments: list, transcript: 
     system = ("You align a talk recorded in front of a camera to the script it follows freely. For each script part, give the sentence "
               "ranges of the recording that deliver it, in the order to play them. When a part was attempted several times, keep only the "
               "last attempt that reaches its end. Leave out false starts, comments to the camera crew or to oneself ('vamos allá', 'otra "
-              "vez', 'qué nervios'), and anything that belongs to no part. A sentence belongs to one part at most. A part that was "
-              "never said gets no ranges. Answer with compact JSON on one line, nothing else: "
-              '{"parts":[{"segment":1,"ranges":[[first_sentence,last_sentence]]}],"notes":"short, in the language of the talk"}')
+              "vez', 'qué nervios'), and anything that belongs to no part. A sentence belongs to one part at most; merge neighbouring "
+              "sentences into one range. Answer with one line per script part and nothing else, exactly like:\n"
+              "1: 2-5, 9-12\n2: 13-20\n3: -\n"
+              "('-' when the part was never said). Then optionally one last line starting with 'NOTE:' (short, in the language of the talk).")
     user = "SCRIPT\n" + "\n".join(script_lines) + "\n\nRECORDING (index, sentence)\n" + "\n".join(lines)
     if len(user) > 60000:
         raise LumiereError("The recording is too long for the model to align at once; cut it into parts first.")
 
-    def parse(data: Any, strict: bool) -> dict[str, Any]:
-        parts = data.get("parts") if isinstance(data, dict) else None
-        if not isinstance(parts, list):
-            raise ValueError("missing parts")
+    def parse(text: str) -> dict[str, Any]:
         out = []
-        for part in parts:
-            seg = int(part.get("segment"))
+        notes = ""
+        for line in text.splitlines():
+            line = line.strip().strip("`*").strip()
+            if not line:
+                continue
+            if line.upper().startswith("NOTE"):
+                notes = line.split(":", 1)[-1].strip()
+                continue
+            m = re.match(r"^(\d+)\s*[:.)-]\s*(.*)$", line)
+            if not m:
+                continue
+            seg = int(m.group(1))
             ranges = []
-            for r in part.get("ranges") or []:
-                x, y = int(r[0]), int(r[1])
-                if not (0 <= x <= y < len(sents)):
-                    raise ValueError(f"sentence range {r} out of bounds")
-                ranges.append([x, y])
-            out.append({"segment": seg, "ranges": ranges})
-        # one sentence plays once: drop what an earlier part already claimed (script order wins)
+            for x, y in re.findall(r"(\d+)\s*(?:-|–|to|a)\s*(\d+)", m.group(2)):
+                x, y = int(x), int(y)
+                if x > y:
+                    x, y = y, x
+                if y < len(sents):
+                    ranges.append([x, y])
+            for single in re.findall(r"(?<![\d-])(\d+)(?![\d]*\s*(?:-|–))", re.sub(r"\d+\s*(?:-|–|to|a)\s*\d+", "", m.group(2))):
+                k = int(single)
+                if k < len(sents):
+                    ranges.append([k, k])
+            out.append({"segment": seg, "ranges": sorted(ranges)})
+        if not out:
+            raise ValueError("no 'N: a-b' lines in the answer")
         claimed: set[int] = set()
         for part in sorted(out, key=lambda x: x["segment"]):
             clean = []
@@ -554,9 +567,15 @@ def _meaning_alignment(svc: "Services", media: str, segments: list, transcript: 
                 clean.append(run)
                 claimed.update(free)
             part["ranges"] = clean
-        return {"parts": out, "notes": str(data.get("notes") or "")[:600]}
+        return {"parts": out, "notes": notes[:600]}
 
-    result, model = chat_json(svc, [{"role": "system", "content": system}, {"role": "user", "content": user}], parse, max_tokens=2000, effort="off")
+    from .generate import chat_text
+
+    text, model = chat_text(svc, [{"role": "system", "content": system}, {"role": "user", "content": user}], max_tokens=900, effort="off")
+    try:
+        result = parse(text)
+    except ValueError as error:
+        raise LumiereError(f"The model did not answer in the expected form ({error}).", code="generation_failed") from error
     result.update({"key": key, "model": model, "sentences": [[s["t0"], s["t1"]] for s in sents]})
     media_store.put_analysis(svc, media, "script_align", result, {"segments": len(segments)})
     return result
