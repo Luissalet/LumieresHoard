@@ -67,7 +67,11 @@ set {clip, props: {volume_db, mute, fade_in, fade_out, audio_fade_in, audio_fade
 speed {clip, speed}   transition {clip? | all_cuts: true, type, dur}   filter_add {clips? | track?, type, params}   filter_remove {clip, type?}
 canvas {preset? | width, height, fps, background, length_mode?: main|longest}   marker_add {t, label, kind?}   captions {enabled, style, props}
 track_add {kind: video|audio|text, name, role?: overlay|voice|music|sfx|titles}   track_set {track, props: {muted, hidden, locked, volume_db, duck}}
-detach_audio {clip}   duplicate {clip}   close_gaps {track?}   keyframes {clip, prop: x|y|scale|opacity|rotation|volume_db, keys: [{t, v, ease}]}
+detach_audio {clip}   duplicate {clip}   close_gaps {track?}   keyframes {clip, prop: x|y|scale|opacity|rotation|volume_db|mask_x|mask_y|mask_w|mask_h|mask_feather, keys: [{t, v, ease}]}
+speed_ramp {clip, preset?: speed_up|slow_down|ease_in_out|hit|clear, speed?, at? (hit: timeline time), keys?: [{t: source ms from the clip's in point, v, ease}]}
+mask {clip | clips, shape?: rectangle|rounded|ellipse, x?, y?, w?, h? (fractions of the clip's picture), radius?, feather?, invert?, remove?}
+add_sequence {project (prj_...: another project used as one clip), at?, track?, src_in?, src_out?}
+unnest {clip} (a sequence clip: its clips come back onto this timeline)
 Transitions: """ + ", ".join(TRANSITIONS) + """
 Effects (filter_add type): eq{brightness, contrast, saturation, gamma}, grayscale, sepia, vintage, warm{amount}, cool{amount}, contrast_pop{amount},
 vignette{strength}, blur{radius}, sharpen{amount}, denoise{strength}, pixelate{size}, chromakey{color, similarity, blend}, hflip, vflip, lut{file},
@@ -99,8 +103,8 @@ def context(svc: "Services", project_id: str, budget: int = 9000) -> str:
             if "text" in c:
                 desc += f" text «{c['text']}»"
             else:
-                desc += f" media {c['media']} «{c['name']}» src {c['src']}"
-                for k in ("speed", "mute", "fit", "effects", "transition"):
+                desc += f" {'sequence' if c.get('sequence') else 'media'} {c['media']} «{c['name']}» src {c['src']}"
+                for k in ("speed", "speed_curve", "mask", "mute", "fit", "effects", "transition"):
                     if k in c:
                         desc += f" {k}={c[k]}"
             lines.append(desc)

@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { loadWaveform } from "../api.js";
+import { go } from "../App.jsx";
 import { Icon } from "../components/ui.jsx";
+import { hasRamp, srcAt } from "./time.js";
 
 const TILE_Q = 256;
 
@@ -27,7 +29,7 @@ function Filmstrip({ clip, media, info, ppm, h, visL, visR }) {
   const tiles = [];
   for (let i = first; i < last; i++) {
     const tMs = ((i + 0.5) * tw) / ppm;
-    const src = clip.reverse ? clip.src_out - tMs * clip.speed : clip.src_in + tMs * clip.speed;
+    const src = srcAt(clip, clip.start + tMs);
     const idx = Math.max(0, Math.min(si.count - 1, Math.floor(src / si.interval_ms)));
     const col = idx % si.cols;
     const row = Math.floor(idx / si.cols);
@@ -65,15 +67,10 @@ function Waveform({ clip, media, ppm, h, visL, visR, bottom }) {
     for (let i = 0; i < width; i++) {
       const t0 = (visL + i) / ppm;
       const t1 = (visL + i + 1) / ppm;
-      let a;
-      let b;
-      if (clip.reverse) {
-        b = clip.src_out - t0 * clip.speed;
-        a = clip.src_out - t1 * clip.speed;
-      } else {
-        a = clip.src_in + t0 * clip.speed;
-        b = clip.src_in + t1 * clip.speed;
-      }
+      const sa = srcAt(clip, clip.start + t0);
+      const sb = srcAt(clip, clip.start + t1);
+      const a = Math.min(sa, sb);
+      const b = Math.max(sa, sb);
       let i0 = Math.max(0, Math.floor(a / 10));
       const i1 = Math.min(wave.length - 1, Math.max(i0, Math.floor(b / 10)));
       let peak = 0;
@@ -83,7 +80,7 @@ function Waveform({ clip, media, ppm, h, visL, visR, bottom }) {
       if (bottom) ctx.fillRect(i, mid - v, 1, v);
       else ctx.fillRect(i, mid - v, 1, Math.max(1, v * 2));
     }
-  }, [wave, width, visL, ppm, h, clip.src_in, clip.src_out, clip.speed, clip.reverse, bottom]);
+  }, [wave, width, visL, ppm, h, clip.src_in, clip.src_out, clip.speed, clip.reverse, clip.speed_keys, clip.start, bottom]);
   if (!url || width <= 0) return null;
   return <canvas ref={canvas} style={{ position: "absolute", left: visL, top: bottom ? undefined : 0, bottom: bottom ? 0 : undefined, width, height: h, pointerEvents: "none" }} />;
 }
@@ -93,7 +90,12 @@ const TrimIcon = null;
 function TimelineClipImpl({ clip, track, media, info, x, w, h, ppm, selected, dragging, visL, visR, onBody, onEdge, label, hasTransition, transName }) {
   const isText = clip.type === "text";
   const isAudio = track.kind === "audio";
-  const bg = clip.color || (isText ? "var(--clip-text)" : isAudio ? "var(--clip-audio)" : "var(--clip-video)");
+  const isSeq = clip.type === "sequence";
+  const bg = clip.color || (isText ? "var(--clip-text)" : isAudio ? "var(--clip-audio)" : isSeq
+    ? "repeating-linear-gradient(135deg, color-mix(in srgb, var(--accent) 30%, var(--panel)) 0 10px, color-mix(in srgb, var(--accent) 18%, var(--panel)) 10px 20px)"
+    : "var(--clip-video)");
+  const ramp = hasRamp(clip);
+  const masked = !!clip.mask && clip.mask.enabled !== false;
   const innerH = h - 6;
   // Clips only a few pixels wide (a zoomed-out cut-up timeline) get no thumbnails / waveform: nothing would be legible.
   const tiny = w < 20;
@@ -103,15 +105,20 @@ function TimelineClipImpl({ clip, track, media, info, x, w, h, ppm, selected, dr
       data-clip={clip.id}
       style={{ left: x, width: Math.max(2, w), background: bg }}
       onPointerDown={(e) => onBody(e, clip, track)}
-      title={label}
+      onDoubleClick={isSeq ? () => go(`p/${clip.media}`) : undefined}
+      title={isSeq ? `${label} · doble clic para abrir la secuencia` : label}
+      data-kind={clip.type}
     >
       {!isText && !isAudio && !tiny ? <Filmstrip clip={clip} media={media} info={info} ppm={ppm} h={innerH + 4} visL={visL} visR={visR} /> : null}
       {isAudio && !tiny ? <Waveform clip={clip} media={media} ppm={ppm} h={innerH} visL={visL} visR={visR} /> : null}
       {!isText && !isAudio && !tiny && media?.has_audio && h > 36 ? <Waveform clip={clip} media={media} ppm={ppm} h={Math.min(18, innerH / 2.5)} visL={visL} visR={visR} bottom /> : null}
       {hasTransition ? <div className="tl-trans" style={{ width: Math.min(w, clip.transition_in.dur * ppm) }} title={transName} /> : null}
       {tiny ? null : <div className="lbl">
+        {isSeq ? <span className="tl-badge" data-badge="nested" title="Secuencia anidada" style={{ display: "inline-flex" }}><Icon name="nest" size={11} /></span> : null}
         <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{isText ? `“${clip.text}”` : label}</span>
-        {clip.speed !== 1 ? <span className="tl-badge">×{Math.round(clip.speed * 100) / 100}</span> : null}
+        {ramp ? <span className="tl-badge" data-badge="ramp" title="Curva de velocidad" style={{ display: "inline-flex", color: "var(--warn)" }}><Icon name="ramp" size={11} /></span> : null}
+        {!ramp && clip.speed !== 1 ? <span className="tl-badge">×{Math.round(clip.speed * 100) / 100}</span> : null}
+        {masked ? <span className="tl-badge" data-badge="mask" title="Máscara" style={{ display: "inline-flex" }}><Icon name="mask" size={11} /></span> : null}
         {clip.reverse ? <span className="tl-badge">⟲</span> : null}
         {clip.filters?.length ? <span className="tl-badge" title={clip.filters.map((f) => f.type).join(", ")}>fx</span> : null}
         {clip.keyframes && Object.keys(clip.keyframes).length ? <span className="tl-badge" style={{ color: "var(--warn)" }}>◆</span> : null}

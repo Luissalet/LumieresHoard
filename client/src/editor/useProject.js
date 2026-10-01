@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 
-const NESTED = ["transform", "crop", "style"];
+const NESTED = ["transform", "crop", "style", "mask"];
 
 export function mergeProps(a = {}, b = {}) {
   const out = { ...a };
@@ -181,6 +181,7 @@ export function useMediaInfo(media) {
   useEffect(() => {
     if (!media) return;
     for (const m of Object.values(media)) {
+      if (m.kind === "sequence") continue;  // a nested project has no filmstrip
       const k = `${m.id}|${m.urls?.sprite ? 1 : 0}|${m.urls?.waveform ? 1 : 0}|${m.proxy}`;
       if (fetched.current.has(k)) continue;
       fetched.current.add(k);

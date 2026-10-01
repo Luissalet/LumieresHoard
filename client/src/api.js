@@ -78,6 +78,9 @@ export const api = {
   freeze: (id, body) => request("POST", `/api/projects/${e(id)}/freeze`, { body }),
   stabilize: (id, body) => request("POST", `/api/projects/${e(id)}/stabilize`, { body }),
   render: (id, body) => request("POST", `/api/projects/${e(id)}/render`, { body }),
+  nest: (id, body) => request("POST", `/api/projects/${e(id)}/nest`, { body }),
+  nesting: (id) => request("GET", `/api/projects/${e(id)}/nesting`),
+  sequencePrepare: (id) => request("POST", `/api/projects/${e(id)}/sequence/prepare`),
   frameUrl: (id, t, width, stamp) => `/api/projects/${e(id)}/frame?t=${Math.round(t)}&width=${Math.round(width)}&v=${stamp ?? ""}`,
 
   // plans

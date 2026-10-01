@@ -12,11 +12,13 @@ from typing import Any, Callable, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from .errors import LumiereError, NotFound
-from .timeline import (MIN_CLIP_MS, Canvas, Captions, CaptionStyle, Clip, Crop, Filter, FilterType, Keyframe, KeyProp, Marker, Project,
-                       TextStyle, Track, TrackKind, Transform, Transition, TransitionType, clone, snap)
+from .timeline import (MASK_PROPS, MIN_CLIP_MS, Canvas, Captions, CaptionStyle, Clip, Crop, Ease, Filter, FilterType, Keyframe, KeyProp, Marker,
+                       Mask, MaskShape, Project, SpeedKey, TextStyle, Track, TrackKind, Transform, Transition, TransitionType, clone, snap)
 from .util import new_id, parse_time
 
 MediaLookup = Callable[[str], Optional[dict[str, Any]]]
+DocLookup = Callable[[str], Optional[Project]]
+RAMP_PRESETS = ("speed_up", "slow_down", "ease_in_out", "hit", "clear")
 
 PRESETS: dict[str, dict[str, Any]] = {
     "reels": {"width": 1080, "height": 1920, "fps": 30, "label": "Reels / Shorts / TikTok 9:16"},
@@ -275,9 +277,61 @@ class Notes(OpBase):
     text: str = Field("", max_length=8000)
 
 
+class RampKey(OpBase):
+    t: Time = Field(..., description="Source ms from the clip's in point (relative=true) or of the media.")
+    v: float = Field(..., ge=0.1, le=16)
+    ease: Ease = "linear"
+
+
+class SpeedRamp(OpBase):
+    op: Literal["speed_ramp"]
+    clip: str
+    keys: Optional[list[RampKey]] = Field(None, max_length=64, description="Speed curve [{t, v, ease}]; t in source ms (see relative).")
+    preset: Optional[Literal["speed_up", "slow_down", "ease_in_out", "hit", "clear"]] = Field(
+        None, description="speed_up / slow_down: 1x to speed over the clip; ease_in_out: up to speed and back; hit: slow motion around 'at'; clear.")
+    speed: Optional[float] = Field(None, ge=0.1, le=16, description="Target speed of the preset (speed_up 2, slow_down 0.5, ease_in_out 2, hit 0.25).")
+    at: Optional[Time] = Field(None, description="hit: timeline time of the moment to slow down (default the clip's middle).")
+    hold: Optional[Time] = Field(None, description="hit: source ms played at the slow speed (default 600).")
+    ramp: Optional[Time] = Field(None, description="hit: source ms to go down and back up (default 400).")
+    relative: bool = Field(True, description="keys: t counts from the clip's in point (false: media time).")
+    ripple: bool = True
+
+
+class AddSequence(OpBase):
+    op: Literal["add_sequence"]
+    project: str = Field(..., description="The project to use as a clip (prj_...); it cannot contain this project.")
+    track: Optional[str] = None
+    at: Optional[Time] = Field(None, description="Timeline ms; omitted = end of the track.")
+    src_in: Optional[Time] = Field(None, description="From this time of the nested timeline.")
+    src_out: Optional[Time] = None
+    mode: Literal["insert", "overwrite", "append"] = "append"
+    label: str = ""
+
+
+class Unnest(OpBase):
+    op: Literal["unnest"]
+    clip: str = Field(..., description="A sequence clip: its nested clips come back onto this timeline in its place.")
+
+
+class MaskOp(OpBase):
+    op: Literal["mask"]
+    clip: Optional[str] = None
+    clips: Optional[list[str]] = Field(None, max_length=500)
+    shape: Optional[MaskShape] = None
+    x: Optional[float] = Field(None, ge=-1, le=2, description="Centre as a fraction of the clip's picture (0.5 = middle).")
+    y: Optional[float] = Field(None, ge=-1, le=2)
+    w: Optional[float] = Field(None, gt=0, le=4, description="Size as a fraction of the clip's picture.")
+    h: Optional[float] = Field(None, gt=0, le=4)
+    radius: Optional[float] = Field(None, ge=0, le=0.5)
+    feather: Optional[float] = Field(None, ge=0, le=0.5, description="Soft edge, fraction of the picture's smaller side.")
+    invert: Optional[bool] = None
+    enabled: Optional[bool] = None
+    remove: bool = Field(False, description="Remove the mask and its keyframes.")
+
+
 Op = Union[AddMedia, AddText, Split, Trim, Move, Delete, DeleteRange, CutSource, KeepSource, SetClip, Speed, TransitionOp, FilterAdd,
            FilterRemove, TrackAdd, TrackSet, TrackDelete, CanvasOp, MarkerAdd, MarkerDelete, CaptionsOp, Duplicate, DetachAudio, CloseGaps,
-           ReplaceMedia, Sequence, KeyframesOp, Slip, Roll, InsertClips, Notes]
+           ReplaceMedia, Sequence, KeyframesOp, Slip, Roll, InsertClips, Notes, SpeedRamp, AddSequence, Unnest, MaskOp]
 _ADAPTER = TypeAdapter(Op)
 OP_MODELS: dict[str, type[BaseModel]] = {m.model_fields["op"].annotation.__args__[0]: m for m in Op.__args__}  # type: ignore[union-attr]
 OP_NAMES = sorted(OP_MODELS)
@@ -291,6 +345,8 @@ OP_ALIASES = {
     "marker": "marker_add", "add_marker": "marker_add", "chapter": "marker_add", "add_transition": "transition", "add_filter": "filter_add",
     "effect": "filter_add", "add_effect": "filter_add", "set_clip": "set", "update": "set", "set_speed": "speed", "add_track": "track_add",
     "insert": "insert_clips", "subtitles": "captions", "set_canvas": "canvas", "resize": "canvas", "close_gap": "close_gaps",
+    "ramp": "speed_ramp", "speed_curve": "speed_ramp", "time_remap": "speed_ramp", "add_project": "add_sequence", "add_nested": "add_sequence",
+    "nested": "add_sequence", "un_nest": "unnest", "flatten": "unnest", "add_mask": "mask", "set_mask": "mask", "shape_mask": "mask",
 }
 # argument names assistants guess; renamed only when the operation has the target field and not the guessed one
 _ARG_ALIASES = {
@@ -364,14 +420,27 @@ def parse_op(raw: dict[str, Any]) -> BaseModel:
 # ------------------------------------------------------------------ helpers
 
 class Ctx:
-    def __init__(self, project: Project, media: MediaLookup):
+    def __init__(self, project: Project, media: MediaLookup, project_id: Optional[str] = None, docs: Optional[DocLookup] = None):
         self.p = project
         self.media_lookup = media
+        self.project_id = project_id  # the project being edited (refuses nesting it inside itself)
+        self.docs = docs  # reads another project's timeline (un-nest)
 
     def media(self, media_id: str) -> dict[str, Any]:
         info = self.media_lookup(media_id)
         if info is None:
+            if str(media_id).startswith("prj_"):
+                raise NotFound(f"No project {media_id} to use as a sequence.")
             raise NotFound(f"No media {media_id}. Import it first (media_import).")
+        return info
+
+    def check_nesting(self, project_id: str) -> dict[str, Any]:
+        """The nested project's info; refuses a project that is this one or contains it (a sequence cannot hold itself)."""
+        info = self.media(project_id)
+        if info.get("kind") != "sequence":
+            raise LumiereError(f"{project_id} is not a project.")
+        if info.get("cycle") or (self.project_id and (project_id == self.project_id or self.project_id in (info.get("contains") or []))):
+            raise LumiereError(f"Project {info.get('name') or project_id} contains this project: nesting it here would make a loop.", code="sequence_cycle")
         return info
 
     def fps(self) -> float:
@@ -524,7 +593,7 @@ def source_to_timeline(p: Project, media_id: str, ranges: list[tuple[int, int]])
     """Timeline ranges where the given source ranges of a media are shown (every clip of that media)."""
     out: list[tuple[int, int]] = []
     for _, c in p.all_clips():
-        if c.media != media_id or c.type != "media":
+        if c.media != media_id or c.type == "text":
             continue
         for a, b in ranges:
             lo, hi = max(a, c.src_in), min(b, c.src_out)
@@ -546,8 +615,11 @@ def _add_media(ctx: Ctx, o: AddMedia) -> dict:
         raise LumiereError("Media goes on a video or audio track, not on a text track.")
     if track.kind == "video" and not (info.get("has_video") or info.get("kind") == "image"):
         raise LumiereError(f"{info.get('name')} has no picture: put it on an audio track.")
+    if info.get("kind") == "sequence":
+        ctx.check_nesting(o.media)
     a, b = _media_span(ctx, info, _t(o.src_in), _t(o.src_out), _t(o.length))
-    clip = Clip(media=o.media, src_in=a, src_out=b, label=o.label or str(info.get("name") or "")[:120])
+    clip = Clip(type="sequence" if info.get("kind") == "sequence" else "media", media=o.media, src_in=a, src_out=b,
+                label=o.label or str(info.get("name") or "")[:120])
     if o.fit:
         clip.transform.fit = o.fit
     elif track.kind == "video":
@@ -600,9 +672,27 @@ def _split_clip(track: Track, c: Clip, at: int) -> Optional[str]:
     right = _cut_clip(c, at, c.end, new_id_for_part=True)
     if not left or not right:
         return None
+    if c.has_ramp:
+        left, right = _ramp_split(c, left, right, at)
     idx = track.clips.index(c)
     track.clips[idx:idx + 1] = [left, right]
     return right.id
+
+
+def _ramp_split(c: Clip, left: Clip, right: Clip, at: int) -> tuple[Clip, Clip]:
+    """Sources are whole ms, so on a speed curve the rounded cut can make the halves 1 ms longer or shorter than asked:
+    nudge the cut by a few ms until the left half ends at ``at`` and the right one where the clip ended."""
+    base = int(round(c.src_at(at)))
+    for d in (0, 1, -1, 2, -2, 3, -3, 4, -4):
+        s = base + d
+        if c.reverse:
+            l2, r2 = left.model_copy(update={"src_in": s}), right.model_copy(update={"src_out": s})
+        else:
+            l2, r2 = left.model_copy(update={"src_out": s}), right.model_copy(update={"src_in": s})
+        if l2.end == at and r2.end == c.end:
+            return l2, r2
+    right.start = left.end
+    return left, right
 
 
 def _split(ctx: Ctx, o: Split) -> dict:
@@ -637,6 +727,7 @@ def _trim(ctx: Ctx, o: Trim) -> dict:
         if c.type == "text":
             c.length = max(MIN_CLIP_MS, length)
         else:
+            c.speed_keys = []
             c.src_out = c.src_in + int(max(MIN_CLIP_MS, length) * c.speed)
     else:
         info = ctx.media(c.media)
@@ -751,8 +842,9 @@ def _keep_source(ctx: Ctx, o: KeepSource) -> dict:
 
 
 _SETTABLE = {"label", "mute", "volume_db", "fade_in", "fade_out", "audio_fade_in", "audio_fade_out", "transform", "crop", "text", "style", "color",
-             "speed", "reverse", "audio_stream", "keyframes", "filters", "reframe", "transition_in", "start", "src_in", "src_out", "length"}
-_MERGED = {"transform": Transform, "crop": Crop, "style": TextStyle}
+             "speed", "reverse", "audio_stream", "keyframes", "filters", "reframe", "transition_in", "start", "src_in", "src_out", "length",
+             "speed_keys", "mask"}
+_MERGED = {"transform": Transform, "crop": Crop, "style": TextStyle, "mask": Mask}
 
 
 def _set(ctx: Ctx, o: SetClip) -> dict:
@@ -784,7 +876,8 @@ def _set(ctx: Ctx, o: SetClip) -> dict:
 
 
 def _speed(ctx: Ctx, o: Speed) -> dict:
-    return _set(ctx, SetClip(op="set", clip=o.clip, props={"speed": o.speed}, ripple=o.ripple))
+    """A constant speed; it replaces a speed curve if the clip had one."""
+    return _set(ctx, SetClip(op="set", clip=o.clip, props={"speed": o.speed, "speed_keys": []}, ripple=o.ripple))
 
 
 def _transition(ctx: Ctx, o: TransitionOp) -> dict:
@@ -843,10 +936,10 @@ def _filter_add(ctx: Ctx, o: FilterAdd) -> dict:
     if o.clips:
         clips = [p.find(cid)[1] for cid in o.clips]
     elif o.track:
-        clips = [c for c in p.track(o.track).clips if c.type == "media"]
+        clips = [c for c in p.track(o.track).clips if c.type != "text"]
     else:
         main = p.main_track()
-        clips = [c for c in (main.clips if main else []) if c.type == "media"]
+        clips = [c for c in (main.clips if main else []) if c.type != "text"]
     from .render.filters import check_params  # lazy: render imports ops
 
     params = check_params(o.type, o.params)
@@ -962,7 +1055,7 @@ def _duplicate(ctx: Ctx, o: Duplicate) -> dict:
 def _detach_audio(ctx: Ctx, o: DetachAudio) -> dict:
     p = ctx.p
     track, c = p.find(o.clip)
-    if c.type != "media" or track.kind != "video":
+    if c.type == "text" or track.kind != "video":
         raise LumiereError("Only media clips on a video track have audio to detach.")
     if not ctx.media(c.media).get("has_audio"):
         raise LumiereError("That media has no sound.")
@@ -970,7 +1063,8 @@ def _detach_audio(ctx: Ctx, o: DetachAudio) -> dict:
     if dest is None:
         dest = Track(kind="audio", name="Voz", role="voice")
         p.tracks.append(dest)
-    audio = Clip(media=c.media, src_in=c.src_in, src_out=c.src_out, start=c.start, speed=c.speed, reverse=c.reverse, volume_db=c.volume_db,
+    audio = Clip(type=c.type, media=c.media, src_in=c.src_in, src_out=c.src_out, start=c.start, speed=c.speed, reverse=c.reverse,
+                 speed_keys=[k.model_copy() for k in c.speed_keys], volume_db=c.volume_db,
                  audio_fade_in=c.audio_fade_in, audio_fade_out=c.audio_fade_out, audio_stream=c.audio_stream, label=c.label,
                  filters=[f for f in c.filters if f.type in _AUDIO_FILTER_TYPES])
     _clear_range(dest, audio.start, audio.end)
@@ -1000,11 +1094,16 @@ def _close_gaps(ctx: Ctx, o: CloseGaps) -> dict:
 def _replace_media(ctx: Ctx, o: ReplaceMedia) -> dict:
     track, c = ctx.p.find(o.clip)
     info = ctx.media(o.media)
-    if c.type != "media":
+    if c.type == "text":
         raise LumiereError("Only media clips can change their media.")
+    if info.get("kind") == "sequence":
+        ctx.check_nesting(o.media)
     span = c.src_out - c.src_in
     dur = int(info.get("duration_ms") or 0)
     c.media = o.media
+    c.type = "sequence" if info.get("kind") == "sequence" else "media"
+    if info.get("kind") == "image":
+        c.speed_keys = []
     if info.get("kind") == "image":
         c.src_in, c.src_out = 0, span
     else:
@@ -1030,6 +1129,10 @@ def _keyframes(ctx: Ctx, o: KeyframesOp) -> dict:
     track, c = ctx.p.find(o.clip)
     _unlocked(track)
     keys = sorted(o.keys, key=lambda k: k.t)
+    if keys and o.prop in MASK_PROPS and c.mask is None:
+        if c.type == "text" or track.kind != "video":
+            raise LumiereError("Masks shape the picture of media clips on video tracks.")
+        c.mask = Mask()  # animating a mask that is not there yet starts from the default ellipse
     if keys:
         c.keyframes[o.prop] = keys
     else:
@@ -1040,18 +1143,21 @@ def _keyframes(ctx: Ctx, o: KeyframesOp) -> dict:
 def _slip(ctx: Ctx, o: Slip) -> dict:
     track, c = ctx.p.find(o.clip)
     _unlocked(track)
-    if c.type != "media":
+    if c.type == "text":
         raise LumiereError("Only media clips can slip.")
     info = ctx.media(c.media)
     if info.get("kind") == "image":
         raise LumiereError("A picture has nothing to slip.")
     dur = int(info.get("duration_ms") or 0)
-    delta = int(round(_t(o.delta) * c.speed))
+    rate = (c.src_out - c.src_in) / max(1, c.duration)  # mean speed (a curve slides along with the content it shapes)
+    delta = int(round(_t(o.delta) * rate))
     delta = max(-c.src_in, delta)
     if dur:
         delta = min(dur - c.src_out, delta)
     c.src_in += delta
     c.src_out += delta
+    if c.speed_keys:
+        c.speed_keys = [SpeedKey(t=max(0, k.t + delta), v=k.v, ease=k.ease) for k in c.speed_keys]
     return {"clip": c.id, "src_in": c.src_in, "src_out": c.src_out, "applied_ms": delta}
 
 
@@ -1068,21 +1174,27 @@ def _roll(ctx: Ctx, o: Roll) -> dict:
     delta = ctx.snap(_t(o.delta))
     lo = -(left.duration - MIN_CLIP_MS)
     hi = right.duration - MIN_CLIP_MS
-    if left.type == "media" and (ctx.media(left.media).get("kind") != "image"):
+    if left.type != "text" and (ctx.media(left.media).get("kind") != "image"):
         dur = int(ctx.media(left.media).get("duration_ms") or 0)
         if dur:
-            hi = min(hi, int((dur - left.src_out) / left.speed))
-    if right.type == "media" and (ctx.media(right.media).get("kind") != "image"):
-        lo = max(lo, -int(right.src_in / right.speed))
+            room = (left.timeline_at(dur) - left.end) if left.has_ramp and not left.reverse else (dur - left.src_out) / left.speed
+            hi = min(hi, int(room))
+    if right.type != "text" and (ctx.media(right.media).get("kind") != "image"):
+        room = (right.start - right.timeline_at(0)) if right.has_ramp and not right.reverse else right.src_in / right.speed
+        lo = max(lo, -int(room))
     delta = max(lo, min(hi, delta))
     if left.type == "text":
         left.length += delta
+    elif left.has_ramp and not left.reverse:
+        left.src_out = int(round(left.src_at(left.end + delta)))  # through the speed curve
     else:
         left.src_out += int(round(delta * left.speed))
     if right.type == "text":
         right.length -= delta
     elif ctx.media(right.media).get("kind") == "image":
         right.src_out -= int(round(delta * right.speed))
+    elif right.has_ramp and not right.reverse:
+        right.src_in = int(round(right.src_at(right.start + delta)))
     else:
         right.src_in += int(round(delta * right.speed))
     right.start += delta
@@ -1099,7 +1211,10 @@ def _insert_clips(ctx: Ctx, o: InsertClips) -> dict:
         except ValidationError as error:
             raise LumiereError(f"Not a clip: {error.errors()[0]['msg']}") from error
         if c.media:
-            ctx.media(c.media)
+            info = ctx.media(c.media)
+            if c.type == "sequence" or info.get("kind") == "sequence":
+                ctx.check_nesting(c.media)
+                c.type = "sequence"
         clips.append(c)
     first = min(c.start for c in clips)
     at = ctx.snap(_t(o.at))
@@ -1136,6 +1251,244 @@ def _notes(ctx: Ctx, o: Notes) -> dict:
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ speed curves
+
+def _distinct(keys: list[SpeedKey]) -> list[SpeedKey]:
+    """Sorted keys with strictly increasing times (presets clamped at 0 can collide)."""
+    out: list[SpeedKey] = []
+    for k in sorted(keys, key=lambda k: k.t):
+        if out and k.t <= out[-1].t:
+            k = SpeedKey(t=out[-1].t + 1, v=k.v, ease=k.ease)
+        out.append(k)
+    return out
+
+
+def ramp_preset(c: Clip, preset: str, speed: Optional[float] = None, at: Optional[int] = None, hold: Optional[int] = None,
+                ramp: Optional[int] = None) -> list[SpeedKey]:
+    """Speed keys for a named curve over the clip's source span (absolute source times)."""
+    lo, hi = c.src_in, c.src_out
+    span = hi - lo
+    base = 1.0 if c.has_ramp else c.speed
+    if preset == "clear":
+        return []
+    if preset in ("speed_up", "slow_down"):
+        target = speed or (2.0 if preset == "speed_up" else 0.5)
+        return [SpeedKey(t=lo, v=base, ease="ease_in_out"), SpeedKey(t=hi, v=target)]
+    if preset == "ease_in_out":
+        target = speed or 2.0
+        return [SpeedKey(t=lo, v=base, ease="ease_in_out"), SpeedKey(t=int(lo + span * 0.3), v=target),
+                SpeedKey(t=int(lo + span * 0.7), v=target, ease="ease_in_out"), SpeedKey(t=hi, v=base)]
+    if preset == "hit":
+        target = speed or 0.25
+        centre = c.src_at(at) if at is not None else (lo + hi) / 2
+        hold_ms = hold if hold is not None else min(600, span / 3)
+        ramp_ms = ramp if ramp is not None else min(400, span / 4)
+        a = centre - hold_ms / 2
+        b = centre + hold_ms / 2
+        return _distinct([SpeedKey(t=max(0, int(a - ramp_ms)), v=base, ease="ease_in_out"), SpeedKey(t=max(0, int(a)), v=target),
+                          SpeedKey(t=max(0, int(b)), v=target, ease="ease_in_out"), SpeedKey(t=max(0, int(b + ramp_ms)), v=base)])
+    raise LumiereError(f"Unknown speed curve {preset!r}. Known: {', '.join(RAMP_PRESETS)}.")
+
+
+def _speed_ramp(ctx: Ctx, o: SpeedRamp) -> dict:
+    track, c = ctx.p.find(o.clip)
+    _unlocked(track)
+    if c.type == "text" or ctx.media(c.media).get("kind") == "image":
+        raise LumiereError("Speed curves are for video and audio clips (not titles or pictures).")
+    if o.keys is None and o.preset is None:
+        raise LumiereError("Give keys [{t, v, ease}] or a preset (" + ", ".join(RAMP_PRESETS) + ").")
+    if o.keys is not None:
+        offset = c.src_in if o.relative else 0
+        keys = [SpeedKey(t=max(0, (_t(k.t) or 0) + offset), v=k.v, ease=k.ease) for k in o.keys]
+        times = [k.t for k in keys]
+        if len(set(times)) != len(times):
+            raise LumiereError("Two speed keys at the same time.")
+        keys.sort(key=lambda k: k.t)
+    else:
+        keys = ramp_preset(c, o.preset, o.speed, _t(o.at), _t(o.hold), _t(o.ramp))
+    old_end = c.end
+    data = c.model_dump()
+    data["speed_keys"] = [k.model_dump() for k in keys]
+    if not keys and o.preset == "clear":
+        data["speed"] = 1.0 if c.has_ramp else c.speed
+    try:
+        new = Clip.model_validate(data)
+    except ValidationError as error:
+        raise LumiereError(f"That curve leaves the clip unusable: {error.errors()[0]['msg']}") from error
+    track.clips[track.clips.index(c)] = new
+    delta = new.end - old_end
+    if o.ripple and delta:
+        _shift(track, old_end, delta, exclude={new.id})
+    elif delta > 0:
+        _clear_range(track, old_end, new.end, keep={new.id})
+    return {"clip": new.id, "start": new.start, "end": new.end, "duration": new.duration,
+            "keys": [{"t": k.t - new.src_in, "v": k.v, "ease": k.ease} for k in new.speed_keys]}
+
+
+# ------------------------------------------------------------------ masks
+
+def _mask(ctx: Ctx, o: MaskOp) -> dict:
+    ids = o.clips or ([o.clip] if o.clip else [])
+    if not ids:
+        raise LumiereError("Give 'clip' or 'clips'.")
+    patch = {k: getattr(o, k) for k in ("shape", "x", "y", "w", "h", "radius", "feather", "invert", "enabled") if getattr(o, k) is not None}
+    last: Optional[dict] = None
+    for cid in ids:
+        track, c = ctx.p.find(cid)
+        _unlocked(track)
+        if c.type == "text" or track.kind != "video":
+            raise LumiereError("Masks shape the picture of media clips on video tracks.")
+        if o.remove:
+            c.mask = None
+            c.keyframes = {k: v for k, v in c.keyframes.items() if k not in MASK_PROPS}
+            continue
+        base = c.mask.model_dump() if c.mask else Mask().model_dump()
+        try:
+            c.mask = Mask.model_validate({**base, **patch})
+        except ValidationError as error:
+            raise LumiereError(f"mask: {error.errors()[0]['msg']}") from error
+        last = c.mask.model_dump()
+    return {"clips": ids, "mask": last}
+
+
+# ------------------------------------------------------------------ nested sequences
+
+def _add_sequence(ctx: Ctx, o: AddSequence) -> dict:
+    ctx.check_nesting(o.project)
+    return _add_media(ctx, AddMedia(op="add_media", media=o.project, track=o.track, at=o.at, src_in=o.src_in, src_out=o.src_out, mode=o.mode,
+                                    label=o.label))
+
+
+def _outer_changes(c: Clip) -> list[str]:
+    """What a sequence clip does to the whole nested picture / sound (lost when its clips come back one by one)."""
+    dropped = []
+    if c.filters:
+        dropped.append("effects")
+    if c.mask:
+        dropped.append("mask")
+    if c.keyframes:
+        dropped.append("keyframes")
+    if c.transform != Transform(fit=c.transform.fit) or c.crop != Crop():
+        dropped.append("position / scale / crop")
+    if c.fade_in or c.fade_out or c.audio_fade_in or c.audio_fade_out:
+        dropped.append("fades")
+    if abs(c.volume_db) > 0.01 or c.mute:
+        dropped.append("volume")
+    return dropped
+
+
+def _unnest(ctx: Ctx, o: Unnest) -> dict:
+    """Put the clips of a nested project back on this timeline in place of its sequence clip."""
+    p = ctx.p
+    track, c = p.find(o.clip)
+    _unlocked(track)
+    if c.type != "sequence":
+        raise LumiereError(f"Clip {c.id} is not a nested sequence.")
+    if track.kind != "video":
+        raise LumiereError("Un-nesting works on sequences on video tracks.")
+    if c.has_ramp or abs(c.speed - 1) > 1e-6 or c.reverse:
+        raise LumiereError("Set the sequence back to speed 1 (no curve, not reversed) before un-nesting: its clips cannot keep that change.")
+    nested = ctx.docs(c.media) if ctx.docs else None
+    if nested is None:
+        raise NotFound(f"No project {c.media} to un-nest.")
+    inner = clone(nested)
+    for t in inner.tracks:
+        t.locked = False
+    end_all = max(inner.content_end, inner.duration) + 1
+    if c.src_out < end_all:
+        delete_range(inner, c.src_out, end_all, None, True)
+    if c.src_in > 0:
+        delete_range(inner, 0, c.src_in, None, True)
+    span0, span1 = c.start, c.end
+    track.clips.remove(c)
+    used: set[str] = {track.id}
+
+    def free(t: Track) -> bool:
+        return not t.locked and t.id not in used and not any(x.start < span1 and x.end > span0 for x in t.clips)
+
+    def place(nt: Track, after: Optional[Track]) -> Track:
+        """The parent track for one nested track: the next track of its kind (above ``after``) that is empty over the
+        span, or a new one, so nothing already on this timeline is overwritten."""
+        start_at = p.tracks.index(after) + 1 if after is not None else 0
+        for t in p.tracks[start_at:]:
+            if t.kind == nt.kind and free(t):
+                return t
+        if len(p.tracks) >= 24:
+            raise LumiereError("24 tracks at most: no room for the nested tracks.")
+        role = {"video": "overlay", "text": "titles"}.get(nt.kind) or (nt.role if nt.role in ("voice", "music", "sfx") else "sfx")
+        new = Track(kind=nt.kind, name=nt.name or {"video": "Vídeo", "audio": "Audio", "text": "Textos"}[nt.kind], role=role, duck=nt.duck)
+        same = [i for i, t in enumerate(p.tracks) if t.kind == nt.kind]
+        p.tracks.insert((p.tracks.index(after) + 1) if after is not None else ((same[-1] + 1) if same else len(p.tracks)), new)
+        return new
+
+    created: list[str] = []
+    last: dict[str, Optional[Track]] = {"video": None, "audio": None, "text": None}
+    for nt in inner.tracks:
+        if not nt.clips or (nt.hidden and nt.kind != "audio"):
+            continue
+        dest = track if nt.kind == "video" and last["video"] is None else place(nt, last[nt.kind])
+        used.add(dest.id)
+        last[nt.kind] = dest
+        for x in sorted(nt.clips, key=lambda x: x.start):
+            if span0 + x.start >= span1:
+                continue
+            copy_ = x.model_copy(deep=True)
+            copy_.id = new_id("clp")
+            copy_.start = span0 + x.start
+            if nt.muted:
+                copy_.mute = True
+            if abs(nt.volume_db) > 0.01:
+                copy_.volume_db = max(-60.0, min(24.0, copy_.volume_db + nt.volume_db))
+            if dest is track and copy_.start == span0 and c.transition_in:
+                copy_.transition_in = c.transition_in  # the transition into the sequence now leads into its first clip
+            dest.clips.append(copy_)
+            created.append(copy_.id)
+    return {"clips": created, "tracks": sorted(used), "dropped": _outer_changes(c), "from": c.media}
+
+
+def nest_plan(p: Project, clip_ids: list[str]) -> tuple[Project, dict[str, Any]]:
+    """The project that will hold the selected clips (times from the start of the selection, same canvas) and where the
+    sequence clip that replaces them goes: the lowest video track of the selection (or its lowest audio track)."""
+    if not clip_ids:
+        raise LumiereError("Select the clips to nest.")
+    found = [p.find(cid) for cid in dict.fromkeys(clip_ids)]
+    for t, _ in found:
+        _unlocked(t)
+    start = min(c.start for _, c in found)
+    end = max(c.end for _, c in found)
+    order = {t.id: i for i, t in enumerate(p.tracks)}
+    involved = sorted({t.id: t for t, _ in found}.values(), key=lambda t: order[t.id])
+    dest = next((t for t in involved if t.kind == "video"), None) or next((t for t in involved if t.kind == "audio"), None)
+    if dest is None:
+        raise LumiereError("Select at least one video or audio clip (titles alone cannot be a sequence).")
+    chosen = {c.id for _, c in found}
+    first_on_dest = min((c for t, c in found if t is dest), key=lambda c: c.start)
+    lead = first_on_dest.transition_in.dur if first_on_dest.transition_in and first_on_dest.start == start else 0
+    for c in dest.clips:
+        if c.id in chosen or c.end <= start or c.start >= end:
+            continue
+        if c.start < start and c.end - start <= lead + 1:
+            continue  # the clip before, overlapping by the transition into the selection
+        if c.start >= start and c.transition_in and end - c.start <= c.transition_in.dur + 1:
+            continue  # the clip after, overlapping by its transition
+        raise LumiereError(f"Clip {c.id} on track {dest.name or dest.id} is partly inside the selected span: select it too "
+                           "(the sequence takes the whole span).")
+    nested = Project(canvas=p.canvas.model_copy(), tracks=[], length_mode="longest")
+    for t in involved:
+        nt = Track(kind=t.kind, name=t.name, role=t.role, duck=t.duck)
+        for c in sorted((c for tt, c in found if tt is t), key=lambda c: c.start):
+            copy_ = c.model_copy(deep=True)
+            copy_.start = c.start - start
+            if copy_.transition_in and not any(o.id in chosen and o.end > c.start and o.start < c.start for o in t.clips if o.id != c.id):
+                copy_.transition_in = None  # its transition was with a clip that stays outside
+            nt.clips.append(copy_)
+        nested.tracks.append(nt)
+    keep_transition = first_on_dest.transition_in if lead else None
+    if keep_transition and not any(o.id not in chosen and o.end > first_on_dest.start and o.start < first_on_dest.start for o in dest.clips):
+        keep_transition = None
+    return nested, {"start": start, "end": end, "length": end - start, "track": dest.id, "transition_in": keep_transition}
+
+
 HANDLERS: dict[str, Callable[[Ctx, Any], dict]] = {
     "add_media": _add_media, "add_text": _add_text, "split": _split, "trim": _trim, "move": _move, "delete": _delete,
     "delete_range": _delete_range, "cut_source": _cut_source, "keep_source": _keep_source, "set": _set, "speed": _speed,
@@ -1143,13 +1496,16 @@ HANDLERS: dict[str, Callable[[Ctx, Any], dict]] = {
     "track_delete": _track_delete, "canvas": _canvas, "marker_add": _marker_add, "marker_delete": _marker_delete, "captions": _captions,
     "duplicate": _duplicate, "detach_audio": _detach_audio, "close_gaps": _close_gaps, "replace_media": _replace_media,
     "sequence": _sequence, "keyframes": _keyframes, "slip": _slip, "roll": _roll, "insert_clips": _insert_clips, "notes": _notes,
+    "speed_ramp": _speed_ramp, "add_sequence": _add_sequence, "unnest": _unnest, "mask": _mask,
 }
 
 
-def apply_ops(project: Project, ops: list[dict[str, Any]], media: MediaLookup) -> tuple[Project, list[dict[str, Any]]]:
-    """Apply ``ops`` in order to a copy of ``project``. All or nothing: the first failure raises and the original is untouched."""
+def apply_ops(project: Project, ops: list[dict[str, Any]], media: MediaLookup, *, project_id: Optional[str] = None,
+              docs: Optional[DocLookup] = None) -> tuple[Project, list[dict[str, Any]]]:
+    """Apply ``ops`` in order to a copy of ``project``. All or nothing: the first failure raises and the original is untouched.
+    ``project_id`` (the project being edited) lets nesting refuse loops; ``docs`` reads nested projects for un-nesting."""
     work = clone(project)
-    ctx = Ctx(work, media)
+    ctx = Ctx(work, media, project_id, docs)
     results: list[dict[str, Any]] = []
     for index, raw in enumerate(ops):
         op = parse_op(raw)

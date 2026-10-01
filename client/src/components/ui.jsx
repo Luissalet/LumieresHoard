@@ -65,6 +65,9 @@ const P = {
   cut: "M3 12h5M16 12h5M8 7l8 10",
   refresh: "M20 8a8 8 0 00-14.5-2M4 4v4h4M4 16a8 8 0 0014.5 2M20 20v-4h-4",
   external: "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6",
+  nest: "M3 4h18v16H3zM7 8h10v8H7z",
+  mask: "M4 4h16v16H4zM12 16.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9z",
+  ramp: "M3 18c5 0 6-12 18-12M3 21h18M3 3v18",
 };
 
 export function Icon({ name, size = 16, d, className, style }) {

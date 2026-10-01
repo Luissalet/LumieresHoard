@@ -3,7 +3,7 @@ import { useApp } from "../App.jsx";
 import { Icon } from "../components/ui.jsx";
 import { useEd } from "./EditorContext.js";
 import TimelineClip, { visibleRange } from "./TimelineClip.jsx";
-import { clamp, clipDur, clipEnd, fmtMs, fmtRuler, frameMs, rulerStep, trackRows } from "./time.js";
+import { clamp, clipDur, clipEnd, fmtMs, fmtRuler, frameMs, hasRamp, rulerStep, srcAt, trackRows } from "./time.js";
 
 const HDR_W = 176;
 const ROW_H = { video: 52, audio: 44, text: 34 };
@@ -17,9 +17,25 @@ const MIN_CLIP = 80;
 
 const MARKER_COLORS = { note: "#F5B700", beat: "#c77dff", scene: "#3BA4F5", highlight: "var(--ok)", chapter: "#ff8a5c" };
 
+// Trimming a clip with a speed curve: the edge moves along the curve, so the new source point is read through it.
+function rampTrimCalc(clip, side, d, mediaDur, ripple) {
+  const dur = clipDur(clip);
+  if (side === "l" && !ripple) d = Math.max(d, -clip.start);
+  const key = (side === "r") !== !!clip.reverse ? "src_out" : "src_in";
+  let src = srcAt(clip, side === "r" ? clipEnd(clip) + d : clip.start + d);
+  src = clamp(src, 0, mediaDur || Infinity);
+  src = key === "src_out" ? Math.max(src, clip.src_in + 1) : Math.min(src, clip.src_out - 1);
+  const props = { [key]: Math.round(src) };
+  const ndur = clipDur({ ...clip, ...props });
+  if (ndur < MIN_CLIP) return { d: 0, props: {}, start: clip.start, dur };
+  const nd = side === "r" ? ndur - dur : dur - ndur;
+  return { d: nd, props, start: side === "l" ? clip.start + nd : clip.start, dur: ndur };
+}
+
 function trimCalc(clip, side, d, mediaDur, isLen, ripple) {
   const s = clip.speed || 1;
   const dur = clipDur(clip);
+  if (!isLen && hasRamp(clip)) return rampTrimCalc(clip, side, d, mediaDur, ripple);
   if (isLen) {
     if (side === "r") d = Math.max(d, MIN_CLIP - dur);
     else { d = Math.min(d, dur - MIN_CLIP); if (!ripple) d = Math.max(d, -clip.start); }
@@ -264,10 +280,10 @@ export default function Timeline() {
     if (!was) { ids = [clip.id]; setSelection({ ids, track: null }); }
     if (track.locked) return;
     const clipMedia = clip.media ? view.media[clip.media] : null;
-    if (e.altKey && clip.type === "media" && clipMedia && clipMedia.kind !== "image") {
+    if (e.altKey && clip.type !== "text" && clipMedia && clipMedia.kind !== "image") {
       // Slip: the block stays, the source material slides under it.
       const startX = e.clientX;
-      const sp = clip.speed || 1;
+      const sp = hasRamp(clip) ? (clip.src_out - clip.src_in) / Math.max(1, clipDur(clip)) : clip.speed || 1;  // a curve slips at its mean speed
       const mdur = clipMedia.duration_ms || 0;
       let started = false;
       let lastD = 0;
@@ -380,7 +396,7 @@ export default function Timeline() {
       const i = sorted.findIndex((c) => c.id === clip.id);
       const left = side === "l" ? sorted[i - 1] : clip;
       const right = side === "l" ? clip : sorted[i + 1];
-      if (left && right && Math.abs(clipEnd(left) - right.start) <= 1 && left.type === "media" && right.type === "media") {
+      if (left && right && Math.abs(clipEnd(left) - right.start) <= 1 && left.type !== "text" && right.type !== "text") {
         startRoll(e, left, right, track);
         return;
       }

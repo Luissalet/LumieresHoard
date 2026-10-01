@@ -1,10 +1,47 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { api } from "../../api.js";
 import { useApp } from "../../App.jsx";
 import { Bar, Icon, Seg, Spinner } from "../../components/ui.jsx";
 import ImportDialog from "../../components/ImportDialog.jsx";
 import { DropUpload, MediaThumb, useMediaLibrary, useUploadPicker } from "../../components/Media.jsx";
 import { useEd } from "../EditorContext.js";
 import { PanelHead } from "./Shared.jsx";
+
+// Other projects of the library, to drop onto this timeline as nested sequences (the server refuses loops).
+function ProjectsAsClips() {
+  const { t } = useApp();
+  const ed = useEd();
+  const [open, setOpen] = useState(false);
+  const [list, setList] = useState(null);
+  useEffect(() => {
+    if (!open) return;
+    api.projects().then((r) => setList((r.projects || []).filter((p) => p.id !== ed.projectId && !p.is_template))).catch(() => setList([]));
+  }, [open, ed.projectId, ed.view.rev]);
+  const add = async (p) => {
+    const res = await ed.edit([{ op: "add_sequence", project: p.id }], t("lbl_add_sequence"));
+    const clip = res?.results?.[0]?.clip;
+    if (clip) ed.setSelection({ ids: [clip], track: null });
+  };
+  return (
+    <div style={{ marginTop: 16 }} data-testid="projects-as-clips">
+      <button type="button" className="btn btn-ghost btn-sm" style={{ paddingLeft: 0 }} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <Icon name={open ? "chevdown" : "chevron"} size={13} /><Icon name="nest" size={13} />{t("projects_as_clips")}
+      </button>
+      {open ? (
+        <div style={{ marginTop: 6 }}>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>{t("projects_as_clips_help")}</div>
+          {!list ? <Spinner /> : list.map((p) => (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 0", borderTop: "1px solid var(--line)" }}>
+              <span className="ellipsis" style={{ flex: 1, minWidth: 0, fontSize: 12 }} title={p.name}>{p.name}</span>
+              <span className="mono muted" style={{ fontSize: 10.5 }}>{p.duration}</span>
+              <button type="button" className="btn btn-sm btn-icon" title={t("add_as_clip")} aria-label={`${t("add_as_clip")}: ${p.name}`} disabled={!p.duration_ms} onClick={() => add(p)}><Icon name="plus" size={13} /></button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export default function MediaPanel() {
   const { t, jobs } = useApp();
@@ -51,6 +88,7 @@ export default function MediaPanel() {
             </div>
           )}
           <div className="muted" style={{ fontSize: 11.5, marginTop: 14 }}>{t("media_tip")}</div>
+          <ProjectsAsClips />
         </div>
       </DropUpload>
       {importing ? <ImportDialog onClose={() => setImporting(false)} onImported={refresh} /> : null}

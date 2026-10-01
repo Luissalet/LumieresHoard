@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from . import media as media_store
 from .errors import Conflict, LumiereError, NotFound
-from .ops import PRESETS, apply_ops
-from .timeline import Project, load, new_project, validate
+from .ops import PRESETS, apply_ops, nest_plan
+from .timeline import Clip, Project, clone, load, new_project, validate
 from .util import clip, dumps, ms_to_tc, new_id
 
 if TYPE_CHECKING:
@@ -30,14 +30,57 @@ def doc(svc: "Services", project_id: str) -> Project:
 
 
 def media_lookup(svc: "Services"):
+    """Media and nested projects by id: ``prj_...`` ids answer as media of kind "sequence" (their timeline is the source)."""
     cache: dict[str, Optional[dict]] = {}
 
     def look(mid: str) -> Optional[dict[str, Any]]:
         if mid not in cache:
-            cache[mid] = media_store.lookup(svc, mid)
+            cache[mid] = sequence_info(svc, mid) if str(mid).startswith("prj_") else media_store.lookup(svc, mid)
         return cache[mid]
 
     return look
+
+
+def doc_lookup(svc: "Services"):
+    def read(project_id: str) -> Optional[Project]:
+        try:
+            return doc(svc, project_id)
+        except NotFound:
+            return None
+
+    return read
+
+
+def nested_ids(svc: "Services", project_id: str) -> set[str]:
+    """Every project reachable through sequence clips from ``project_id`` (itself included only when there is a loop)."""
+    seen: set[str] = set()
+    todo = [project_id]
+    while todo:
+        row = svc.db.one("SELECT doc FROM projects WHERE id = ?", (todo.pop(),))
+        if row is None:
+            continue
+        for sid in load(json.loads(row["doc"])).sequence_ids():
+            if sid not in seen:
+                seen.add(sid)
+                todo.append(sid)
+    return seen
+
+
+def sequence_info(svc: "Services", project_id: str) -> Optional[dict[str, Any]]:
+    """A project seen as a source for a sequence clip (the same fields as a media, kind "sequence")."""
+    row = svc.db.one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if row is None:
+        return None
+    p = load(json.loads(row["doc"]))
+    contains = nested_ids(svc, project_id)
+    from .render import sequences  # lazy: render imports this module
+
+    cached = sequences.cached(svc, project_id)
+    return {"id": project_id, "name": row["name"], "kind": "sequence", "duration_ms": p.duration, "width": p.canvas.width, "height": p.canvas.height,
+            "fps": p.canvas.fps, "has_audio": True, "has_video": True, "missing": False, "proxy": "ready" if cached else None, "rev": row["rev"],
+            "contains": sorted(contains), "cycle": project_id in contains, "path": "", "analysis": [],
+            "urls": {"play": f"/api/projects/{project_id}/sequence.mp4" if cached and not cached.alpha else None, "file": None, "poster": None, "sprite": None,
+                     "waveform": None}}
 
 
 def summary(svc: "Services", row) -> dict[str, Any]:
@@ -52,7 +95,7 @@ def summary(svc: "Services", row) -> dict[str, Any]:
 def _thumb(svc: "Services", p: Project) -> Optional[str]:
     main = p.main_track()
     for c in (main.clips if main else []):
-        if c.media:
+        if c.media and c.type == "media":
             return f"/api/media/{c.media}/poster"
     return None
 
@@ -71,10 +114,12 @@ def view(svc: "Services", project_id: str) -> dict[str, Any]:
     p = load(json.loads(row["doc"]))
     look = media_lookup(svc)
     used = {}
-    for mid in sorted(p.media_ids()):
+    for mid in sorted(p.media_ids() | p.sequence_ids()):
         info = look(mid)
         if info:
             used[mid] = {k: info[k] for k in ("id", "name", "kind", "duration_ms", "width", "height", "fps", "has_audio", "has_video", "missing", "proxy", "urls")}
+            if info["kind"] == "sequence":
+                used[mid].update(rev=info["rev"], contains=info["contains"])
     can_undo = row["head"] > 1
     can_redo = svc.db.one("SELECT 1 FROM history WHERE project_id = ? AND seq > ?", (project_id, row["head"])) is not None
     return {**summary(svc, row), "doc": p.dump(), "media": used, "issues": validate(p, look), "can_undo": can_undo, "can_redo": can_redo,
@@ -150,7 +195,7 @@ def edit(svc: "Services", project_id: str, ops: list[dict[str, Any]], *, label: 
         raise LumiereError("No operations.")
     current = doc(svc, project_id)
     look = media_lookup(svc)
-    new, results = apply_ops(current, ops, look)
+    new, results = apply_ops(current, ops, look, project_id=project_id, docs=doc_lookup(svc))
     rev = save(svc, project_id, new, label or describe(ops), actor, base_rev)
     issues = validate(new, look)
     return {"project": project_id, "rev": rev, "results": results, "duration_ms": new.duration, "duration": ms_to_tc(new.duration),
@@ -164,7 +209,8 @@ def describe(ops: list[dict[str, Any]]) -> str:
              "track_set": "Pista", "track_delete": "Borrar pista", "canvas": "Formato", "marker_add": "Marcador", "marker_delete": "Quitar marcadores",
              "captions": "Subtítulos", "duplicate": "Duplicar", "detach_audio": "Separar audio", "close_gaps": "Cerrar huecos",
              "replace_media": "Sustituir medio", "sequence": "Secuencia", "keyframes": "Animación", "slip": "Deslizar contenido", "roll": "Mover corte",
-             "insert_clips": "Pegar", "notes": "Notas"}
+             "insert_clips": "Pegar", "notes": "Notas", "speed_ramp": "Curva de velocidad", "add_sequence": "Añadir secuencia",
+             "unnest": "Desanidar", "mask": "Máscara"}
     first = names.get(str(ops[0].get("op")), str(ops[0].get("op")))
     return first if len(ops) == 1 else f"{first} (+{len(ops) - 1})"
 
@@ -222,8 +268,14 @@ def outline(svc: "Services", project_id: str) -> dict[str, Any]:
             else:
                 info = look(c.media) or {}
                 item.update({"media": c.media, "name": clip(info.get("name", ""), 40), "src": f"{ms_to_tc(c.src_in)}–{ms_to_tc(c.src_out)}"})
-                if c.speed != 1:
+                if c.type == "sequence":
+                    item["sequence"] = True
+                if c.has_ramp:
+                    item["speed_curve"] = [{"t": k.t - c.src_in, "v": k.v, "ease": k.ease} for k in c.speed_keys]
+                elif c.speed != 1:
                     item["speed"] = c.speed
+                if c.mask:
+                    item["mask"] = c.mask.shape + (" inverted" if c.mask.invert else "") + (" animated" if any(k.startswith("mask_") for k in c.keyframes) else "")
                 if c.mute:
                     item["mute"] = True
                 if c.transform.fit != "contain" or c.transform.scale != 1:
@@ -240,3 +292,51 @@ def outline(svc: "Services", project_id: str) -> dict[str, Any]:
     return {"project": project_id, "canvas": p.canvas.model_dump(), "duration": ms_to_tc(p.duration), "duration_ms": p.duration,
             "length_mode": p.length_mode, "tracks": tracks, "markers": [m.model_dump() for m in p.markers[:200]],
             "captions": p.captions.model_dump(), "issues": validate(p, look)}
+
+
+def nest(svc: "Services", project_id: str, clip_ids: list[str], name: str = "", *, actor: str = "ui") -> dict[str, Any]:
+    """Move the selected clips into a new project and put one sequence clip in their place (one undo step here; the new
+    project starts its own history)."""
+    p = doc(svc, project_id)
+    nested, where = nest_plan(p, clip_ids)
+    base = _row(svc, project_id)["name"]
+    count = 1 + sum(1 for _, c in p.all_clips() if c.type == "sequence")
+    title = clip(name or f"{base} · secuencia {count}", 120)
+    new_pid = _insert(svc, title, nested, label="Anidar desde " + clip(base, 60))
+    work = clone(p)
+    for cid in dict.fromkeys(clip_ids):
+        t, c = work.find(cid)
+        t.clips.remove(c)
+    seq = Clip(type="sequence", media=new_pid, start=where["start"], src_in=0, src_out=where["length"], label=title,
+               transition_in=where["transition_in"])
+    work.track(where["track"]).clips.append(seq)
+    work.sort()
+    work = Project.model_validate(work.dump())
+    look = media_lookup(svc)
+    errors = [i for i in validate(work, look) if i["level"] == "error"]
+    if errors:
+        delete(svc, new_pid)
+        raise LumiereError("Nesting would break the timeline: " + "; ".join(i["message"] for i in errors[:3]))
+    rev = save(svc, project_id, work, "Anidar selección", actor)
+    svc.emit("lumiere.project.created", {"id": new_pid, "name": clip(title, 80)})
+    return {"project": project_id, "rev": rev, "sequence": new_pid, "name": title, "clip": seq.id, "track": where["track"],
+            "start": where["start"], "end": where["end"], "moved": len(set(clip_ids))}
+
+
+def _insert(svc: "Services", name: str, p: Project, label: str = "Crear") -> str:
+    pid = new_id("prj")
+    now = time.time()
+    with svc.db.transaction() as conn:
+        conn.execute("INSERT INTO projects(id, name, doc, rev, head, is_template, created_ts, updated_ts) VALUES (?, ?, ?, 1, 1, 0, ?, ?)",
+                     (pid, clip(name or "Secuencia", 120), dumps(p.dump()), now, now))
+        conn.execute("INSERT INTO history(project_id, seq, label, actor, doc, ts) VALUES (?, 1, ?, 'ui', ?, ?)", (pid, label, dumps(p.dump()), now))
+    return pid
+
+
+def used_by(svc: "Services", project_id: str) -> list[dict[str, Any]]:
+    """Projects that nest this one (so the editor can say where a sequence is used)."""
+    out = []
+    for row in svc.db.query("SELECT id, name, doc FROM projects WHERE id != ?", (project_id,)):
+        if project_id in load(json.loads(row["doc"])).sequence_ids():
+            out.append({"id": row["id"], "name": row["name"]})
+    return out

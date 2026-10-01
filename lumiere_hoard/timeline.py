@@ -1,8 +1,10 @@
 """The project document: canvas, tracks, clips, markers and captions. Times are integer milliseconds.
 
 A media clip shows ``[src_in, src_out)`` of its media from ``start`` on the timeline; its length on the timeline is
-``(src_out - src_in) / speed``. A media clip on a video track carries its own audio (muted with ``mute``); audio
-tracks hold sound only. Text clips have ``start`` and ``length``. Clips on one track never overlap, except a clip
+``(src_out - src_in) / speed``, or, with a speed curve (``speed_keys``), the integral of ``1 / speed`` over the source
+span. A media clip on a video track carries its own audio (muted with ``mute``); audio tracks hold sound only. A
+sequence clip is a media clip whose ``media`` is another project (``prj_...``): ``src_in`` / ``src_out`` are times of
+that project's timeline. Text clips have ``start`` and ``length``. Clips on one track never overlap, except a clip
 with ``transition_in`` which overlaps the previous one by at most the transition length.
 """
 
@@ -12,7 +14,7 @@ import copy
 import math
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from .errors import LumiereError, NotFound
 from .util import new_id
@@ -32,7 +34,12 @@ FilterType = Literal["eq", "lut", "grayscale", "sepia", "vignette", "blur", "sha
                      "audio_denoise", "voice_enhance", "highpass", "lowpass", "compressor", "pitch", "echo"]
 CaptionStyle = Literal["clean", "bold", "karaoke", "pop", "boxed", "minimal"]
 Ease = Literal["linear", "hold", "ease_in", "ease_out", "ease_in_out"]
-KeyProp = Literal["x", "y", "scale", "opacity", "rotation", "volume_db"]
+KeyProp = Literal["x", "y", "scale", "opacity", "rotation", "volume_db", "mask_x", "mask_y", "mask_w", "mask_h", "mask_feather"]
+MaskShape = Literal["rectangle", "rounded", "ellipse"]
+MASK_PROPS = {"mask_x": "x", "mask_y": "y", "mask_w": "w", "mask_h": "h", "mask_feather": "feather"}
+RAMP_STEP_MS = 100  # source ms per constant-speed step while the speed changes (picture and sound share the steps)
+RAMP_MAX_STEPS = 24  # steps between two keys at most
+MAX_SPEED_KEYS = 64
 
 TRANSITIONS = TransitionType.__args__  # type: ignore[attr-defined]
 FILTERS = FilterType.__args__  # type: ignore[attr-defined]
@@ -91,6 +98,27 @@ class Keyframe(Strict):
     ease: Ease = "linear"
 
 
+class SpeedKey(Strict):
+    t: int = Field(..., ge=0, description="Source time (ms of the media) where the clip plays at speed v.")
+    v: float = Field(..., ge=0.1, le=16, description="Speed at that point (1 = normal, 0.25 = slow motion, 4 = fast).")
+    ease: Ease = Field("linear", description="How the speed goes from this key to the next.")
+
+
+class Mask(Strict):
+    """A shape that keeps (or, inverted, removes) part of a clip's picture. Coordinates are fractions of the clip's own
+    picture (after fit and crop, before position / rotation), so the mask travels with a picture-in-picture."""
+
+    shape: MaskShape = "ellipse"
+    x: float = Field(0.5, ge=-1, le=2, description="Centre, as a fraction of the clip's picture width (0.5 = middle).")
+    y: float = Field(0.5, ge=-1, le=2)
+    w: float = Field(0.8, gt=0, le=4, description="Width as a fraction of the clip's picture width.")
+    h: float = Field(0.8, gt=0, le=4)
+    radius: float = Field(0.2, ge=0, le=0.5, description="rounded: corner radius as a fraction of the shape's smaller side.")
+    feather: float = Field(0.0, ge=0, le=0.5, description="Soft edge width as a fraction of the picture's smaller side.")
+    invert: bool = Field(False, description="Keep the outside instead of the inside.")
+    enabled: bool = True
+
+
 class Reframe(Strict):
     """A focus path computed by the auto-reframe tool: [[src_ms, focus_x, focus_y], ...]."""
 
@@ -116,14 +144,16 @@ class TextStyle(Strict):
 
 class Clip(Strict):
     id: str = Field(default_factory=lambda: new_id("clp"))
-    type: Literal["media", "text"] = "media"
+    type: Literal["media", "text", "sequence"] = "media"
     start: int = Field(0, ge=0)
-    # media clips
+    # media and sequence clips (a sequence's media is a project id)
     media: Optional[str] = None
     src_in: int = Field(0, ge=0)
     src_out: int = Field(0, ge=0)
     speed: float = Field(1.0, ge=0.1, le=16)
     reverse: bool = False
+    speed_keys: list[SpeedKey] = Field(default_factory=list, max_length=MAX_SPEED_KEYS,
+                                       description="Speed curve over source time; when set it replaces 'speed'.")
     audio_stream: int = Field(0, ge=0, le=16)
     # text clips
     length: int = Field(0, ge=0, description="Length of a text clip (ms).")
@@ -143,37 +173,170 @@ class Clip(Strict):
     transition_in: Optional[Transition] = None
     keyframes: dict[KeyProp, list[Keyframe]] = Field(default_factory=dict)
     reframe: Optional[Reframe] = None
+    mask: Optional[Mask] = None
     color: Optional[str] = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
+    _seg_cache: Any = PrivateAttr(default=None)
+
+    @property
+    def is_sequence(self) -> bool:
+        return self.type == "sequence"
+
+    @property
+    def has_ramp(self) -> bool:
+        return bool(self.speed_keys) and self.type != "text"
+
+    def segments(self) -> list[tuple[float, float, float]]:
+        """Constant-speed steps (src_a, src_b, speed) covering [src_in, src_out] in source order. Without a curve this is
+        one step at ``speed``. Render (picture and sound), preview and every timing helper use the same steps, so they
+        agree to the frame."""
+        if not self.has_ramp:
+            return [(float(self.src_in), float(self.src_out), self.speed)]
+        key = (self.src_in, self.src_out, tuple((k.t, k.v, k.ease) for k in self.speed_keys))
+        if self._seg_cache is None or self._seg_cache[0] != key:
+            self._seg_cache = (key, ramp_segments(self.src_in, self.src_out, self.speed_keys))
+        return self._seg_cache[1]
+
+    def steps(self) -> list[tuple[float, float, float]]:
+        """The constant-speed steps in playback order as (source where the step starts, source where it ends, speed)."""
+        segs = self.segments()
+        return [(b, a, v) for a, b, v in reversed(segs)] if self.reverse else list(segs)
 
     @property
     def duration(self) -> int:
         if self.type == "text":
             return self.length
-        return int(round((self.src_out - self.src_in) / self.speed))
+        if not self.has_ramp:
+            return int(round((self.src_out - self.src_in) / self.speed))
+        return int(round(sum((b - a) / v for a, b, v in self.segments())))
 
     @property
     def end(self) -> int:
         return self.start + self.duration
 
-    def src_at(self, t: int) -> float:
-        """Source time (ms) shown at timeline time ``t``."""
-        offset = (t - self.start) * self.speed
-        return (self.src_out - offset) if self.reverse else (self.src_in + offset)
+    def src_at(self, t: float) -> float:
+        """Source time (ms) shown at timeline time ``t`` (outside the clip it goes on at the speed of the nearest edge)."""
+        if not self.has_ramp:
+            offset = (t - self.start) * self.speed
+            return (self.src_out - offset) if self.reverse else (self.src_in + offset)
+        sign = -1.0 if self.reverse else 1.0
+        steps = self.steps()
+        local = t - self.start
+        if local <= 0:
+            return steps[0][0] + sign * local * steps[0][2]
+        acc = 0.0
+        for s0, s1, v in steps:
+            d = abs(s1 - s0) / v
+            if local <= acc + d:
+                return s0 + sign * (local - acc) * v
+            acc += d
+        return steps[-1][1] + sign * (local - acc) * steps[-1][2]
 
     def timeline_at(self, src: float) -> float:
-        return self.start + ((self.src_out - src) if self.reverse else (src - self.src_in)) / self.speed
+        """Timeline time (ms, unrounded) at which source time ``src`` is shown."""
+        if not self.has_ramp:
+            return self.start + ((self.src_out - src) if self.reverse else (src - self.src_in)) / self.speed
+        sign = -1.0 if self.reverse else 1.0
+        steps = self.steps()
+        q = sign * (src - steps[0][0])  # source progress along playback order
+        if q <= 0:
+            return self.start + q / steps[0][2]
+        acc_q = acc_t = 0.0
+        for s0, s1, v in steps:
+            length = abs(s1 - s0)
+            if q <= acc_q + length:
+                return self.start + acc_t + (q - acc_q) / v
+            acc_q += length
+            acc_t += length / v
+        return self.start + acc_t + (q - acc_q) / steps[-1][2]
+
+    def speed_at(self, t: float) -> float:
+        """Playback speed at timeline time ``t``."""
+        if not self.has_ramp:
+            return self.speed
+        return speed_value(self.speed_keys, self.src_at(t))
 
     @model_validator(mode="after")
     def _check(self) -> "Clip":
-        if self.type == "media":
+        if self.type in ("media", "sequence"):
             if not self.media:
-                raise ValueError("A media clip needs a media id.")
-            if self.src_out - self.src_in < MIN_CLIP_MS * self.speed * 0.5:
+                raise ValueError("A media clip needs a media id." if self.type == "media" else "A sequence clip needs a project id (media).")
+            if self.type == "sequence" and not self.media.startswith("prj_"):
+                raise ValueError(f"Sequence clip {self.id} must point at a project (prj_...), not {self.media}.")
+            if self.has_ramp:
+                if self.src_out - self.src_in < 1 or self.duration < MIN_CLIP_MS // 2:
+                    raise ValueError(f"Clip {self.id} is too short (src_in {self.src_in}, src_out {self.src_out}).")
+            elif self.src_out - self.src_in < MIN_CLIP_MS * self.speed * 0.5:
                 raise ValueError(f"Clip {self.id} is too short (src_in {self.src_in}, src_out {self.src_out}).")
         else:
             if self.length < MIN_CLIP_MS:
                 raise ValueError(f"Text clip {self.id} needs a length of at least {MIN_CLIP_MS} ms.")
         return self
+
+
+def ease_value(kind: str, u: float) -> float:
+    """0..1 progress for an easing kind (the same curves as keyframes)."""
+    if kind == "hold":
+        return 0.0
+    if kind == "ease_in":
+        return u * u
+    if kind == "ease_out":
+        return 1 - (1 - u) ** 2
+    if kind == "ease_in_out":
+        return 3 * u * u - 2 * u * u * u
+    return u
+
+
+def speed_value(keys: list[SpeedKey], src: float) -> float:
+    """The speed curve at source time ``src``: the first / last key's speed outside them, eased in between."""
+    if not keys:
+        return 1.0
+    keys = sorted(keys, key=lambda k: k.t)
+    if src <= keys[0].t:
+        return keys[0].v
+    for a, b in zip(keys, keys[1:]):
+        if a.t <= src < b.t:
+            u = (src - a.t) / max(1e-9, b.t - a.t)
+            return a.v + (b.v - a.v) * ease_value(a.ease, u)
+    return keys[-1].v
+
+
+def _inverse_integral(keys: list[SpeedKey], a: float, b: float) -> float:
+    """Timeline ms spent on source [a, b]: the integral of 1 / speed (Simpson; the curve is smooth inside one step)."""
+    if b <= a:
+        return 0.0
+    n = 8
+    h = (b - a) / n
+    total = 1 / speed_value(keys, a) + 1 / speed_value(keys, b)
+    for i in range(1, n):
+        total += (4 if i % 2 else 2) / speed_value(keys, a + i * h)
+    return total * h / 3
+
+
+def ramp_segments(src_in: int, src_out: int, keys: list[SpeedKey]) -> list[tuple[float, float, float]]:
+    """Constant-speed steps (a, b, speed) covering [src_in, src_out]. Steps are anchored on the keys (absolute source
+    times), not on the clip, so both halves of a split clip keep exactly the steps they had; each step's speed is the one
+    that spends the exact integral of 1 / speed on it, so the clip lasts what the curve says."""
+    keys = sorted(keys, key=lambda k: k.t)
+    lo, hi = float(src_in), float(src_out)
+    cuts = {lo, hi}
+    for k in keys:
+        if lo < k.t < hi:
+            cuts.add(float(k.t))
+    for a, b in zip(keys, keys[1:]):
+        if b.t <= lo or a.t >= hi or abs(a.v - b.v) < 1e-6 or a.ease == "hold":
+            continue
+        n = max(1, min(RAMP_MAX_STEPS, int(math.ceil((b.t - a.t) / RAMP_STEP_MS))))
+        for j in range(1, n):
+            x = a.t + (b.t - a.t) * j / n
+            if lo < x < hi:
+                cuts.add(x)
+    edges = sorted(cuts)
+    out: list[tuple[float, float, float]] = []
+    for a, b in zip(edges, edges[1:]):
+        if b - a < 1e-6:
+            continue
+        out.append((a, b, max(0.1, min(16.0, (b - a) / _inverse_integral(keys, a, b)))))
+    return out or [(lo, hi, keys[0].v)]
 
 
 class Track(Strict):
@@ -260,7 +423,11 @@ class Project(Strict):
                 yield t, c
 
     def media_ids(self) -> set[str]:
-        return {c.media for _, c in self.all_clips() if c.media}
+        return {c.media for _, c in self.all_clips() if c.media and c.type == "media"}
+
+    def sequence_ids(self) -> set[str]:
+        """Projects nested in this one as sequence clips (directly)."""
+        return {c.media for _, c in self.all_clips() if c.media and c.type == "sequence"}
 
     def sort(self) -> None:
         for t in self.tracks:
@@ -305,10 +472,11 @@ def validate(project: Project, media_lookup=None) -> list[dict[str, Any]]:
                 if overlap > allowed + 1:
                     issues.append({"level": "error", "code": "overlap", "track": t.id, "clip": c.id,
                                    "message": f"Clip {c.id} overlaps {prev.id} by {overlap} ms on track {t.name or t.id}."})
-            if c.type == "media" and media_lookup is not None:
+            if c.type in ("media", "sequence") and media_lookup is not None:
                 info = media_lookup(c.media)
                 if info is None:
-                    issues.append({"level": "error", "code": "missing_media", "clip": c.id, "message": f"Clip {c.id} uses unknown media {c.media}."})
+                    what = "project" if c.type == "sequence" else "media"
+                    issues.append({"level": "error", "code": "missing_media", "clip": c.id, "message": f"Clip {c.id} uses unknown {what} {c.media}."})
                 else:
                     if info.get("missing"):
                         issues.append({"level": "error", "code": "file_missing", "clip": c.id, "message": f"The file of {info.get('name')} is missing: {info.get('path')}."})
@@ -320,6 +488,9 @@ def validate(project: Project, media_lookup=None) -> list[dict[str, Any]]:
                         issues.append({"level": "warning", "code": "no_audio", "clip": c.id, "message": f"Clip {c.id} is on an audio track but its media has no sound."})
                     if c.reverse and c.src_out - c.src_in > 60000:
                         issues.append({"level": "error", "code": "reverse_too_long", "clip": c.id, "message": "Reverse playback is limited to 60 s of source per clip."})
+                    if c.type == "sequence" and info.get("cycle"):
+                        issues.append({"level": "error", "code": "sequence_cycle", "clip": c.id,
+                                       "message": f"Sequence clip {c.id} nests a project that contains this one."})
             prev = c if prev is None or c.end > prev.end else prev
     if total > MAX_CLIPS:
         issues.append({"level": "error", "code": "too_many_clips", "message": f"{total} clips: the limit is {MAX_CLIPS}."})
