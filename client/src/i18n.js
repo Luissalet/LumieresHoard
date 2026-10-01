@@ -1,0 +1,272 @@
+// UI strings. Spanish (Spain) is the default; English is used when the browser language is English.
+const es = {
+  // navigation / general
+  nav_projects: "Proyectos", nav_settings: "Ajustes", back: "Volver", loading: "Cargando…", network_error: "No se puede conectar con la aplicación.",
+  cancel: "Cancelar", close: "Cerrar", confirm_delete: "Confirmar", delete: "Borrar", rename: "Renombrar", create: "Crear", save: "Guardar",
+  apply: "Aplicar", discard: "Descartar", remove: "Quitar", search: "Buscar…", all: "Todo", yes: "Sí", no: "No", on: "Activado", off: "Desactivado",
+  auto: "Automático", custom: "Personalizado", name: "Nombre", type: "Tipo", mode: "Modo", style: "Estilo", position: "Posición", color: "Color",
+  size: "Tamaño", start: "Inicio", duration: "Duración", speed: "Velocidad", volume: "Volumen", mute: "Silenciar", unmute: "Activar sonido",
+  hide: "Ocultar", show: "Mostrar", lock: "Bloquear", unlock: "Desbloquear", preview: "Vista previa", count: "Cantidad", margin: "Margen",
+  select_all: "Seleccionar todo", select_none: "Quitar selección", tools: "Herramientas", inspector: "Inspector",
+  jobs_n: "{n} tareas", jobs_n_1: "1 tarea", jobs_title: "Tareas", jobs_empty: "No hay tareas todavía.",
+  job_queued: "En cola", job_running: "En curso", job_done: "Hecha", job_failed: "Fallida", job_canceled: "Cancelada",
+  issues_n_1: "1 aviso", issues_n: "{n} avisos",
+  // home
+  new_project: "Nuevo proyecto", project_default_name: "Proyecto sin título", canvas: "Formato del lienzo", new_project_media: "Medios para empezar (opcional, en orden)",
+  projects_empty: "Todavía no hay proyectos.", n_clips: "{n} clips", n_clips_1: "1 clip", no_inline_play: "Este navegador no puede reproducir el archivo aquí: ábrelo desde la carpeta.", media_library: "Biblioteca de medios", import_media: "Importar medios…",
+  upload_files: "Subir archivos", upload: "Subir", media_empty: "No hay medios. Importa archivos por su ruta o arrástralos aquí.", media_empty_short: "No hay medios en la biblioteca.",
+  media_preparing: "Preparando", media_failed: "Error", media_missing: "No está el archivo", media_force_delete: "¿Quitarlo de la biblioteca de todos modos?",
+  kind_audio: "Audio", kind_video: "Vídeo", kind_image: "Imagen", drop_files: "Suelta los archivos para subirlos",
+  media_tip: "Doble clic o «+» para añadir al final de la pista principal. Arrastra a una pista para colocarlo en un instante concreto.",
+  // import dialog
+  import_title: "Importar medios", import_paste: "Pega la ruta completa de un archivo", import_btn: "Importar", import_up: "Subir", import_places: "Lugares de inicio",
+  import_empty: "No hay carpetas ni archivos de vídeo, audio o imagen aquí.", import_folder: "Importar esta carpeta", import_selected: "Importar selección ({n})",
+  imported_n: "{n} archivos importados.", imported_n_1: "1 archivo importado.", import_none: "No había archivos que importar.",
+  // settings
+  settings_saved: "Ajustes guardados.", settings_speech: "Transcripción", settings_render: "Exportación y reproducción", settings_model: "Modelo de lenguaje",
+  set_whisper_model: "Modelo de voz", set_whisper_model_help: "Vacío: large-v3-turbo con GPU, small sin GPU.", set_whisper_device: "Dispositivo de la transcripción",
+  set_language: "Idioma de la transcripción", set_language_help: "Vacío: detectarlo.", set_auto_transcribe: "Transcribir automáticamente al importar",
+  set_auto_transcribe_help: "Cada medio con voz se transcribe en segundo plano.", set_hwdec: "Decodificación por GPU al exportar",
+  set_hwdec_help: "Automático la usa cuando funciona.", set_default_export: "Exportación por defecto", set_export_folder: "Carpeta de exportación",
+  set_export_folder_help: "Debe existir.", set_export_folder_ph: "Vacío: la carpeta de renders de la aplicación", set_model: "Modelo para los planes",
+  set_model_help: "Vacío: se elige el que haya disponible. Sin modelo, los planes se crean por reglas.",
+  status_title: "Estado", status_nvenc: "Codificación NVENC", status_hwdec: "Decodificación por GPU", status_libass: "Subtítulos (libass)", status_vidstab: "Estabilización",
+  status_speech: "Motor de voz", status_model: "Modelo de lenguaje", status_unavailable: "No disponible", status_encoder: "Codificador", status_data: "Datos",
+  status_counts: "Contenido", status_counts_v: "medios {media} · proyectos {projects} · exportaciones {renders}", status_version: "Versión",
+  // editor chrome
+  project_name: "Nombre del proyecto", undo: "Deshacer", redo: "Rehacer", export: "Exportar", shortcuts: "Atajos de teclado",
+  tab_media: "Medios", tab_text: "Texto", tab_transitions: "Transiciones", tab_effects: "Efectos", tab_captions: "Subtítulos", tab_assistant: "Asistente", tab_tools: "Herramientas",
+  tab_timeline: "Línea de tiempo", tab_transcript: "Transcripción",
+  // player
+  play: "Reproducir", pause: "Pausa", prev_frame: "Fotograma anterior", next_frame: "Fotograma siguiente", exact_frame: "Fotograma exacto",
+  exact_frame_help: "En pausa, muestra el fotograma tal como lo dibuja la exportación (tarda un momento).", player_empty: "Añade un medio desde la biblioteca para empezar.",
+  // timeline
+  split: "Dividir", split_here: "Dividir en el cabezal", split_outside: "El cabezal no está dentro de los clips seleccionados.", duplicate: "Duplicar", close_gaps: "Cerrar huecos",
+  close_gaps_help: "Elimina los huecos entre clips (de la pista seleccionada o de todas)", marker: "Marcador", marker_add: "Añadir marcador", marker_hint: "clic: ir · clic derecho: borrar",
+  marker_kind_note: "Nota", marker_kind_beat: "Pulso", marker_kind_scene: "Escena", marker_kind_highlight: "Momento", marker_kind_chapter: "Capítulo",
+  snap: "Imán", snap_help: "Ajustar al cabezal, a los bordes de clips, a los marcadores y al 0", mark_in: "Marcar entrada", mark_out: "Marcar salida", marks_clear: "Quitar marcas",
+  zoom_in: "Acercar", zoom_out: "Alejar", fit: "Ajustar", fit_help: "Ajusta el zoom para ver todo el proyecto", add_track: "+ pista", track_video: "Vídeo", track_audio: "Audio", track_text: "Texto",
+  rename_hint: "doble clic para renombrar", timeline_empty: "La línea de tiempo está vacía.", add_to_timeline: "Añadir a la línea de tiempo",
+  // inspector
+  insp_clip: "Clip", insp_text_clip: "Clip de texto", insp_speed: "Velocidad", insp_audio: "Audio", insp_video: "Imagen", insp_crop: "Recorte", insp_transition: "Transición de entrada",
+  insp_effects: "Efectos", insp_keyframes: "Animación (keyframes)", insp_actions: "Acciones", insp_selection_1: "1 clip seleccionado", insp_selection: "{n} clips seleccionados", insp_track: "Pista", insp_project: "Proyecto",
+  insp_markers: "Marcadores ({n})", insp_text: "Texto", insp_text_style: "Estilo del texto", src_in: "Entrada del origen", src_out: "Salida del origen", reverse: "Invertir",
+  fade_in: "Fundido de entrada (ms)", fade_out: "Fundido de salida (ms)", fit_contain: "Ajustar (contener)", fit_cover: "Rellenar (recortar)", fit_fill: "Estirar", fit_none: "Tamaño original",
+  scale: "Escala", rotation: "Rotación", opacity: "Opacidad", focus_x: "Foco X", focus_y: "Foco Y", reframed: "Con reencuadre automático",
+  crop_left: "Izquierda", crop_top: "Arriba", crop_right: "Derecha", crop_bottom: "Abajo",
+  tr_none: "Sin transición", fx_add: "Añadir efecto…", fx_no_params: "sin parámetros", kf_help: "Se crea un punto en el cabezal ({t} desde el inicio del clip).", kf_clear: "Quitar animación",
+  kf_x: "X", kf_y: "Y", kf_scale: "Escala", kf_opacity: "Opacidad", kf_rotation: "Rotación",
+  delete_nogap: "Borrar sin cerrar hueco", detach_audio: "Separar audio", freeze: "Congelar imagen", stabilize: "Estabilizar", stabilize_started: "Estabilización en marcha.",
+  font: "Fuente", outline: "Contorno", outline_w: "Grosor del contorno", box: "Caja", align: "Alineación", animation: "Animación", pos_top: "Arriba", pos_middle: "Centro", pos_bottom: "Abajo",
+  anim_none: "Ninguna", anim_fade: "Fundido", anim_pop: "Aparecer con rebote", anim_slide_up: "Subir", anim_typewriter: "Máquina de escribir",
+  width: "Ancho", height: "Alto", background: "Fondo", length_mode: "Duración del vídeo", len_main: "Principal", len_longest: "Más largo",
+  len_main_help: "El vídeo termina con la pista principal: lo que sobre de música o rótulos se corta.", len_longest_help: "El vídeo termina con el último clip de cualquier pista.",
+  markers_empty: "No hay marcadores. Pulsa M para añadir uno en el cabezal.", markers_clear: "Quitar todos", track_delete: "Borrar pista", duck: "Bajar con la voz", duck_help: "Baja esta pista mientras hay voz",
+  // panels
+  text_panel_help: "Añade un rótulo en la posición del cabezal. Después edítalo en el inspector.", text_preset_title: "Título", text_preset_subtitle: "Subtítulo", text_preset_lower: "Rótulo inferior", text_preset_cta: "Llamada a la acción",
+  title_text: "Título", subtitle_text: "Subtítulo", lower_text: "Nombre · Cargo", cta_text: "¡Suscríbete!",
+  transitions_help: "Selecciona un clip y pulsa un tipo: se aplica al corte con el clip anterior.", transition_all: "Aplicar a todos los cortes", transition_remove: "Quitar transición",
+  select_clip_first: "Selecciona primero un clip en la línea de tiempo.",
+  tr_crossfade: "Fundido cruzado", tr_dissolve: "Disolver", tr_fade_black: "Fundido a negro", tr_fade_white: "Fundido a blanco", tr_slide_left: "Deslizar izq.", tr_slide_right: "Deslizar der.",
+  tr_slide_up: "Deslizar arriba", tr_slide_down: "Deslizar abajo", tr_wipe_left: "Cortinilla izq.", tr_wipe_right: "Cortinilla der.", tr_wipe_up: "Cortinilla arriba", tr_wipe_down: "Cortinilla abajo",
+  tr_circle_open: "Círculo abre", tr_circle_close: "Círculo cierra", tr_zoom_in: "Zoom", tr_pixelize: "Pixelado", tr_radial: "Radial", tr_smooth_left: "Suave izq.", tr_smooth_right: "Suave der.", tr_blur: "Desenfoque",
+  effects_help: "Selecciona uno o varios clips y pulsa un efecto. Los parámetros se ajustan en el inspector.", fx_group_video: "Imagen", fx_group_audio: "Audio",
+  fx_eq: "Color (brillo, contraste)", fx_lut: "LUT", fx_grayscale: "Blanco y negro", fx_sepia: "Sepia", fx_vignette: "Viñeta", fx_blur: "Desenfoque", fx_sharpen: "Nitidez", fx_denoise: "Reducir ruido de imagen",
+  fx_hflip: "Espejo horizontal", fx_vflip: "Espejo vertical", fx_chromakey: "Croma", fx_vintage: "Vintage", fx_warm: "Cálido", fx_cool: "Frío", fx_contrast_pop: "Contraste y color", fx_pixelate: "Pixelar",
+  fx_audio_denoise: "Reducir ruido de audio", fx_voice_enhance: "Mejorar la voz", fx_highpass: "Filtro paso alto", fx_lowpass: "Filtro paso bajo", fx_compressor: "Compresor", fx_pitch: "Cambiar el tono", fx_echo: "Eco",
+  fxp_brightness: "Brillo", fxp_contrast: "Contraste", fxp_saturation: "Saturación", fxp_gamma: "Gamma", fxp_strength: "Intensidad", fxp_radius: "Radio", fxp_amount: "Cantidad", fxp_color: "Color",
+  fxp_similarity: "Similitud", fxp_blend: "Mezcla", fxp_size: "Tamaño", fxp_file: "Archivo", fxp_hz: "Hz", fxp_threshold_db: "Umbral (dB)", fxp_ratio: "Relación", fxp_semitones: "Semitonos",
+  fxp_delay_ms: "Retardo (ms)", fxp_decay: "Caída",
+  captions_help: "Subtítulos automáticos a partir de la transcripción. Se dibujan en la vista previa y se queman en la exportación.", captions_on: "Subtítulos activados", captions_off: "Subtítulos desactivados",
+  captions_missing: "Falta la transcripción de {n} medio(s). Los subtítulos aparecerán cuando termine.", transcribe: "Transcribir", captions_sample: "Así se verá",
+  capstyle_clean: "Limpio", capstyle_bold: "Negrita", capstyle_karaoke: "Karaoke", capstyle_pop: "Palabra a palabra", capstyle_boxed: "Con caja", capstyle_minimal: "Mínimo",
+  cappos_top: "Arriba", cappos_middle: "Centro", cappos_lower_third: "Tercio inferior", cappos_bottom: "Abajo", uppercase: "Mayúsculas", max_words: "Palabras por línea",
+  size_auto_help: "Tamaño 0 = automático según el formato.", highlight: "Resalte",
+  assistant_ph: "Describe la edición…", ex_silences: "Quita los silencios", ex_vertical: "Hazlo vertical para Reels con subtítulos", ex_fillers: "Quita las muletillas",
+  ex_trim5: "Recorta los primeros 5 segundos", ex_beat: "Corta al ritmo de la música", use_model: "Usar el modelo local", plan_create: "Crear plan", plan_steps: "Pasos del plan",
+  plan_src_model: "Modelo", plan_src_rules: "Reglas", plan_empty: "No se ha entendido ningún paso.", plan_notes: "Notas", plan_running: "Aplicando…", plan_done: "Plan aplicado",
+  plan_not_applied: "No se pudo aplicar el plan", plan_applied_1: "Plan aplicado: 1 paso.", plan_applied: "Plan aplicado: {n} pasos.", plan_renders: "{n} exportación(es) en cola", plan_history: "Planes anteriores",
+  plan_state_draft: "Borrador", plan_state_applied: "Aplicado", plan_state_discarded: "Descartado", n_steps_1: "1 paso", n_steps: "{n} pasos", step_op: "operación", step_command: "comando", step_export: "exportación", step_args: "Ver argumentos",
+  tools_help: "Herramientas automáticas. «Vista previa» cuenta lo que haría sin cambiar nada.", tool_applied: "Aplicado", tool_preview_result: "Vista previa",
+  tool_silences: "Quitar silencios", tool_silences_help: "Corta (o acelera) los tramos sin voz.", threshold: "Umbral", min_silence: "Silencio mínimo (ms)", mode_cut: "Cortar", mode_speed: "Acelerar",
+  tool_fillers: "Quitar muletillas", tool_fillers_help: "Corta «eh», «mmm», «o sea» y repeticiones. Necesita la transcripción.", fillers_repeats: "Quitar palabras repetidas", fillers_strict: "Modo estricto",
+  tool_scenes: "Cortar por escenas", tool_scenes_help: "Divide la línea de tiempo en los cambios de plano.", scenes_split: "Dividir", scenes_markers: "Solo marcar",
+  tool_reframe: "Reencuadrar", tool_reframe_help: "Cambia la proporción y mantiene al sujeto en cuadro.", aspect: "Proporción",
+  reframe_auto: "Automático", reframe_track: "Seguir al sujeto", reframe_stable: "Plano fijo por escena", reframe_center: "Centrado",
+  tool_loudness: "Igualar volumen", tool_loudness_help: "Ajusta la ganancia de cada clip al mismo nivel de sonoridad.",
+  tool_beat: "Cortar al ritmo", tool_beat_help: "Reconstruye la pista principal con cortes en los pulsos de la música.", beat_music: "Música", beat_clips: "Con los clips actuales", beat_scenes: "Con las escenas de un vídeo",
+  beat_source: "Vídeo de origen", beats_per_cut: "Pulsos por corte",
+  tool_highlights: "Mejores momentos", tool_highlights_help: "Busca los tramos más intensos de un vídeo largo y crea un corto vertical de cada uno.", tool_media: "Medio", clip_length_s: "Duración (s)",
+  highlights_find: "Buscar", signals: "Señales usadas", short_make: "Crear corto", short_name: "Corto", short_created: "Corto creado.",
+  reason_loud: "volumen alto", reason_motion: "movimiento", reason_cut: "cortes", reason_exclamation: "exclamaciones", saved_time: "{s} s menos",
+  // text view
+  text_cut_sel: "Cortar selección", text_keep_sel: "Quedarse solo con la selección", text_hint: "Selecciona palabras arrastrando o con Mayús + clic. Doble clic para corregir una palabra.",
+  text_selected_1: "1 palabra seleccionada", text_selected: "{n} palabras seleccionadas", text_missing: "Falta la transcripción de {n} medio(s).", text_none: "No hay palabras en la línea de tiempo.", text_none_missing: "Transcribe los medios para ver el texto.",
+  text_cut: "{n} palabras cortadas", text_kept: "Te has quedado con {n} palabras",
+  // analysis
+  analysis_wait: "Falta un análisis: se está haciendo y se reintentará solo.", analysis_gave_up: "El análisis no terminó a tiempo. Vuelve a intentarlo.", analysis_banner: "Esperando el análisis…",
+  // export
+  export_title: "Exportar", export_preset: "Formato", export_filename: "Nombre del archivo", export_folder: "Carpeta", export_folder_help: "Debe existir.", export_folder_ph: "Vacío: carpeta de renders de la aplicación",
+  export_loudness: "Sonoridad", lufs_default: "La del formato", lufs_untouched: "Sin tocar", export_range: "Solo el rango marcado ({a} – {b})", export_range_none: "Solo el rango marcado (marca entrada y salida con I y O)",
+  export_srt: "Guardar también un archivo .srt", export_copy: "Corte rápido sin recodificar", export_copy_help: "Une los cortes sin recodificar: tarda segundos, pero cada corte puede empezar unos fotogramas antes y no admite efectos.",
+  export_start: "Exportar", export_previous: "Exportaciones anteriores", export_none: "Todavía no has exportado este proyecto.", export_gone: "ya no está",
+  qc_ok: "Comprobación correcta", qc_problems: "Con problemas", reveal: "Mostrar en la carpeta", download: "Descargar",
+  // shortcuts
+  key_del: "Supr", key_wheel: "rueda", key_drag: "arrastrar borde", sc_play: "Reproducir / pausa", sc_pause: "Pausa", sc_forward: "Reproducir (más rápido si se repite)", sc_back5: "Retroceder 5 s", sc_frame: "Un fotograma", sc_second: "Un segundo",
+  sc_cut_jump: "Corte anterior / siguiente", sc_ends: "Inicio / final", sc_split: "Dividir en el cabezal", sc_delete: "Borrar cerrando el hueco", sc_delete_gap: "Borrar sin cerrar el hueco",
+  sc_duplicate: "Duplicar", sc_undo: "Deshacer", sc_redo: "Rehacer", sc_marks: "Marcar entrada / salida", sc_marker: "Añadir marcador", sc_zoom: "Zoom", sc_zoom_wheel: "Zoom con la rueda",
+  sc_fit: "Ajustar zoom", sc_select_all: "Seleccionar todo", sc_deselect: "Quitar selección", sc_noripple: "Recortar sin mover el resto", sc_export: "Exportar", sc_help: "Esta ayuda",
+  // history labels (shown in the undo tooltip)
+  lbl_add_clip: "Añadir clip", lbl_add_text: "Añadir texto", lbl_canvas: "Formato", lbl_captions: "Subtítulos", lbl_close_gaps: "Cerrar huecos", lbl_crop: "Recortar imagen", lbl_delete: "Borrar",
+  lbl_delete_gap: "Borrar sin cerrar hueco", lbl_detach: "Separar audio", lbl_duplicate: "Duplicar", lbl_effect: "Efecto", lbl_effect_param: "Ajustar efecto", lbl_effect_rm: "Quitar efecto",
+  lbl_fade: "Fundido", lbl_keyframes: "Animación", lbl_marker: "Marcador", lbl_marker_del: "Quitar marcador", lbl_move: "Mover", lbl_move_n_1: "Mover clip", lbl_move_n: "Mover {n} clips", lbl_mute: "Silenciar clip",
+  lbl_reverse: "Invertir clip", lbl_speed: "Velocidad", lbl_split: "Dividir", lbl_text_edit: "Editar texto", lbl_text_style: "Estilo del texto", lbl_track: "Pista", lbl_track_add: "Nueva pista",
+  lbl_track_del: "Borrar pista", lbl_transform: "Ajustar transformación", lbl_transition: "Transición", lbl_transition_all: "Transición en todos los cortes", lbl_trim: "Recortar", lbl_volume: "Volumen",
+};
+
+const en = {
+  nav_projects: "Projects", nav_settings: "Settings", back: "Back", loading: "Loading…", network_error: "Cannot reach the application.",
+  cancel: "Cancel", close: "Close", confirm_delete: "Confirm", delete: "Delete", rename: "Rename", create: "Create", save: "Save",
+  apply: "Apply", discard: "Discard", remove: "Remove", search: "Search…", all: "All", yes: "Yes", no: "No", on: "On", off: "Off",
+  auto: "Automatic", custom: "Custom", name: "Name", type: "Type", mode: "Mode", style: "Style", position: "Position", color: "Colour",
+  size: "Size", start: "Start", duration: "Duration", speed: "Speed", volume: "Volume", mute: "Mute", unmute: "Unmute",
+  hide: "Hide", show: "Show", lock: "Lock", unlock: "Unlock", preview: "Preview", count: "Count", margin: "Margin",
+  select_all: "Select all", select_none: "Clear selection", tools: "Tools", inspector: "Inspector",
+  jobs_n: "{n} tasks", jobs_n_1: "1 task", jobs_title: "Tasks", jobs_empty: "No tasks yet.",
+  job_queued: "Queued", job_running: "Running", job_done: "Done", job_failed: "Failed", job_canceled: "Canceled",
+  issues_n_1: "1 warning", issues_n: "{n} warnings",
+  new_project: "New project", project_default_name: "Untitled project", canvas: "Canvas format", new_project_media: "Media to start with (optional, in order)",
+  projects_empty: "There are no projects yet.", n_clips: "{n} clips", n_clips_1: "1 clip", no_inline_play: "This browser cannot play the file here: open it from the folder.", media_library: "Media library", import_media: "Import media…",
+  upload_files: "Upload files", upload: "Upload", media_empty: "No media. Import files by path or drop them here.", media_empty_short: "The library is empty.",
+  media_preparing: "Preparing", media_failed: "Error", media_missing: "File missing", media_force_delete: "Remove it from the library anyway?",
+  kind_audio: "Audio", kind_video: "Video", kind_image: "Image", drop_files: "Drop the files to upload them",
+  media_tip: "Double-click or «+» appends to the main track. Drag onto a track to place it at a given time.",
+  import_title: "Import media", import_paste: "Paste the full path of a file", import_btn: "Import", import_up: "Up", import_places: "Starting places",
+  import_empty: "No folders or video, audio or image files here.", import_folder: "Import this folder", import_selected: "Import selection ({n})",
+  imported_n: "{n} files imported.", imported_n_1: "1 file imported.", import_none: "There was nothing to import.",
+  settings_saved: "Settings saved.", settings_speech: "Transcription", settings_render: "Export and playback", settings_model: "Language model",
+  set_whisper_model: "Speech model", set_whisper_model_help: "Empty: large-v3-turbo on GPU, small on CPU.", set_whisper_device: "Transcription device",
+  set_language: "Transcription language", set_language_help: "Empty: detect it.", set_auto_transcribe: "Transcribe automatically on import",
+  set_auto_transcribe_help: "Every media with speech is transcribed in the background.", set_hwdec: "GPU decoding when exporting",
+  set_hwdec_help: "Automatic uses it when it works.", set_default_export: "Default export", set_export_folder: "Export folder",
+  set_export_folder_help: "It must exist.", set_export_folder_ph: "Empty: the application's renders folder", set_model: "Model for plans",
+  set_model_help: "Empty: whichever is available. Without a model, plans are made from rules.",
+  status_title: "Status", status_nvenc: "NVENC encoding", status_hwdec: "GPU decoding", status_libass: "Subtitles (libass)", status_vidstab: "Stabilisation",
+  status_speech: "Speech engine", status_model: "Language model", status_unavailable: "Not available", status_encoder: "Encoder", status_data: "Data",
+  status_counts: "Content", status_counts_v: "media {media} · projects {projects} · exports {renders}", status_version: "Version",
+  project_name: "Project name", undo: "Undo", redo: "Redo", export: "Export", shortcuts: "Keyboard shortcuts",
+  tab_media: "Media", tab_text: "Text", tab_transitions: "Transitions", tab_effects: "Effects", tab_captions: "Captions", tab_assistant: "Assistant", tab_tools: "Tools",
+  tab_timeline: "Timeline", tab_transcript: "Transcript",
+  play: "Play", pause: "Pause", prev_frame: "Previous frame", next_frame: "Next frame", exact_frame: "Exact frame",
+  exact_frame_help: "When paused, shows the frame as the export draws it (takes a moment).", player_empty: "Add media from the library to start.",
+  split: "Split", split_here: "Split at playhead", split_outside: "The playhead is not inside the selected clips.", duplicate: "Duplicate", close_gaps: "Close gaps",
+  close_gaps_help: "Removes the gaps between clips (selected track or all of them)", marker: "Marker", marker_add: "Add marker", marker_hint: "click: go · right click: delete",
+  marker_kind_note: "Note", marker_kind_beat: "Beat", marker_kind_scene: "Scene", marker_kind_highlight: "Highlight", marker_kind_chapter: "Chapter",
+  snap: "Snap", snap_help: "Snap to the playhead, clip edges, markers and 0", mark_in: "Mark in", mark_out: "Mark out", marks_clear: "Clear marks",
+  zoom_in: "Zoom in", zoom_out: "Zoom out", fit: "Fit", fit_help: "Zoom to show the whole project", add_track: "+ track", track_video: "Video", track_audio: "Audio", track_text: "Text",
+  rename_hint: "double-click to rename", timeline_empty: "The timeline is empty.", add_to_timeline: "Add to the timeline",
+  insp_clip: "Clip", insp_text_clip: "Text clip", insp_speed: "Speed", insp_audio: "Audio", insp_video: "Picture", insp_crop: "Crop", insp_transition: "Incoming transition",
+  insp_effects: "Effects", insp_keyframes: "Animation (keyframes)", insp_actions: "Actions", insp_selection_1: "1 clip selected", insp_selection: "{n} clips selected", insp_track: "Track", insp_project: "Project",
+  insp_markers: "Markers ({n})", insp_text: "Text", insp_text_style: "Text style", src_in: "Source in", src_out: "Source out", reverse: "Reverse",
+  fade_in: "Fade in (ms)", fade_out: "Fade out (ms)", fit_contain: "Fit (contain)", fit_cover: "Fill (crop)", fit_fill: "Stretch", fit_none: "Original size",
+  scale: "Scale", rotation: "Rotation", opacity: "Opacity", focus_x: "Focus X", focus_y: "Focus Y", reframed: "Automatic reframe applied",
+  crop_left: "Left", crop_top: "Top", crop_right: "Right", crop_bottom: "Bottom",
+  tr_none: "No transition", fx_add: "Add effect…", fx_no_params: "no parameters", kf_help: "Adds a point at the playhead ({t} from the clip start).", kf_clear: "Remove animation",
+  kf_x: "X", kf_y: "Y", kf_scale: "Scale", kf_opacity: "Opacity", kf_rotation: "Rotation",
+  delete_nogap: "Delete, keep the gap", detach_audio: "Detach audio", freeze: "Freeze frame", stabilize: "Stabilise", stabilize_started: "Stabilisation started.",
+  font: "Font", outline: "Outline", outline_w: "Outline width", box: "Box", align: "Alignment", animation: "Animation", pos_top: "Top", pos_middle: "Middle", pos_bottom: "Bottom",
+  anim_none: "None", anim_fade: "Fade", anim_pop: "Pop in", anim_slide_up: "Slide up", anim_typewriter: "Typewriter",
+  width: "Width", height: "Height", background: "Background", length_mode: "Video length", len_main: "Main track", len_longest: "Longest",
+  len_main_help: "The video ends with the main track: leftover music or titles are cut.", len_longest_help: "The video ends with the last clip of any track.",
+  markers_empty: "No markers. Press M to add one at the playhead.", markers_clear: "Remove all", track_delete: "Delete track", duck: "Duck under voice", duck_help: "Lowers this track while there is speech",
+  text_panel_help: "Adds a title at the playhead. Then edit it in the inspector.", text_preset_title: "Title", text_preset_subtitle: "Subtitle", text_preset_lower: "Lower third", text_preset_cta: "Call to action",
+  title_text: "Title", subtitle_text: "Subtitle", lower_text: "Name · Role", cta_text: "Subscribe!",
+  transitions_help: "Select a clip and click a type: it is applied to the cut with the previous clip.", transition_all: "Apply to every cut", transition_remove: "Remove transition",
+  select_clip_first: "Select a clip on the timeline first.",
+  tr_crossfade: "Crossfade", tr_dissolve: "Dissolve", tr_fade_black: "Fade to black", tr_fade_white: "Fade to white", tr_slide_left: "Slide left", tr_slide_right: "Slide right",
+  tr_slide_up: "Slide up", tr_slide_down: "Slide down", tr_wipe_left: "Wipe left", tr_wipe_right: "Wipe right", tr_wipe_up: "Wipe up", tr_wipe_down: "Wipe down",
+  tr_circle_open: "Circle open", tr_circle_close: "Circle close", tr_zoom_in: "Zoom", tr_pixelize: "Pixelise", tr_radial: "Radial", tr_smooth_left: "Smooth left", tr_smooth_right: "Smooth right", tr_blur: "Blur",
+  effects_help: "Select one or several clips and click an effect. Tune its parameters in the inspector.", fx_group_video: "Picture", fx_group_audio: "Audio",
+  fx_eq: "Colour (brightness, contrast)", fx_lut: "LUT", fx_grayscale: "Black and white", fx_sepia: "Sepia", fx_vignette: "Vignette", fx_blur: "Blur", fx_sharpen: "Sharpen", fx_denoise: "Picture denoise",
+  fx_hflip: "Mirror horizontally", fx_vflip: "Mirror vertically", fx_chromakey: "Chroma key", fx_vintage: "Vintage", fx_warm: "Warm", fx_cool: "Cool", fx_contrast_pop: "Contrast and colour", fx_pixelate: "Pixelate",
+  fx_audio_denoise: "Audio denoise", fx_voice_enhance: "Voice enhance", fx_highpass: "High-pass filter", fx_lowpass: "Low-pass filter", fx_compressor: "Compressor", fx_pitch: "Pitch shift", fx_echo: "Echo",
+  fx_add_: "", fxp_brightness: "Brightness", fxp_contrast: "Contrast", fxp_saturation: "Saturation", fxp_gamma: "Gamma", fxp_strength: "Strength", fxp_radius: "Radius", fxp_amount: "Amount", fxp_color: "Colour",
+  fxp_similarity: "Similarity", fxp_blend: "Blend", fxp_size: "Size", fxp_file: "File", fxp_hz: "Hz", fxp_threshold_db: "Threshold (dB)", fxp_ratio: "Ratio", fxp_semitones: "Semitones",
+  fxp_delay_ms: "Delay (ms)", fxp_decay: "Decay",
+  captions_help: "Automatic captions from the transcript. They are drawn in the preview and burned into the export.", captions_on: "Captions on", captions_off: "Captions off",
+  captions_missing: "The transcript of {n} media is missing. Captions will appear when it is done.", transcribe: "Transcribe", captions_sample: "This is how it looks",
+  capstyle_clean: "Clean", capstyle_bold: "Bold", capstyle_karaoke: "Karaoke", capstyle_pop: "Word by word", capstyle_boxed: "Boxed", capstyle_minimal: "Minimal",
+  cappos_top: "Top", cappos_middle: "Middle", cappos_lower_third: "Lower third", cappos_bottom: "Bottom", uppercase: "Uppercase", max_words: "Words per line",
+  size_auto_help: "Size 0 = automatic from the canvas.", highlight: "Highlight",
+  assistant_ph: "Describe the edit…", ex_silences: "Remove the silences", ex_vertical: "Make it vertical for Reels with captions", ex_fillers: "Remove the filler words",
+  ex_trim5: "Trim the first 5 seconds", ex_beat: "Cut to the beat of the music", use_model: "Use the local model", plan_create: "Create plan", plan_steps: "Plan steps",
+  plan_src_model: "Model", plan_src_rules: "Rules", plan_empty: "No step was understood.", plan_notes: "Notes", plan_running: "Applying…", plan_done: "Plan applied",
+  plan_not_applied: "The plan could not be applied", plan_applied_1: "Plan applied: 1 step.", plan_applied: "Plan applied: {n} steps.", plan_renders: "{n} export(s) queued", plan_history: "Earlier plans",
+  plan_state_draft: "Draft", plan_state_applied: "Applied", plan_state_discarded: "Discarded", n_steps: "{n} steps", n_steps_1: "1 step", step_op: "operation", step_command: "command", step_export: "export", step_args: "Show arguments",
+  tools_help: "Automatic tools. «Preview» reports what it would do without changing anything.", tool_applied: "Applied", tool_preview_result: "Preview",
+  tool_silences: "Remove silences", tool_silences_help: "Cuts (or speeds up) the stretches without speech.", threshold: "Threshold", min_silence: "Minimum silence (ms)", mode_cut: "Cut", mode_speed: "Speed up",
+  tool_fillers: "Remove filler words", tool_fillers_help: "Cuts «um», «uh», «you know» and repeats. Needs the transcript.", fillers_repeats: "Remove repeated words", fillers_strict: "Strict mode",
+  tool_scenes: "Split by scenes", tool_scenes_help: "Splits the timeline at shot changes.", scenes_split: "Split", scenes_markers: "Only mark",
+  tool_reframe: "Reframe", tool_reframe_help: "Changes the aspect ratio and keeps the subject in frame.", aspect: "Aspect ratio",
+  reframe_auto: "Automatic", reframe_track: "Follow the subject", reframe_stable: "Fixed shot per scene", reframe_center: "Centred",
+  tool_loudness: "Match loudness", tool_loudness_help: "Sets each clip's gain so they all sit at the same loudness.",
+  tool_beat: "Cut to the beat", tool_beat_help: "Rebuilds the main track with cuts on the beats of the music.", beat_music: "Music", beat_clips: "With the current clips", beat_scenes: "With the scenes of a video",
+  beat_source: "Source video", beats_per_cut: "Beats per cut",
+  tool_highlights: "Best moments", tool_highlights_help: "Finds the most eventful stretches of a long video and makes a vertical short of each.", tool_media: "Media", clip_length_s: "Length (s)",
+  highlights_find: "Find", signals: "Signals used", short_make: "Make short", short_name: "Short", short_created: "Short created.",
+  reason_loud: "loud", reason_motion: "motion", reason_cut: "cuts", reason_exclamation: "exclamations", saved_time: "{s} s shorter",
+  text_cut_sel: "Cut selection", text_keep_sel: "Keep only the selection", text_hint: "Select words by dragging or Shift + click. Double-click a word to correct it.",
+  text_selected_1: "1 word selected", text_selected: "{n} words selected", text_missing: "The transcript of {n} media is missing.", text_none: "There are no words on the timeline.", text_none_missing: "Transcribe the media to see the text.",
+  text_cut: "{n} words cut", text_kept: "Kept {n} words",
+  analysis_wait: "An analysis is missing: it is running and the action will be retried by itself.", analysis_gave_up: "The analysis did not finish in time. Try again.", analysis_banner: "Waiting for the analysis…",
+  export_title: "Export", export_preset: "Format", export_filename: "File name", export_folder: "Folder", export_folder_help: "It must exist.", export_folder_ph: "Empty: the application's renders folder",
+  export_loudness: "Loudness", lufs_default: "The format's own", lufs_untouched: "Untouched", export_range: "Only the marked range ({a} – {b})", export_range_none: "Only the marked range (set in and out with I and O)",
+  export_srt: "Also save an .srt file", export_copy: "Fast cut without re-encoding", export_copy_help: "Joins the cuts without re-encoding: seconds, but each cut may start a few frames early and effects are not allowed.",
+  export_start: "Export", export_previous: "Previous exports", export_none: "This project has not been exported yet.", export_gone: "gone",
+  qc_ok: "Check passed", qc_problems: "Problems found", reveal: "Show in folder", download: "Download",
+  key_del: "Del", key_wheel: "wheel", key_drag: "drag edge", sc_play: "Play / pause", sc_pause: "Pause", sc_forward: "Play (faster when repeated)", sc_back5: "Back 5 s", sc_frame: "One frame", sc_second: "One second",
+  sc_cut_jump: "Previous / next cut", sc_ends: "Start / end", sc_split: "Split at playhead", sc_delete: "Delete closing the gap", sc_delete_gap: "Delete keeping the gap",
+  sc_duplicate: "Duplicate", sc_undo: "Undo", sc_redo: "Redo", sc_marks: "Mark in / out", sc_marker: "Add marker", sc_zoom: "Zoom", sc_zoom_wheel: "Wheel zoom",
+  sc_fit: "Fit zoom", sc_select_all: "Select all", sc_deselect: "Clear selection", sc_noripple: "Trim without moving the rest", sc_export: "Export", sc_help: "This help",
+  lbl_add_clip: "Add clip", lbl_add_text: "Add text", lbl_canvas: "Canvas", lbl_captions: "Captions", lbl_close_gaps: "Close gaps", lbl_crop: "Crop picture", lbl_delete: "Delete",
+  lbl_delete_gap: "Delete keeping the gap", lbl_detach: "Detach audio", lbl_duplicate: "Duplicate", lbl_effect: "Effect", lbl_effect_param: "Tune effect", lbl_effect_rm: "Remove effect",
+  lbl_fade: "Fade", lbl_keyframes: "Animation", lbl_marker: "Marker", lbl_marker_del: "Remove marker", lbl_move: "Move", lbl_move_n_1: "Move clip", lbl_move_n: "Move {n} clips", lbl_mute: "Mute clip",
+  lbl_reverse: "Reverse clip", lbl_speed: "Speed", lbl_split: "Split", lbl_text_edit: "Edit text", lbl_text_style: "Text style", lbl_track: "Track", lbl_track_add: "New track",
+  lbl_track_del: "Delete track", lbl_transform: "Adjust transform", lbl_transition: "Transition", lbl_transition_all: "Transition on every cut", lbl_trim: "Trim", lbl_volume: "Volume",
+};
+delete en.fx_add_;
+en.fx_add = "Add effect…";
+
+const DICT = { es, en };
+
+export function makeT(lang) {
+  const dict = DICT[lang] || DICT.es;
+  return (key, vars) => {
+    let value = vars && vars.n === 1 && dict[`${key}_1`] !== undefined ? dict[`${key}_1`] : dict[key];
+    if (value === undefined) return key;
+    if (vars) for (const [name, v] of Object.entries(vars)) value = value.replaceAll(`{${name}}`, String(v));
+    return value;
+  };
+}
+
+const KEY = "lumiere-lang";
+
+export function initialLang() {
+  try {
+    const saved = localStorage.getItem(KEY);
+    if (saved === "es" || saved === "en") return saved;
+  } catch {
+    // storage may be blocked; fall back to the browser language
+  }
+  return (navigator.language || "es").toLowerCase().startsWith("en") ? "en" : "es";
+}
+
+export function saveLang(lang) {
+  try {
+    localStorage.setItem(KEY, lang);
+  } catch {
+    // storage may be blocked
+  }
+}
+
+export const DICTS = DICT;
