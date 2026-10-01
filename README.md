@@ -1,6 +1,6 @@
-<p align="center"><img src="app-icon.png" width="128" alt="Lumière's Hoard icon"></p>
+<p align="center"><img src="app-icon.png" width="128" alt="Lumiere's Hoard icon"></p>
 
-# Lumière's Hoard
+# Lumiere's Hoard
 
 A local video editor that runs in the browser and on your own machine. It has a multitrack timeline, edits by text on word-level transcripts, does the repetitive work automatically (silences, filler words, vertical reframing, captions, cuts on the beat, rough cuts from a script) and turns plain-language requests into edit plans you review before anything changes. Renders are frame-exact ffmpeg encodes that use the NVIDIA encoder when there is one. Everything is also exposed to assistants through MCP, so an agent can be told "take this video, cut the silences, make it vertical and caption it".
 

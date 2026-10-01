@@ -28,14 +28,14 @@ def main() -> None:
         # Decide before touching the data dir: a second instance must never
         # rotate anything under the feet of the one that is serving.
         if _already_running(config.port):
-            print(f"Lumière's Hoard is already running on http://127.0.0.1:{config.port}", flush=True)
+            print(f"Lumiere's Hoard is already running on http://127.0.0.1:{config.port}", flush=True)
             raise SystemExit(0)
         print(f"Port {config.port} is taken by another program (PORT_STRICT=1).", flush=True)
         raise SystemExit(1)
     port = config.port if config.port_strict else find_available_port(config.port)
     config.port = port
     app = create_app(config)
-    print(f"Lumière's Hoard listening on http://127.0.0.1:{port}", flush=True)
+    print(f"Lumiere's Hoard listening on http://127.0.0.1:{port}", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 

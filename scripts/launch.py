@@ -1,4 +1,4 @@
-"""Start Lumière's Hoard on a free port and open the browser (Windows: os.startfile)."""
+"""Start Lumiere's Hoard on a free port and open the browser (Windows: os.startfile)."""
 
 from __future__ import annotations
 

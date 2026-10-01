@@ -1,6 +1,6 @@
-<p align="center"><img src="app-icon.png" width="128" alt="Icono de Lumière's Hoard"></p>
+<p align="center"><img src="app-icon.png" width="128" alt="Icono de Lumiere's Hoard"></p>
 
-# Lumière's Hoard
+# Lumiere's Hoard
 
 Un editor de vídeo local que funciona en el navegador y en tu propio ordenador. Tiene timeline multipista, edita por texto sobre transcripciones con tiempos por palabra, hace solo el trabajo repetitivo (silencios, muletillas, reencuadre vertical, subtítulos, cortes al ritmo, montajes desde un guion) y convierte peticiones en lenguaje natural en planes de edición que revisas antes de que cambie nada. Los renders son codificaciones de ffmpeg exactas al fotograma que usan el codificador de NVIDIA cuando lo hay. Todo está también disponible para asistentes por MCP, así que a un agente se le puede decir «toma este vídeo, quita los silencios, hazlo vertical y ponle subtítulos».
 

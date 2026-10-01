@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "id": "lumiere",
-  "name": "Lumière's Hoard",
+  "name": "Lumiere's Hoard",
   "purpose": "A local video editor: media library with proxies, a multitrack timeline (cuts, ripple edits, speed, transitions, titles, picture-in-picture, keyframes, effects), text-based editing on word-level transcripts, automatic tools (silence and filler-word removal, scene cuts, vertical reframing that follows the subject, captions, cuts on the beat, highlights of long videos, loudness matching, stabilization), edit plans written from plain language, and frame-exact ffmpeg renders with GPU encoding, for people and for assistants over MCP.",
   "capabilities": [
     "video-editing",

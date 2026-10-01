@@ -40,13 +40,13 @@ def create_app(config: Config | None = None, services: Services | None = None) -
         svc = services or Services(config)
         app.state.services = svc
         svc.start()
-        logging.getLogger("lumiere").info("Lumière's Hoard %s — data in %s", __version__, config.data_dir)
+        logging.getLogger("lumiere").info("Lumiere's Hoard %s — data in %s", __version__, config.data_dir)
         try:
             yield
         finally:
             svc.stop()
 
-    app = FastAPI(title="Lumière's Hoard", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
+    app = FastAPI(title="Lumiere's Hoard", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.config = config
     family.configure(APP_ID, str(config.data_dir), token_file=str(config.token_path))
 

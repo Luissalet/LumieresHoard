@@ -171,7 +171,7 @@ function Shell({ route, children }) {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <header className="topnav">
-        <a className="brand hoard-brand" href="#/"><Logo /> Lumière's Hoard</a>
+        <a className="brand hoard-brand" href="#/"><Logo /> Lumiere's Hoard</a>
         <nav style={{ display: "flex", gap: 4 }} aria-label="Main">
           <a className="navlink" href="#/" aria-current={route.page === "home" ? "page" : undefined}>{t("nav_projects")}</a>
           <a className="navlink" href="#/settings" aria-current={route.page === "settings" ? "page" : undefined}>{t("nav_settings")}</a>

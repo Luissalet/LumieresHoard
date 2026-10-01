@@ -15,8 +15,8 @@ from .. import __version__
 router = APIRouter()
 
 _MANIFEST = {
-    "name": "Lumière's Hoard",
-    "short_name": "Lumière",
+    "name": "Lumiere's Hoard",
+    "short_name": "Lumiere",
     "start_url": "/",
     "display": "standalone",
     "background_color": "#1c141c",

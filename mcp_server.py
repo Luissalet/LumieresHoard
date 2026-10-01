@@ -1,4 +1,4 @@
-"""Stdio MCP bridge for Lumière's Hoard.
+"""Stdio MCP bridge for Lumiere's Hoard.
 
 It never opens the database: every tool call is proxied to the running app
 (`POST /api/agent/call`) with the Bearer token from `<DATA_DIR>/mcp-token`.
@@ -30,11 +30,11 @@ TOKEN_FILE = Path(
     os.environ.get("LUMIERE_TOKEN_FILE")
     or Path(os.environ.get("LUMIERE_DATA_DIR") or ROOT / "data") / "mcp-token"
 )
-NOT_RUNNING = "Open Lumière's Hoard (python -m lumiere_hoard) so the assistant can use the video editor."
-NO_TOKEN = ("Lumière's Hoard is running, but this bridge has no access token at {path}. The app writes it as mcp-token in "
+NOT_RUNNING = "Open Lumiere's Hoard (python -m lumiere_hoard) so the assistant can use the video editor."
+NO_TOKEN = ("Lumiere's Hoard is running, but this bridge has no access token at {path}. The app writes it as mcp-token in "
             "its data folder; point LUMIERE_TOKEN_FILE at that file (the data folder is LUMIERE_DATA_DIR when the app was "
             "started with one).")
-TOKEN_REFUSED = ("Lumière's Hoard is running but refused this bridge's token ({path}): the file belongs to another data "
+TOKEN_REFUSED = ("Lumiere's Hoard is running but refused this bridge's token ({path}): the file belongs to another data "
                  "folder. Point LUMIERE_TOKEN_FILE at the mcp-token of the running app's data folder.")
 
 

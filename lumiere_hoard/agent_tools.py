@@ -22,7 +22,7 @@ from .services import Services
 from .timeline import TRANSITIONS
 from .util import ms_to_tc, parse_time
 
-AGENT_INSTRUCTIONS = """Lumière's Hoard edits videos on this computer. Typical flow: media_import (a file or folder the user names; nothing is
+AGENT_INSTRUCTIONS = """Lumiere's Hoard edits videos on this computer. Typical flow: media_import (a file or folder the user names; nothing is
 copied) -> project_create (preset: reels, youtube, square...; media to start with) -> look with project_get (outline) and frame_snapshot ->
 edit -> render_start -> job_status until done -> tell the user the file path.
 Two ways to edit: (1) plan_create with the user's words ("quita los silencios, subtítulos y vertical"), show the steps, then plan_apply;
