@@ -77,6 +77,11 @@ export const api = {
   textCut: (id, body) => request("POST", `/api/projects/${e(id)}/text-cut`, { body }),
   freeze: (id, body) => request("POST", `/api/projects/${e(id)}/freeze`, { body }),
   stabilize: (id, body) => request("POST", `/api/projects/${e(id)}/stabilize`, { body }),
+  musicPick: (id, params) => request("GET", `/api/projects/${e(id)}/music`, { params }),
+  broll: (id, body) => request("POST", `/api/projects/${e(id)}/broll`, { body }),
+  templateSave: (id, body) => request("POST", `/api/projects/${e(id)}/template`, { body }),
+  templates: () => request("GET", "/api/templates"),
+  templateCreate: (templateId, body) => request("POST", `/api/templates/${e(templateId)}/create`, { body }),
   render: (id, body) => request("POST", `/api/projects/${e(id)}/render`, { body }),
   frameUrl: (id, t, width, stamp) => `/api/projects/${e(id)}/frame?t=${Math.round(t)}&width=${Math.round(width)}&v=${stamp ?? ""}`,
 

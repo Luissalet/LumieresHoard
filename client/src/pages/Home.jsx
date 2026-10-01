@@ -4,6 +4,7 @@ import { go, useApp } from "../App.jsx";
 import { ConfirmButton, Field, Icon, Modal, Spinner } from "../components/ui.jsx";
 import ImportDialog from "../components/ImportDialog.jsx";
 import { DropUpload, MediaThumb, useMediaLibrary, useUploadPicker } from "../components/Media.jsx";
+import { SaveTemplateDialog, TemplatesSection } from "../components/Templates.jsx";
 import { fmtBytes, fmtDate, fmtMs } from "../editor/time.js";
 
 const PRESET_ORDER = ["youtube", "reels", "square", "portrait_4_5", "youtube_60", "hd720", "cinema", "youtube_4k", "shorts", "tiktok"];
@@ -79,7 +80,7 @@ function NewProject({ onClose }) {
   );
 }
 
-function ProjectCard({ p, onChanged }) {
+function ProjectCard({ p, onChanged, onTemplate }) {
   const { t, fail, lang } = useApp();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(p.name);
@@ -105,6 +106,7 @@ function ProjectCard({ p, onChanged }) {
         <div className="dim" style={{ fontSize: 11 }}>{fmtDate(p.updated_ts, lang)}</div>
         <div style={{ display: "flex", gap: 6, marginTop: 8 }} onClick={(e) => e.stopPropagation()}>
           <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>{t("rename")}</button>
+          <button type="button" className="btn btn-sm" onClick={() => onTemplate(p)} title={t("template_save")} data-testid="project-template">{t("templates_short")}</button>
           <ConfirmButton label={t("delete")} confirmLabel={t("confirm_delete")} cancelLabel={t("cancel")} onConfirm={async () => { try { await api.projectDelete(p.id); onChanged(); } catch (e) { fail(e); } }} />
         </div>
       </div>
@@ -156,6 +158,8 @@ export default function Home() {
   const [projects, setProjects] = useState(null);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(null);
+  const [tplKey, setTplKey] = useState(0);
   const { media, refresh: refreshMedia } = useMediaLibrary();
   const pickUpload = useUploadPicker(refreshMedia);
 
@@ -179,9 +183,11 @@ export default function Home() {
           </div>
         ) : (
           <div className="grid-cards">
-            {projects.map((p) => <ProjectCard key={p.id} p={p} onChanged={load} />)}
+            {projects.map((p) => <ProjectCard key={p.id} p={p} onChanged={load} onTemplate={setSavingTemplate} />)}
           </div>
         )}
+
+        <TemplatesSection media={media} refreshKey={tplKey} />
 
         <div className="section-title">
           <h2>{t("media_library")} {media ? <span className="muted" style={{ fontWeight: 400 }}>({media.length})</span> : null}</h2>
@@ -201,6 +207,7 @@ export default function Home() {
         </DropUpload>
       </div>
       {creating ? <NewProject onClose={() => setCreating(false)} /> : null}
+      {savingTemplate ? <SaveTemplateDialog project={savingTemplate} onClose={() => setSavingTemplate(null)} onSaved={() => { setTplKey((k) => k + 1); load(); }} /> : null}
       {importing ? <ImportDialog onClose={() => setImporting(false)} onImported={refreshMedia} /> : null}
     </div>
   );

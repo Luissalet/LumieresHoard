@@ -6,6 +6,7 @@ import { useMediaLibrary } from "../../components/Media.jsx";
 import { useEd } from "../EditorContext.js";
 import { fmtMs } from "../time.js";
 import { Hint, PanelHead } from "./Shared.jsx";
+import { BrollTool, MusicPicker } from "./ToolsExtra.jsx";
 
 const secs = (ms) => `${(Number(ms || 0) / 1000).toFixed(1)}`;
 
@@ -16,7 +17,7 @@ function describe(id, s, t) {
     case "remove_silences": return t(s.mode === "speed" ? "sum_silences_speed" : "sum_silences", { n: n(s.cuts), s: secs(s.saved_ms) });
     case "remove_fillers": return t("sum_fillers", { n: n(s.removed) });
     case "split_scenes": return t(s.mode === "markers" ? "sum_scenes_markers" : "sum_scenes", { n: n(s.scenes) });
-    case "reframe": return t("sum_reframe", { n: n(s.clips), canvas: s.canvas, mode: t(`reframe_${s.mode}`) });
+    case "reframe": return t("sum_reframe", { n: n(s.clips), canvas: s.canvas, mode: t(`reframe_${s.mode}`) }) + (s.detector ? ` · ${t("sum_detector", { d: s.face_detector || s.detector })}` : "");
     case "match_loudness": return t("sum_loudness", { n: n(s.clips), lufs: s.target_lufs });
     case "zoom_cuts": return t("sum_zoom", { n: n(s.clips), scale: s.scale, every: s.every });
     case "beat_sync": return t("sum_beat", { n: n(s.cuts), bpm: Math.round(n(s.bpm)), step: s.beats_per_cut, length: s.length });
@@ -42,6 +43,7 @@ function Summary({ id, res }) {
       {sentence ? <div style={{ marginTop: 3 }}>{sentence}</div> : null}
       {res.duration_before && id !== "script_assemble" ? <div className="muted num">{res.duration_before} → {res.duration_after}</div> : null}
       {rows.map(([k, v]) => <div key={k} className="muted"><span className="mono">{k}</span>: {String(v)}</div>)}
+      {id === "reframe" && s.detector_note ? <div className="muted" style={{ marginTop: 3 }} data-testid="detector-note">{s.detector_note}</div> : null}
       {s.mode === "meaning" && s.notes ? <div className="muted" style={{ marginTop: 4 }}>{s.notes}</div> : null}
       {Array.isArray(s.examples) && s.examples.length ? <div className="muted" style={{ marginTop: 4 }}>{s.examples.slice(0, 5).map((x) => `${x.at} ${x.text}`).join(" · ")}</div> : null}
     </div>
@@ -198,16 +200,18 @@ function Labeled({ label, children }) {
 
 function Highlights({ media }) {
   const { t, fail, notify } = useApp();
+  const ed = useEd();
   const [mediaId, setMediaId] = useState("");
   const [count, setCount] = useState(5);
   const [len, setLen] = useState(30);
+  const [smart, setSmart] = useState(false);
   const [res, setRes] = useState(null);
   const [busy, setBusy] = useState(false);
   const videos = (media || []).filter((m) => m.kind === "video");
   useEffect(() => { if (!mediaId && videos.length) setMediaId(videos[0].id); }, [mediaId, videos]);
   const find = async () => {
     setBusy(true);
-    try { setRes(await api.highlights(mediaId, { count, length_s: len })); } catch (e) { fail(e); } finally { setBusy(false); }
+    try { setRes(await ed.withAnalysis(() => api.highlights(mediaId, { count, length_s: len, mode: smart ? "model" : "signals" }))); } catch (e) { fail(e); } finally { setBusy(false); }
   };
   const make = async (h, i) => {
     setBusy(true);
@@ -230,15 +234,19 @@ function Highlights({ media }) {
         </Labeled>
         <Labeled label={t("count")}><NumInput value={count} min={1} max={20} step={1} decimals={0} onCommit={(v) => setCount(Math.round(v))} /></Labeled>
         <Labeled label={t("clip_length_s")}><NumInput value={len} min={5} max={180} step={5} decimals={0} onCommit={(v) => setLen(Math.round(v))} /></Labeled>
-        <button type="button" className="btn btn-sm btn-primary" disabled={!mediaId || busy} onClick={find}>{busy ? <Spinner /> : <Icon name="search" size={14} />}{t("highlights_find")}</button>
+        <Toggle checked={smart} onChange={setSmart} label={t("highlights_model")} />
+        <div style={{ height: 8 }} />
+        <button type="button" className="btn btn-sm btn-primary" disabled={!mediaId || busy} onClick={find} data-testid="highlights-find">{busy ? <Spinner /> : <Icon name="search" size={14} />}{t("highlights_find")}</button>
         {res ? (
           <div style={{ marginTop: 10 }}>
-            <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }}>{t("signals")}: {(res.signals || []).join(", ") || "—"}</div>
+            <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }} data-testid="highlights-signals">{t("signals")}: {(res.signals || []).join(", ") || "—"}</div>
+            {res.model ? <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }} data-testid="highlights-model">{res.model.used ? t("highlights_model_used", { n: res.model.moments, m: res.model.model || "" }) : t("highlights_model_off", { r: res.model.reason || "" })}</div> : null}
             {(res.highlights || []).map((h, i) => (
               <div key={i} className="step" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="mono num" style={{ fontSize: 12 }}>{h.range || `${fmtMs(h.start_ms)}–${fmtMs(h.end_ms)}`}</div>
                   <div className="muted" style={{ fontSize: 11.5 }}>{(h.reasons || []).map((r) => t(`reason_${r}`)).join(", ") || "—"} · {h.score}</div>
+                  {h.why ? <div className="muted" style={{ fontSize: 11.5, fontStyle: "italic" }}>{h.why}</div> : null}
                 </div>
                 <button type="button" className="btn btn-sm" disabled={busy} onClick={() => make(h, i)}>{t("short_make")}</button>
               </div>
@@ -330,6 +338,10 @@ export default function ToolsPanel() {
           ) : null}
           <Labeled label={t("beats_per_cut")}><NumInput value={bs.beats} min={1} max={16} step={1} decimals={0} onCommit={(v) => setBs({ ...bs, beats: Math.round(v) })} /></Labeled>
         </ToolCard>
+
+        <MusicPicker />
+
+        <BrollTool />
 
         <Highlights media={media} />
       </div>
