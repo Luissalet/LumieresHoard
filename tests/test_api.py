@@ -2,7 +2,6 @@ import json
 import re
 from pathlib import Path
 
-import pytest
 
 from conftest import BANNED_WORDS, ROOT, needs_ffmpeg
 from lumiere_hoard.agent_tools import TOOLS, tool_catalog

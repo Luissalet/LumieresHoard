@@ -5,7 +5,6 @@ import json
 import ast
 import re
 
-import pytest
 
 from conftest import ROOT, _ff, make_services, needs_ffmpeg
 from lumiere_hoard import media as media_store
