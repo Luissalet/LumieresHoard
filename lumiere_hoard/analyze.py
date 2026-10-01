@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from . import media as media_store
 from .analysis import audio as audio_an
+from .analysis import faces
 from .analysis import speech
 from .analysis import video as video_an
 from .errors import LumiereError, NotFound
@@ -70,7 +71,10 @@ def analyze_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
         result = {"per_second": video_an.motion_per_second(tools, fast, src_w=info["width"], src_h=info["height"], duration_ms=dur, progress=prog,
                                                            handle=ctx.handle())}
     elif kind == "focus":
-        result = video_an.focus_track(tools, fast, src_w=info["width"], src_h=info["height"], duration_ms=dur, progress=prog, handle=ctx.handle())
+        prefer = svc.db.get_setting("face_detector", "auto") or "auto"
+        detector, detector_info = faces.pick(svc.config.models_dir, prefer=prefer, fetch=svc.model_fetch)
+        result = video_an.focus_track(tools, fast, src_w=info["width"], src_h=info["height"], duration_ms=dur, progress=prog, handle=ctx.handle(),
+                                      detector=detector, detector_info=detector_info)
     else:
         raise LumiereError(f"Unknown analysis {kind}.")
     media_store.put_analysis(svc, mid, kind, result, ctx.params)
@@ -127,7 +131,8 @@ def summarize(kind: str, result: dict[str, Any]) -> dict[str, Any]:
         ps = result.get("per_second", [])
         return {"seconds": len(ps), "mean": round(sum(ps) / len(ps), 4) if ps else 0}
     if kind == "focus":
-        return {"samples": len(result.get("samples", [])), "faces": result.get("faces")}
+        return {"samples": len(result.get("samples", [])), "faces": result.get("faces"), "detector": result.get("detector"),
+                "face_samples": result.get("face_samples")}
     if kind == "transcript":
         return {"words": len(result.get("words", [])), "language": result.get("language")}
     return {}

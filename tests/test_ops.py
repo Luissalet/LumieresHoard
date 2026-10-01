@@ -220,4 +220,85 @@ def test_op_errors_explain_the_fields():
     with pytest.raises(LumiereError) as error:
         parse_op({"op": "split"})
     assert "Expected: split {at, clip?}" in str(error.value)
-    assert len(op_reference().splitlines()) == len(OP_NAMES) == 31
+    assert len(op_reference().splitlines()) == len(OP_NAMES) == 33
+
+
+def _find_track(p, track_id):
+    return next(t for t in p.tracks if t.id == track_id)
+
+
+def test_add_overlay_puts_muted_cover_broll_on_a_free_track():
+    p, res = build([{"op": "add_media", "media": "m1", "src_out": 10000},
+                    {"op": "add_overlay", "media": "m2", "start": 2000, "length": 3000, "src_in": 500},
+                    {"op": "add_overlay", "media": "m3", "start": 6000, "length": 1500}])
+    first, second = res[1], res[2]
+    track = _find_track(p, first["track"])
+    assert track.kind == "video" and track.role == "overlay" and track.name == "B-roll" and p.tracks.index(track) == len(p.tracks) - 1
+    assert second["track"] == first["track"]  # a disjoint range reuses the free overlay track
+    c = p.find(first["clip"])[1]
+    assert (c.start, c.end, c.src_in, c.src_out, c.mute, c.transform.fit) == (2000, 5000, 500, 3500, True, "cover")
+    img = p.find(second["clip"])[1]
+    assert (img.start, img.end) == (6000, 7500) and img.mute
+    assert p.duration == 10000  # overlays never lengthen the edit
+    # an overlapping range does not clear the first: it goes to a new track
+    p, r = build([{"op": "add_overlay", "media": "m2", "start": 3000, "length": 1000}], p)
+    assert r[0]["track"] != first["track"] and p.find(first["clip"])[1].end == 5000
+    # a media shorter than the range covers what it can and says so
+    p, r = build([{"op": "add_overlay", "media": "m2", "start": 8000, "length": 4000, "src_in": 4000}], p)
+    assert r[0]["end"] - r[0]["start"] == 2000 and r[0]["short_by"] == 2000
+    with pytest.raises(LumiereError, match="no picture"):
+        build([{"op": "add_overlay", "media": "m4", "start": 0, "length": 1000}], p)
+    with pytest.raises(LumiereError, match="video track"):
+        build([{"op": "add_overlay", "media": "m2", "start": 0, "length": 1000, "track": next(t.id for t in p.tracks if t.kind == "audio")}], p)
+
+
+def _slot_project():
+    p, res = build([{"op": "add_media", "media": "m1", "src_in": 0, "src_out": 2000},       # intro (keeps its 2 s)
+                    {"op": "add_media", "media": "m1", "src_in": 2000, "src_out": 6000},    # main (takes its media's whole length)
+                    {"op": "add_media", "media": "m1", "src_in": 8000, "src_out": 10000},   # outro
+                    {"op": "add_text", "text": "Gracias", "start": 6000, "length": 2000},   # sits on the outro
+                    {"op": "add_text", "text": "Hola", "start": 200, "length": 1000},       # sits on the intro
+                    {"op": "marker_add", "t": 6000, "label": "Fin"},
+                    {"op": "add_media", "media": "m4", "at": 0, "src_in": 0, "src_out": 8000}])
+    ids = [r["clip"] for r in res[:3]]
+    p, _ = build([{"op": "set", "clip": ids[0], "props": {"slot": "intro"}}, {"op": "set", "clip": ids[1], "props": {"slot": "main"}},
+                  {"op": "set", "clip": ids[2], "props": {"slot": "outro"}}], p)
+    return p, ids
+
+
+def test_slot_names_one_clip_and_fill_slot_applies_the_length_rules():
+    p, ids = _slot_project()
+    with pytest.raises(LumiereError, match="already on clip"):
+        build([{"op": "set", "clip": ids[0], "props": {"slot": "main"}}], p)
+    with pytest.raises(NotFound, match="Slots here: intro, main, outro"):
+        build([{"op": "fill_slot", "slot": "nope", "media": "m1"}], p)
+    # main: a 6 s vertical media replaces a 4 s slot -> 6 s, everything after moves by 2 s (clips, titles, markers)
+    q, res = build([{"op": "fill_slot", "slot": "main", "media": "m2"}], p)
+    main = q.find(ids[1])[1]
+    assert (main.media, main.start, main.end, main.src_in, main.src_out) == ("m2", 2000, 8000, 0, 6000) and res[0]["delta_ms"] == 2000
+    outro = q.find(ids[2])[1]
+    assert outro.start == 8000 and q.duration == 10000
+    texts = {c.text: c.start for _, c in q.all_clips() if c.type == "text"}
+    assert texts == {"Hola": 200, "Gracias": 8000}  # the title over the intro stays, the one over the outro moved
+    assert q.markers[0].t == 8000
+    # the music that ran to the old end follows the new one (its file is long enough)
+    music = next(c for t in q.tracks if t.role == "music" for c in t.clips)
+    assert music.end == 10000
+    # intro keeps its length: an image fills the 2 s slot, a 1 s request shortens it and pulls the rest in
+    q2, _ = build([{"op": "fill_slot", "slot": "intro", "media": "m3"}], p)
+    intro = q2.find(ids[0])[1]
+    assert (intro.media, intro.start, intro.end) == ("m3", 0, 2000) and q2.find(ids[1])[1].start == 2000
+    q3, r3 = build([{"op": "fill_slot", "slot": "intro", "media": "m2", "length": 1000}], p)
+    assert q3.find(ids[0])[1].end == 1000 and q3.find(ids[1])[1].start == 1000 and r3[0]["rule"] == "keep"
+    # the clip keeps its look
+    p, _ = build([{"op": "set", "clip": ids[1], "props": {"volume_db": -6, "transform": {"scale": 1.2}}},
+                  {"op": "filter_add", "clips": [ids[1]], "type": "grayscale"}], p)
+    q, _ = build([{"op": "fill_slot", "slot": "main", "media": "m2"}], p)
+    c = q.find(ids[1])[1]
+    assert c.volume_db == -6 and c.transform.scale == 1.2 and [f.type for f in c.filters] == ["grayscale"] and c.reframe is None
+    # an audio-only media cannot fill a picture slot
+    with pytest.raises(LumiereError, match="no picture"):
+        build([{"op": "fill_slot", "slot": "main", "media": "m4"}], p)
+    # the explicit rule beats the name
+    q, _ = build([{"op": "fill_slot", "slot": "outro", "media": "m2", "rule": "full"}], p)
+    assert q.find(ids[2])[1].duration == 6000 and q.duration == 12000

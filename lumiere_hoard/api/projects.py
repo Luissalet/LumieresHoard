@@ -31,6 +31,24 @@ class PatchBody(BaseModel):
     template: Optional[bool] = None
 
 
+class TemplateBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    slots: dict[str, str] = Field(default_factory=dict)
+
+
+class FromTemplateBody(BaseModel):
+    name: str = ""
+    slots: dict[str, Any] = Field(default_factory=dict)
+
+
+class BrollBody(BaseModel):
+    start: Any = None
+    end: Any = None
+    per_sentence: int = 3
+    use_model: bool = False
+    place: str = "none"
+
+
 class EditBody(BaseModel):
     ops: list[dict[str, Any]]
     label: str = ""
@@ -201,6 +219,31 @@ def freeze(request: Request, project_id: str, body: FreezeBody):
     length = parse_time(body.length) if isinstance(body.length, str) else int(body.length)
     derive.freeze_frame(svc, project_id, body.clip, at, length)
     return store.view(svc, project_id)
+
+
+@router.get("/projects/{project_id}/music")
+def music(request: Request, project_id: str, folder: str, recursive: bool = False, count: int = 5):
+    return tool(request, "music_pick", project=project_id, folder=folder, recursive=recursive, count=count)
+
+
+@router.post("/projects/{project_id}/broll")
+def broll(request: Request, project_id: str, body: BrollBody):
+    return tool(request, "broll_suggest", project=project_id, **body.model_dump())
+
+
+@router.post("/projects/{project_id}/template")
+def save_template(request: Request, project_id: str, body: TemplateBody):
+    return store.save_template(services(request), project_id, body.name, body.slots)
+
+
+@router.get("/templates")
+def templates(request: Request):
+    return {"templates": store.list_templates(services(request))}
+
+
+@router.post("/templates/{template_id}/create")
+def create_from_template(request: Request, template_id: str, body: FromTemplateBody):
+    return store.create_from_template(services(request), body.name, template_id, body.slots)
 
 
 @router.post("/projects/{project_id}/stabilize")

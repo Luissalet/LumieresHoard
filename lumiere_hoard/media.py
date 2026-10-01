@@ -166,6 +166,18 @@ def rename(svc: "Services", media_id: str, name: str) -> dict[str, Any]:
     return get(svc, media_id)
 
 
+def set_tags(svc: "Services", media_id: str, tags: list[str]) -> dict[str, Any]:
+    """Labels on a media (up to 30, short): what b-roll suggestions match besides the name and what the media says."""
+    get(svc, media_id)
+    clean: list[str] = []
+    for t in tags:
+        t = clip(str(t).strip(), 40)
+        if t and t.lower() not in (x.lower() for x in clean):
+            clean.append(t)
+    svc.db.execute("UPDATE media SET tags = ? WHERE id = ?", (dumps(clean[:30]), media_id))
+    return get(svc, media_id)
+
+
 def relink(svc: "Services", media_id: str, raw: str) -> dict[str, Any]:
     """Point a media whose file moved at its new location (same content is not required, same kind is)."""
     info = get(svc, media_id)

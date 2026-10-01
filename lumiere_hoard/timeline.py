@@ -144,6 +144,8 @@ class Clip(Strict):
     keyframes: dict[KeyProp, list[Keyframe]] = Field(default_factory=dict)
     reframe: Optional[Reframe] = None
     color: Optional[str] = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
+    slot: Optional[str] = Field(None, min_length=1, max_length=40, pattern=r"^[A-Za-z0-9_\-]+$",
+                                description="Template slot name (intro, main, outro...): the clip a project made from this template fills with other media.")
 
     @property
     def duration(self) -> int:

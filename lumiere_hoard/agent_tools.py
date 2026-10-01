@@ -11,6 +11,8 @@ from typing import Any, Callable, Literal, Optional
 from pydantic import BaseModel, Field
 
 from . import analyze, commands, derive
+from . import broll as broll_mod
+from . import music as music_mod
 from . import media as media_store
 from . import plan as plan_mod
 from . import projects as project_store
@@ -30,7 +32,9 @@ Two ways to edit: (1) plan_create with the user's words ("quita los silencios, s
 remove_fillers, cut_words, split_scenes, reframe, captions, beat_sync, match_loudness). Times are ms or '1:23.5'.
 Text-based editing: timeline_transcript shows the words heard on the timeline with ids; text_cut removes words or keeps only some.
 Smart edits and captions need analyses (transcript, scenes, focus, beats, loudness): when one is missing the tool queues it and says so;
-check job_status and repeat. Every change is one undo step (timeline_history undo/redo). Deletes need confirm=true and only when the
+check job_status and repeat. Background music: music_pick ranks a folder's tracks for the edit (add='best' places it); b-roll: broll_suggest
+matches library clips to what is said (place='best', or timeline_edit add_overlay); reusable edits: template_save, template_list and
+project_create with template + slots. Every change is one undo step (timeline_history undo/redo). Deletes need confirm=true and only when the
 user asks. Never import or export outside the folders the user mentions. Renders run in the background; one at a time."""
 
 
@@ -90,13 +94,50 @@ class TranscriptFixArgs(MediaRef):
 class HighlightsArgs(MediaRef):
     count: int = Field(5, ge=1, le=30)
     length_s: float = Field(30, ge=3, le=600)
+    mode: Literal["signals", "model"] = Field("signals", description="signals: sound, motion, cuts, speech. model: also read the transcript with the local model "
+                                              "for moments that stand on their own (hook, punchline, complete thought), merged into one ranked list; "
+                                              "falls back to signals when there is no transcript or model (the answer says why).")
+
+
+class MediaTagArgs(MediaRef):
+    tags: list[str] = Field(..., max_length=30, description="Labels for the media (replaces the old ones); b-roll suggestions match them.")
 
 
 class ProjectCreateArgs(BaseModel):
     name: str = Field("Proyecto", max_length=120)
     preset: Optional[str] = Field(None, description="Canvas: " + ", ".join(PRESETS))
     media: list[str] = Field(default_factory=list, max_length=200, description="Media ids to put on the timeline in order.")
-    from_project: Optional[str] = Field(None, description="Start as a copy of this project (templates).")
+    from_project: Optional[str] = Field(None, description="Start as a copy of this project.")
+    template: str = Field("", max_length=120, description="A template (id or name, see template_list): the new project keeps its titles, captions, music and "
+                          "effects and replaces the media of its slots with `slots`.")
+    slots: dict[str, Any] = Field(default_factory=dict, description="With template: {slot name: media id or name}, e.g. {'intro': 'logo.mp4', 'main': 'take3'}. "
+                                  "A slot named main* takes its media's full length and the rest moves; slots left out keep the template's sample media.")
+
+
+class TemplateSaveArgs(BaseModel):
+    project: str = ProjectId
+    name: str = Field(..., min_length=1, max_length=120)
+    slots: dict[str, str] = Field(default_factory=dict, description="{clip id: slot name} (intro, main, outro...) on top of slots the clips already have.")
+
+
+class MusicPickArgs(BaseModel):
+    project: str = ProjectId
+    folder: str = Field(..., max_length=2000, description="A folder with audio files (inside the folders the user named).")
+    recursive: bool = False
+    count: int = Field(5, ge=1, le=20)
+    add: str = Field("", max_length=2000, description="'best' or the path of one suggested track: also put it under the edit (trimmed and faded to length, "
+                     "ducking on) as one undo step.")
+    volume_db: float = Field(-8.0, ge=-40, le=6)
+
+
+class BrollArgs(BaseModel):
+    project: str = ProjectId
+    start: TimeVal = Field(None, description="Look for pictures for this range of the edit as a whole (ms or '1:23.5')...")
+    end: TimeVal = Field(None, description="...to this time; both omitted = one query per sentence of the main track's speech.")
+    per_sentence: int = Field(3, ge=1, le=8)
+    use_model: bool = Field(False, description="Also ask the local model for what could be shown while each sentence is said.")
+    place: Literal["none", "best"] = Field("none", description="best: put the best option of every suggestion over its sentence (muted overlays, fit cover), "
+                                           "one undo step. Or place one yourself: timeline_edit add_overlay {media, start, length, src_in}.")
 
 
 class ProjectGetArgs(BaseModel):
@@ -131,7 +172,7 @@ class HistoryArgs(BaseModel):
 class CommandArgs(BaseModel):
     project: str = ProjectId
     command: Literal["remove_silences", "remove_fillers", "cut_words", "split_scenes", "reframe", "captions", "beat_sync", "match_loudness",
-                     "script_assemble", "zoom_cuts"]
+                     "script_assemble", "zoom_cuts", "music_add"]
     args: dict[str, Any] = Field(default_factory=dict, description="See the command list in plan docs / presets_list.")
     preview: bool = Field(False, description="Report what would change without saving.")
 
@@ -321,12 +362,59 @@ def run_transcript_fix(svc: Services, a: TranscriptFixArgs) -> dict:
 
 
 def run_highlights(svc: Services, a: HighlightsArgs) -> dict:
-    return commands.highlights(svc, a.media, count=a.count, length_ms=int(a.length_s * 1000))
+    return commands.highlights(svc, a.media, count=a.count, length_ms=int(a.length_s * 1000), mode=a.mode)
+
+
+def run_media_tag(svc: Services, a: MediaTagArgs) -> dict:
+    m = media_store.set_tags(svc, a.media, a.tags)
+    return {"media": m["id"], "name": m["name"], "tags": m["tags"]}
 
 
 def run_project_create(svc: Services, a: ProjectCreateArgs) -> dict:
+    if a.template:
+        if a.media or a.from_project:
+            raise LumiereError("With a template give slots (slot name -> media), not media or from_project.")
+        v = project_store.create_from_template(svc, a.name, a.template, a.slots)
+        return {**{k: v[k] for k in ("id", "name", "duration", "canvas", "clips", "rev")}, "template": v["template"], "unfilled": v["unfilled"],
+                "filled": [{"slot": r["slot"], "media": r["media"], "start": ms_to_tc(r["start"]), "end": ms_to_tc(r["end"]), "rule": r["rule"]}
+                           for r in v["filled"]]}
+    if a.slots:
+        raise LumiereError("slots only go with a template (see template_list).")
     v = project_store.create(svc, a.name, preset=a.preset, media=a.media or None, from_project=a.from_project)
     return {k: v[k] for k in ("id", "name", "duration", "canvas", "clips", "rev")}
+
+
+def run_template_save(svc: Services, a: TemplateSaveArgs) -> dict:
+    return project_store.save_template(svc, a.project, a.name, a.slots)
+
+
+def run_template_list(svc: Services, a: Empty) -> dict:
+    out = []
+    for t in project_store.list_templates(svc):
+        out.append({"id": t["id"], "name": t["name"], "duration": t["duration"], "canvas": t["canvas"],
+                    "slots": [{"slot": s["slot"], "kind": s["track_kind"], "length": ms_to_tc(s["length_ms"]), "sample": s["name"], "rule": s["rule"]}
+                              for s in t["slots"]]})
+    return {"templates": out}
+
+
+def run_music_pick(svc: Services, a: MusicPickArgs) -> dict:
+    out = music_mod.suggest(svc, a.project, a.folder, recursive=a.recursive, count=a.count)
+    if a.add:
+        if a.add == "best":
+            if not out["tracks"]:
+                raise LumiereError("There is no track to add.")
+            path = out["tracks"][0]["path"]
+        else:
+            path = a.add
+        out["added"] = commands.run(svc, a.project, "music_add", {"path": path, "volume_db": a.volume_db}, actor="agent")["summary"]
+    return out
+
+
+def run_broll(svc: Services, a: BrollArgs) -> dict:
+    try:
+        return broll_mod.suggest(svc, a.project, start=_t(a.start), end=_t(a.end), per_sentence=a.per_sentence, use_model=a.use_model, place=a.place)
+    except commands.NeedsAnalysis as need:
+        return {"done": False, "needs": need.jobs, "message": str(need)}
 
 
 def run_project_list(svc: Services, a: Empty) -> dict:
@@ -538,12 +626,21 @@ TOOLS: list[Tool] = [
          "Sinónimos: qué dice, texto del vídeo.\nKeywords: transcript, words, speech.", TranscriptArgs, _ann(True), run_transcript_get),
     Tool("transcript_fix", "Correct transcript words (captions use the corrected text). Corregir transcripción.\n"
          "Keywords: fix transcript, typo, captions text.", TranscriptFixArgs, _ann(False, False, True), run_transcript_fix),
-    Tool("highlights_find", "Find the best moments of a long video (sound, motion, cuts, speech). Mejores momentos.\n"
-         "Sinónimos: highlights, clips virales, momentos clave, gameplay.\nKeywords: highlights, best moments, clips.", HighlightsArgs, _ann(True), run_highlights),
+    Tool("highlights_find", "Find the best moments of a long video (sound, motion, speech; mode=model reads it). Mejores momentos.\n"
+         "mode=model asks the local model for hooks, punchlines and complete thoughts and merges them with the signals, with reasons.\n"
+         "Sinónimos: highlights, clips virales, momentos clave, gameplay.\nKeywords: highlights, best moments, clips, hook, punchline.", HighlightsArgs, _ann(True), run_highlights),
+    Tool("media_tag", "Label a media with keywords (replaces its tags); b-roll suggestions match them. Etiquetar medio.\n"
+         "Sinónimos: etiquetas, palabras clave, describir clip.\nKeywords: tags, labels, keywords, b-roll library.", MediaTagArgs, _ann(False, False, True), run_media_tag),
     Tool("short_from_range", "Make a vertical short (reframed, captions) from one range of a media. Crear corto vertical.\n"
          "Sinónimos: reel, tiktok, short desde un momento.\nKeywords: short, reel, vertical clip.", ShortArgs, _ann(False), run_short),
-    Tool("project_create", "Create an editing project (canvas preset, optional media in order). Nuevo proyecto de vídeo.\n"
-         "Presets: reels, youtube, square... Keywords: new project, timeline.", ProjectCreateArgs, _ann(False), run_project_create),
+    Tool("project_create", "Create an editing project (canvas preset and media, or a template with slots). Nuevo proyecto de vídeo.\n"
+         "Presets: reels, youtube, square... With template + slots {name: media} it fills a saved template (template_list).\n"
+         "Keywords: new project, timeline, from template, slots.", ProjectCreateArgs, _ann(False), run_project_create),
+    Tool("template_save", "Save a project as a template with replaceable slots (intro, main, outro...). Guardar plantilla.\n"
+         "Titles, captions, music and effects stay; slot clips are replaced later with project_create template+slots.\n"
+         "Sinónimos: plantilla, formato reutilizable, intro y outro fijos.\nKeywords: template, slots, reusable edit.", TemplateSaveArgs, _ann(False), run_template_save),
+    Tool("template_list", "List the project templates with their slots. Plantillas de vídeo.\n"
+         "Keywords: templates, slots, reusable.", Empty, _ann(True), run_template_list),
     Tool("project_list", "List the editing projects. Proyectos de vídeo.\nKeywords: projects, list.", Empty, _ann(True), run_project_list),
     Tool("project_get", "Read a project's timeline: tracks, clips with ids and times, captions, issues. Ver timeline.\n"
          "Titles first; filter by track or time on long timelines. Keywords: timeline, outline, clips, tracks, titles.", ProjectGetArgs, _ann(True), run_project_get),
@@ -567,6 +664,14 @@ TOOLS: list[Tool] = [
          "Sinónimos: edítalo así, haz que, instrucciones.\nKeywords: plan, natural language edit, instructions.", PlanCreateArgs, _ann(False), run_plan_create),
     Tool("plan_apply", "Apply a plan (optionally edited) as one undo step; exports in it are queued. Aplicar plan.\n"
          "Runs in the background. Keywords: apply plan, run.", PlanApplyArgs, _ann(False, True, False), run_plan_apply),
+    Tool("music_pick", "Rank the audio files of a folder as background music for an edit (tempo, length, energy). Elegir música.\n"
+         "Fits the edit's length and cuts per minute, with reasons; add='best' puts it under the edit, trimmed, faded, ducking.\n"
+         "Sinónimos: música de fondo, banda sonora, canción para el vídeo.\nKeywords: background music, bpm, tempo, soundtrack, ducking.",
+         MusicPickArgs, _ann(False), run_music_pick),
+    Tool("broll_suggest", "Suggest library clips as b-roll for each sentence (or a range) of the edit. Sugerir b-roll.\n"
+         "Matches what clips say, their names and tags; place='best' puts them as muted overlays; add_overlay op places one.\n"
+         "Sinónimos: planos de recurso, imágenes de apoyo, cubrir con vídeo.\nKeywords: b-roll, cutaway, overlay, stock footage, keywords.",
+         BrollArgs, _ann(False), run_broll),
     Tool("render_start", "Export the project to a video file (MP4, HEVC, ProRes, GIF, MP3...). Exportar vídeo.\n"
          "GPU encoder when available. Sinónimos: renderizar, sacar el vídeo, descargar.\nKeywords: render, export, mp4.", RenderArgs, _ann(False), run_render),
     Tool("job_status", "State and progress of a background job (or the active ones). Estado de tareas.\n"

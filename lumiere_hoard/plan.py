@@ -55,6 +55,7 @@ COMMAND_DOCS = {
     "match_loudness": "args {target_lufs?: -16} — same loudness for every clip",
     "zoom_cuts": "args {scale?: 1.12, every?: 2} — punch in on every other clip so jump cuts look like camera changes",
     "script_assemble": "args {media, script?: text, script_path?: file, take?: 'last'|'best', mode?: 'auto'|'words'|'meaning'} — rough cut of a recording read from a script: one take per segment",
+    "music_add": "args {path?: audio file, media?: library audio id, start_ms?, volume_db?: -8, duck?: true, fade_in_ms?: 600, fade_out_ms?: 2500} — background music trimmed to the edit's length (music_pick ranks the tracks of a folder)",
 }
 
 OP_DOCS = """Timeline operations (times in ms or '1:23.5'; clip / track / media ids from the context):
@@ -63,11 +64,13 @@ add_text {text, start, length, style?: {size, color '#RRGGBB', position: top|mid
 split {at, clip?}   trim {clip, src_in?, src_out?, length?}   move {clip, start?, track?}   delete {clips: [...], ripple?: true}
 delete_range {start, end, tracks?}  (ripple: later material moves left)
 cut_source {media, ranges: [[from, to], ...]} (source times)   keep_source {media, ranges}
-set {clip, props: {volume_db, mute, fade_in, fade_out, audio_fade_in, audio_fade_out, transform: {x, y, scale, rotation, opacity, fit: contain|cover|fill}, crop, text, style, label}}
+set {clip, props: {volume_db, mute, fade_in, fade_out, audio_fade_in, audio_fade_out, transform: {x, y, scale, rotation, opacity, fit: contain|cover|fill}, crop, text, style, label, slot}}
 speed {clip, speed}   transition {clip? | all_cuts: true, type, dur}   filter_add {clips? | track?, type, params}   filter_remove {clip, type?}
 canvas {preset? | width, height, fps, background, length_mode?: main|longest}   marker_add {t, label, kind?}   captions {enabled, style, props}
 track_add {kind: video|audio|text, name, role?: overlay|voice|music|sfx|titles}   track_set {track, props: {muted, hidden, locked, volume_db, duck}}
 detach_audio {clip}   duplicate {clip}   close_gaps {track?}   keyframes {clip, prop: x|y|scale|opacity|rotation|volume_db, keys: [{t, v, ease}]}
+add_overlay {media, start, length, src_in?, track?, fit?: cover, mute?: true, fade_in?, fade_out?} (b-roll over a range, on a free overlay track)
+fill_slot {slot, media, src_in?, src_out?, length?, rule?: auto|keep|full} (replace the media of the clip marked set {props: {slot: 'intro'}}; slots named main* take the media's full length and the rest moves)
 Transitions: """ + ", ".join(TRANSITIONS) + """
 Effects (filter_add type): eq{brightness, contrast, saturation, gamma}, grayscale, sepia, vintage, warm{amount}, cool{amount}, contrast_pop{amount},
 vignette{strength}, blur{radius}, sharpen{amount}, denoise{strength}, pixelate{size}, chromakey{color, similarity, blend}, hflip, vflip, lut{file},
