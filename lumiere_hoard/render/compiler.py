@@ -38,6 +38,7 @@ class MediaRef:
     has_video: bool
     duration_ms: int
     proxy: Optional[str] = None
+    fps: float = 0.0  # frames per second of the source picture (0 = unknown: 30 is assumed where a grid is needed)
 
 
 @dataclass
@@ -86,21 +87,26 @@ def _num(value: float) -> str:
 
 # ---------------------------------------------------------------- expressions
 
-def piecewise(points: list[tuple[float, float]], var: str = "t") -> str:
+def _fmt(value: float, digits: int) -> str:
+    text = f"{value:.{digits}f}".rstrip("0").rstrip(".")
+    return text if text not in ("-0", "") else "0"
+
+
+def piecewise(points: list[tuple[float, float]], var: str = "t", digits: int = 4) -> str:
     """Linear interpolation through (time_s, value) points as a flat ffmpeg expression (no nesting):
     v0 + sum(slope_i * clip(var - t_i, 0, dt_i))."""
     pts = sorted(points)
     if not pts:
         return "0"
     if len(pts) == 1:
-        return _num(pts[0][1])
-    terms = [_num(pts[0][1])]
+        return _fmt(pts[0][1], digits)
+    terms = [_fmt(pts[0][1], digits)]
     for (ta, va), (tb, vb) in zip(pts, pts[1:]):
         dt = tb - ta
-        if dt <= 1e-6 or abs(vb - va) < 1e-6:
+        if dt <= 1e-9 or abs(vb - va) < 1e-9:
             continue
         slope = (vb - va) / dt
-        terms.append(f"{_num(slope)}*clip({var}-{_num(ta)},0,{_num(dt)})")
+        terms.append(f"{_fmt(slope, digits)}*clip({var}-{_fmt(ta, digits)},0,{_fmt(dt, digits)})")
     return "+".join(terms).replace("+-", "-")
 
 
@@ -191,8 +197,16 @@ def plan_chunks(project: Project, total_ms: int, fps: float, target_ms: int = 80
     return chunks
 
 
-def pieces_in(project: Project, A: float, B: float) -> list[Piece]:
-    """What each visible video track shows between A and B (ms), bottom track first."""
+def grid_ceil(ms: float, fps: float) -> float:
+    """The first output frame time at or after ``ms`` (clip edges are whole ms, frames are not: 33 ms -> 33.33 ms at 30 fps)."""
+    return math.ceil(ms * fps / 1000 - 1e-6) * 1000 / fps
+
+
+def pieces_in(project: Project, A: float, B: float, fps: Optional[float] = None) -> list[Piece]:
+    """What each visible video track shows between A and B (ms), bottom track first. With ``fps`` the pieces start and
+    end on output frames: a clip is in the frames whose time is inside [start, end), so every piece is whole frames and
+    sits on the same grid as the chunk."""
+    snap = (lambda ms: grid_ceil(ms, fps)) if fps else (lambda ms: ms)
     out: list[Piece] = []
     for t in video_tracks(project):
         clips = sorted((c for c in t.clips if c.type != "text"), key=lambda c: c.start)
@@ -203,9 +217,10 @@ def pieces_in(project: Project, A: float, B: float) -> list[Piece]:
             if nxt is not None and nxt.transition_in and nxt.start < c.end:
                 end = nxt.start
                 ta, tb = nxt.start, nxt.start + nxt.transition_in.dur
-                if ta < B and tb > A:
-                    out.append(Piece(t, c, max(A, ta), min(B, tb), other=nxt, transition=nxt.transition_in.type))
-            a, b = max(A, start), min(B, end)
+                ga, gb = snap(max(A, ta)), snap(min(B, tb))
+                if ta < B and tb > A and gb - ga > 0.5:
+                    out.append(Piece(t, c, ga, gb, other=nxt, transition=nxt.transition_in.type))
+            a, b = snap(max(A, start)), snap(min(B, end))
             if b - a > 0.5:
                 out.append(Piece(t, c, a, b))
     order = {t.id: i for i, t in enumerate(project.tracks)}
@@ -215,55 +230,97 @@ def pieces_in(project: Project, A: float, B: float) -> list[Piece]:
 
 # ---------------------------------------------------------------- one clip -> filter chain
 
+@dataclass
+class SourceWindow:
+    """How one piece reads its source. Forward, input timestamps stay absolute: a frame at source second x arrives at
+    T = x - ss (``ss`` is exactly the -ss value), so nothing depends on which frame the seek keeps first. Reversed, the
+    frames are cut on timestamps at a point of the source frame grid before ``reverse``, so the last frame kept (the
+    first one shown) is known; after reversing they are one source frame apart."""
+
+    ss: float  # seconds, as passed to -ss
+    length: float  # seconds read
+    frame: float  # source frame duration, ms
+    trim_end: float = 0.0  # reversed: input seconds; frames at or after it are dropped
+    last: float = 0.0  # reversed: source ms of the last frame kept
+
+
+def _source_frame_ms(media: MediaRef) -> float:
+    return 1000.0 / media.fps if media.fps and media.fps > 0 else 1000.0 / 30
+
+
+def source_window(clip: Clip, media: MediaRef, t0: float, t1: float, fps: float) -> SourceWindow:
+    """The source span a piece [t0, t1) may show, with margins: the frame shown at an output time is the last one the
+    timeline reaches before the middle of that output frame, which can be a couple of source frames before t0."""
+    frame = _source_frame_ms(media)
+    vmax = max(v for _, _, v in clip.segments())
+    half = 500.0 / fps
+    a, b = clip.src_at(t0 - half), clip.src_at(t1 + half)
+    margin = 3 * frame + half * vmax
+    lo, hi = max(0.0, min(a, b) - margin), max(a, b) + margin
+    ss = round(lo / 1000, 6)
+    if not clip.reverse:
+        return SourceWindow(ss, hi / 1000 - ss, frame)
+    top = math.ceil(hi / frame - 1e-6) * frame  # a grid point at or above the span
+    if media.duration_ms:
+        top = min(top, math.floor(media.duration_ms / frame + 1e-6) * frame)  # no frame exists past the end
+    return SourceWindow(ss, (top + frame) / 1000 - ss, frame, trim_end=(top - frame / 2) / 1000 - ss, last=top - frame)
+
+
 def _input_args(clip: Clip, media: MediaRef, t0: float, t1: float, out: Output, hwdec: bool) -> tuple[list[str], float]:
     """-ss/-t/-i for the source span shown between t0 and t1; returns (args, seconds of output)."""
     dur_s = (t1 - t0) / 1000
     path = media.proxy if out.use_proxies and media.proxy else media.path
     if media.kind == "image":
         return ["-loop", "1", "-framerate", out.fps_expr, "-t", _num(dur_s + 0.5), "-i", path], dur_s
-    a, b = clip.src_at(t0), clip.src_at(t1)
-    lo, hi = (b, a) if clip.reverse else (a, b)
-    pad = 2 * 1000 / out.fps * max(v for _, _, v in clip.segments())
+    w = source_window(clip, media, t0, t1, out.fps)
     args: list[str] = []
     if hwdec and not out.use_proxies:
         args += ["-hwaccel", "auto"]
-    if clip.reverse:
-        # reversed, the first frame shown is the last one read: pad below lo instead, and let reverse_trim() cut at hi
-        start = reverse_start(clip, t0, t1, out.fps)
-        args += ["-ss", _num(start / 1000), "-t", _num((hi - start + pad) / 1000), "-i", path]
-    else:
-        args += ["-ss", _num(max(0.0, lo) / 1000), "-t", _num((hi - lo + pad) / 1000), "-i", path]
+    args += ["-ss", f"{w.ss:.6f}", "-t", f"{w.length:.6f}", "-i", path]
     return args, dur_s
 
 
-def reverse_start(clip: Clip, t0: float, t1: float, fps: float) -> float:
-    """Source ms where a reversed piece starts reading (two frames of margin below its lowest source time)."""
-    lo = min(clip.src_at(t0), clip.src_at(t1))
-    return max(0.0, lo - 2 * 1000 / fps * max(v for _, _, v in clip.segments()))
-
-
-def reverse_trim(clip: Clip, t0: float, t1: float, fps: float) -> str:
-    """Before ``reverse``: keep only the frames that start before the piece's highest source time. The input's -t edge is
-    not exact (a frame on the boundary may or may not come), a trim on timestamps is."""
-    hi = max(clip.src_at(t0), clip.src_at(t1))
-    return f"trim=end={_num6((hi - reverse_start(clip, t0, t1, fps) - 0.5) / 1000)}"
-
-
-def ramp_expr(clip: Clip, t0: float, t1: float, fps: float) -> str:
-    """setpts expression (output seconds from the piece start, as a function of T = input seconds) for a speed curve.
-    The input starts at the piece's first source frame (its last one when reversed); the map is piecewise linear on the
-    clip's constant-speed steps, the same steps the sound and the timing helpers use."""
-    a, b = clip.src_at(t0), clip.src_at(t1)
-    lo, hi = (b, a) if clip.reverse else (a, b)
-    pad = 2 * 1000 / fps * max(v for _, _, v in clip.segments())
-    edges = {s for seg in clip.segments() for s in seg[:2]}
+def time_map(clip: Clip, w: SourceWindow, t0: float) -> str:
+    """setpts expression: output seconds from the piece start as a function of T, the input seconds (absolute from ss
+    forward; from the first frame shown when reversed). Piecewise linear on the clip's constant-speed steps (one step at
+    a constant speed), the same steps the sound and the timing helpers use."""
     if clip.reverse:
-        span = [x for x in edges if lo - pad < x < hi] + [hi, lo - pad]
-        pts = [((hi - x) / 1000, (clip.timeline_at(x) - t0) / 1000) for x in span]
+        def src(T: float) -> float:
+            return w.last + w.frame - 1000 * T  # a reversed frame is reached at its end
+        top = (w.last + w.frame) / 1000 - w.ss + 1
     else:
-        span = [x for x in edges if lo < x < hi + pad] + [lo, hi + pad]
-        pts = [((x - lo) / 1000, (clip.timeline_at(x) - t0) / 1000) for x in span]
-    return piecewise(sorted(set(pts)), "T")
+        def src(T: float) -> float:
+            return (w.ss + T) * 1000
+        top = w.length + 1
+    marks = {0.0, top}
+    for e in {x for seg in clip.segments() for x in seg[:2]}:
+        T = (w.last + w.frame - e) / 1000 if clip.reverse else e / 1000 - w.ss
+        if 0 < T < top:
+            marks.add(T)
+    return piecewise([(T, (clip.timeline_at(src(T)) - t0) / 1000) for T in marks], "T", digits=7)
+
+
+def time_chain(clip: Clip, media: MediaRef, t0: float, t1: float, out: Output) -> list[str]:
+    """Source frames -> the piece's output frames, frame-exact: each output frame (at piece time n / fps) shows the last
+    source frame the timeline reaches before n / fps + half a frame. The timestamps are mapped to timeline time (in a
+    microsecond time base), ``fps`` keeps for every slot the last frame that rounds to it and repeats the previous one
+    for empty slots, then the slots of the piece are kept."""
+    n = max(1, int(round((t1 - t0) * out.fps / 1000)))
+    if media.kind == "image":
+        return ["setpts=PTS-STARTPTS", f"fps={out.fps_expr}", f"trim=duration={_num((t1 - t0) / 1000)}", "setpts=PTS-STARTPTS"]
+    w = source_window(clip, media, t0, t1, out.fps)
+    chain: list[str] = []
+    if clip.reverse:
+        chain += [f"trim=end={w.trim_end:.6f}", "reverse", "setpts=PTS-STARTPTS"]
+    chain += ["settb=AVTB", f"setpts='({time_map(clip, w, t0)})/TB'", f"fps={out.fps_expr}",
+              "trim=start=0", f"trim=end_frame={n}", "setpts=PTS-STARTPTS"]
+    return chain
+
+
+def ramp_expr(clip: Clip, t0: float, t1: float, fps: float, media: Optional[MediaRef] = None) -> str:
+    """The time map of a piece (kept for callers that only want the expression)."""
+    m = media or MediaRef("", "", "video", 0, 0, False, True, 0)
+    return time_map(clip, source_window(clip, m, t0, t1, fps), t0)
 
 
 def _num6(value: float) -> str:
@@ -436,19 +493,7 @@ def clip_chain(idx: int, piece_clip: Clip, media: MediaRef, t0: float, t1: float
     out = cx.out
     clip = piece_clip
     in_args, dur_s = _input_args(clip, media, t0, t1, out, cx.hwdec)
-    chain: list[str] = []
-    if clip.reverse:
-        if media.kind != "image":
-            chain.append(reverse_trim(clip, t0, t1, out.fps))
-        chain.append("reverse")
-    chain.append("setpts=PTS-STARTPTS")
-    if clip.has_ramp and media.kind != "image":
-        chain.append(f"setpts='({ramp_expr(clip, t0, t1, out.fps)})/TB'")
-    elif abs(clip.speed - 1) > 1e-4 and media.kind != "image":
-        chain.append(f"setpts=PTS/{_num(clip.speed)}")
-    chain.append(f"fps={out.fps_expr}")
-    chain.append(f"trim=duration={_num(dur_s)}")
-    chain.append("setpts=PTS-STARTPTS")
+    chain: list[str] = time_chain(clip, media, t0, t1, out)
     scale_keys = clip.keyframes.get("scale")
     box_scale = clip.transform.scale if not scale_keys else 1.0
     blur_fill = clip.transform.fit == "blur"
@@ -554,15 +599,16 @@ def chunk_graph(project: Project, index: int, f0: int, f1: int, out: Output, med
     lines = [f"color=c={base}:s={out.width}x{out.height}:r={out.fps_expr}:d={_num(dur + 1)},format={'yuva420p' if out.alpha else 'yuv420p'}[b0]"]
     cur = "b0"
     n = 0
-    for p in pieces_in(project, A, B):
+    for p in pieces_in(project, A, B, out.fps):
         m = media(p.clip.media)
-        offset = (p.t0 - A) / 1000
+        # where the piece starts in the chunk, as a whole number of frames (a rounded decimal could land after the frame)
+        at = f"{int(round((p.t0 - A) * out.fps / 1000))}/({out.fps_expr})"
         if p.other is None:
             args, text, w, h = clip_chain(len(g.inputs), p.clip, m, p.t0, p.t1, cx, f"c{n}")
             g.inputs.append(args)
             lines.append(text)
             x, y = _position(p.clip, out, A)
-            lines.append(f"[c{n}]setpts=PTS-STARTPTS+{_num(offset)}/TB[d{n}]")
+            lines.append(f"[c{n}]setpts=PTS-STARTPTS+({at})/TB[d{n}]")
             lines.append(f"[{cur}][d{n}]overlay=x='{x}':y='{y}':eof_action=pass:repeatlast=0:format=auto[b{n + 1}]")
         else:
             # transition: both clips on their own transparent canvas, xfade, then onto the picture
@@ -582,7 +628,7 @@ def chunk_graph(project: Project, index: int, f0: int, f1: int, out: Output, med
             whole = p.other.transition_in.dur / 1000 if p.other.transition_in else tdur
             into = (p.t0 - p.other.start) / 1000
             lines.append(f"[{sides[0]}][{sides[1]}]xfade=transition={XFADE.get(p.transition or 'crossfade', 'fade')}:duration={_num(max(0.04, whole - 0.001))}:offset={_num(-into)},"
-                         f"trim=duration={_num(tdur)},setpts=PTS-STARTPTS+{_num(offset)}/TB[d{n}]")
+                         f"trim=duration={_num(tdur)},setpts=PTS-STARTPTS+({at})/TB[d{n}]")
             lines.append(f"[{cur}][d{n}]overlay=eof_action=pass:repeatlast=0:format=auto[b{n + 1}]")
         cur = f"b{n + 1}"
         n += 1

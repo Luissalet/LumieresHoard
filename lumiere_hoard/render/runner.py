@@ -127,12 +127,12 @@ class RenderContext:
             if mid.startswith("prj_"):
                 m = self.sequence(mid)
                 self._media[mid] = C.MediaRef(id=mid, path=str(m.video), kind="video", width=m.width, height=m.height, has_audio=True,
-                                              has_video=True, duration_ms=m.duration_ms, proxy=None)
+                                              has_video=True, duration_ms=m.duration_ms, proxy=None, fps=m.fps)
                 return self._media[mid]
             info = media_store.get(self.svc, mid)
             self._media[mid] = C.MediaRef(id=mid, path=info["path"], kind=info["kind"], width=info["width"], height=info["height"],
                                           has_audio=info["has_audio"], has_video=info["has_video"], duration_ms=info["duration_ms"],
-                                          proxy=media_store.proxy_path(self.svc, mid))
+                                          proxy=media_store.proxy_path(self.svc, mid), fps=float(info.get("fps") or 0))
         return self._media[mid]
 
     def sequence(self, project_id: str, ctx: Optional["JobCtx"] = None) -> sequences.SeqMaster:
