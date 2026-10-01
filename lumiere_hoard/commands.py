@@ -537,7 +537,7 @@ def _meaning_alignment(svc: "Services", media: str, segments: list, transcript: 
             out.append({"segment": seg, "ranges": ranges})
         return {"parts": out, "notes": str(data.get("notes") or "")}
 
-    result, model = chat_json(svc, [{"role": "system", "content": system}, {"role": "user", "content": user}], parse, max_tokens=3000, effort="low")
+    result, model = chat_json(svc, [{"role": "system", "content": system}, {"role": "user", "content": user}], parse, max_tokens=3000, effort="off")
     result.update({"key": key, "model": model, "sentences": [[s["t0"], s["t1"]] for s in sents]})
     media_store.put_analysis(svc, media, "script_align", result, {"segments": len(segments)})
     return result

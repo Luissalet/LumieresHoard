@@ -153,7 +153,7 @@ def model_plan(svc: "Services", project_id: str, instruction: str) -> tuple[Plan
 
     messages = [{"role": "system", "content": SYSTEM + "\n\n" + OP_DOCS + "\n\nCommands:\n" + "\n".join(f"{k}: {v}" for k, v in COMMAND_DOCS.items())},
                 {"role": "user", "content": f"CONTEXT\n{context(svc, project_id)}\n\nREQUEST\n{instruction}"}]
-    return chat_json(svc, messages, lambda data, strict: _parse(data), max_tokens=2500, effort="low")
+    return chat_json(svc, messages, lambda data, strict: _parse(data), max_tokens=2500, effort="off")
 
 
 # ---------------------------------------------------------------- rules

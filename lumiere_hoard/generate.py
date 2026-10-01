@@ -16,7 +16,7 @@ class GenerationFailed(LumiereError):
 
 
 def chat_json(svc: Any, messages: list[dict[str, str]], parse: Callable[[Any, bool], Any], *, max_tokens: int,
-              effort: Optional[str] = "low") -> tuple[Any, Optional[str]]:
+              effort: Optional[str] = "off") -> tuple[Any, Optional[str]]:
     """Ask for JSON, parse it, retry once with the error. Returns (value, model name)."""
 
     def ask(msgs: list[dict[str, str]]) -> tuple[str, Optional[str]]:
@@ -36,7 +36,7 @@ def chat_json(svc: Any, messages: list[dict[str, str]], parse: Callable[[Any, bo
         try:
             return parse(json_from_text(text2), False), model2 or model
         except (ValueError, ValidationError) as second:
-            raise GenerationFailed(f"The model did not return a usable plan: {_describe(second)}") from second
+            raise GenerationFailed(f"The model did not return usable JSON: {_describe(second)}") from second
 
 
 def _describe(error: Exception) -> str:
@@ -65,7 +65,7 @@ def json_from_text(text: str) -> Any:
     return json.loads(text[start: end + 1])
 
 
-def chat_text(svc: Any, messages: list[dict[str, str]], *, max_tokens: int = 1500, effort: Optional[str] = "low") -> tuple[str, Optional[str]]:
+def chat_text(svc: Any, messages: list[dict[str, str]], *, max_tokens: int = 1500, effort: Optional[str] = "off") -> tuple[str, Optional[str]]:
     try:
         result = svc.link_sync.chat(messages, effort=effort, max_tokens=max_tokens, temperature=0.3)
     except Exception as error:  # noqa: BLE001
