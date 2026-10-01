@@ -27,4 +27,3 @@ Lo que falta para que el editor cubra todo lo que se le pide. Se tacha (o se bor
 ## Familia
 
 - Recibir medios desde otras apps de la familia (Prospero, Scribe) por `family.emit` y avisar al terminar un render.
-- Fila en el Manual de Google (sección «Creación diseño y mundos», tras Prospero).
