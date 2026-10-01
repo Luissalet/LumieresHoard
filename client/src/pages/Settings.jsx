@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import { Field, Icon, Spinner, Toggle } from "../components/ui.jsx";
+import { setGlPreview, useGlPreview, webglAvailable } from "../editor/previewPrefs.js";
 
 const KEYS = ["whisper_model", "whisper_device", "transcript_language", "hwdec", "export_folder", "auto_transcribe", "model", "default_export", "face_detector"];
 
@@ -20,6 +21,8 @@ export default function Settings() {
   const [draft, setDraft] = useState({});
   const [status, setStatus] = useState(null);
   const [saving, setSaving] = useState(false);
+  const glOn = useGlPreview();
+  const glAvailable = webglAvailable();
 
   useEffect(() => {
     api.settings().then((s) => { setSettings(s); setDraft(Object.fromEntries(KEYS.map((k) => [k, s[k] ?? ""]))); }).catch(fail);
@@ -96,6 +99,10 @@ export default function Settings() {
                 {["auto", "yunet", "haar", "saliency"].map((d) => <option key={d} value={d}>{d}</option>)}
               </select>
             </Field>
+            <h3 style={{ fontSize: 13.5, margin: "10px 0 12px" }}>{t("gl_preview_settings")}</h3>
+            <Toggle checked={glOn && glAvailable} onChange={setGlPreview} label={t("gl_preview")} />
+            <div className="muted" style={{ fontSize: 11.5, margin: "2px 0 4px 22px" }} data-testid="gl-setting-help">{t("gl_preview_help")}</div>
+            <div className="muted" style={{ fontSize: 11.5, margin: "0 0 14px 22px" }}>{glAvailable ? (glOn ? t("gl_preview_status_on") : t("gl_preview_status_off")) : t("gl_preview_status_missing")} · {t("gl_preview_setting_help")}</div>
 
             <h3 style={{ fontSize: 13.5, margin: "10px 0 12px" }}>{t("settings_model")}</h3>
             <Field label={t("set_model")} help={t("set_model_help")}>

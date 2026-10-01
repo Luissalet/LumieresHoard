@@ -483,7 +483,7 @@ def clip_chain(idx: int, piece_clip: Clip, media: MediaRef, t0: float, t1: float
         chain.append(f"zoompan=z='max(1,{z})':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={w}x{h}:fps={out.fps_expr}")
     others = [f for f in clip.filters if f.enabled and f.type not in fx.AUDIO]
     if others:
-        chain += fx.video_chain(others, {"lut_name": cx.lut_name, "uid": label})
+        chain += fx.video_chain(others, {"lut_name": cx.lut_name, "uid": label, "factor": out.factor})
     chain.append("format=yuva420p")
     if clip.mask and clip.mask.enabled:
         # the mask multiplies the clip's alpha: close the chain here, branch, and carry on from the masked picture
@@ -514,14 +514,24 @@ def clip_chain(idx: int, piece_clip: Clip, media: MediaRef, t0: float, t1: float
         piece_len = (t1 - t0) / 1000
         if clip.fade_in and not clip.transition_in and abs(t0 - clip.start) < 1:
             chain.append(f"fade=t=in:st=0:d={_num(min(clip.fade_in / 1000, piece_len))}:alpha=1")
+        elif clip.fade_in and not clip.transition_in and 0 < t0 - clip.start < clip.fade_in:
+            # a piece that starts inside the fade (a single frame of the timeline): the fade filter cannot start before its input
+            chain.append(_alpha_ramp(f"(T+{_num((t0 - clip.start) / 1000)})/{_num(clip.fade_in / 1000)}"))
         if clip.fade_out and abs(t1 - clip.end) < 1:
             d = min(clip.fade_out / 1000, piece_len)
             chain.append(f"fade=t=out:st={_num(piece_len - d)}:d={_num(d)}:alpha=1")
+        elif clip.fade_out and t1 < clip.end - 1 and t1 > clip.end - clip.fade_out:
+            chain.append(_alpha_ramp(f"({_num((clip.end - t0) / 1000)}-T)/{_num(clip.fade_out / 1000)}"))
     if head:
         text = head + ("," + ",".join(chain) if chain else "") + f"[{label}]"
     else:
         text = f"[{idx}:v]" + ",".join(chain) + f"[{label}]"
     return in_args, text, w, h
+
+
+def _alpha_ramp(expr: str) -> str:
+    """Multiply the picture's opacity by clip(expr, 0, 1); T is the frame's time in seconds."""
+    return f"geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='p(X,Y)*clip({expr},0,1)'"
 
 
 def _position(clip: Clip, out: Output, A: float) -> tuple[str, str]:
@@ -567,7 +577,11 @@ def chunk_graph(project: Project, index: int, f0: int, f1: int, out: Output, med
                 lines.append(f"[k{n}s{k}][c{n}s{k}]overlay=x='{x}':y='{y}':eof_action=pass:repeatlast=0:format=auto,format=yuva420p[e{n}s{k}]")
                 sides.append(f"e{n}s{k}")
             tdur = (p.t1 - p.t0) / 1000
-            lines.append(f"[{sides[0]}][{sides[1]}]xfade=transition={XFADE.get(p.transition or 'crossfade', 'fade')}:duration={_num(max(0.04, tdur - 0.001))}:offset=0,"
+            # A piece is the whole transition in an export; a single frame of the timeline starts part-way in: a negative offset
+            # starts the filter at that progress (its duration is always the transition's own).
+            whole = p.other.transition_in.dur / 1000 if p.other.transition_in else tdur
+            into = (p.t0 - p.other.start) / 1000
+            lines.append(f"[{sides[0]}][{sides[1]}]xfade=transition={XFADE.get(p.transition or 'crossfade', 'fade')}:duration={_num(max(0.04, whole - 0.001))}:offset={_num(-into)},"
                          f"trim=duration={_num(tdur)},setpts=PTS-STARTPTS+{_num(offset)}/TB[d{n}]")
             lines.append(f"[{cur}][d{n}]overlay=eof_action=pass:repeatlast=0:format=auto[b{n + 1}]")
         cur = f"b{n + 1}"

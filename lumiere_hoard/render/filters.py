@@ -108,8 +108,8 @@ def _v_pop(p: Params, _: dict) -> list[str]:
     return [f"eq=contrast={1 + 0.25 * a:.3f}:saturation={1 + 0.35 * a:.3f}", f"unsharp=5:5:{0.6 * a:.2f}:5:5:0"]
 
 
-def _v_pixelate(p: Params, _: dict) -> list[str]:
-    s = int(p["size"])
+def _v_pixelate(p: Params, ctx: dict) -> list[str]:
+    s = max(1, int(round(p["size"] * ctx.get("factor", 1.0))))  # sized in canvas pixels: a smaller output scales the block down
     return [f"scale=iw/{s}:ih/{s}:flags=neighbor", f"scale=iw*{s}:ih*{s}:flags=neighbor"]
 
 
@@ -119,7 +119,7 @@ VIDEO: dict[str, VideoBuilder] = {
     "grayscale": lambda p, c: ["hue=s=0"],
     "sepia": lambda p, c: ["colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131"],
     "vignette": lambda p, c: [f"vignette=angle={0.2 + 0.6 * p['strength']:.3f}"],
-    "blur": lambda p, c: [f"gblur=sigma={p['radius']:.2f}"],
+    "blur": lambda p, c: [f"gblur=sigma={p['radius'] * c.get('factor', 1.0):.2f}"],  # radius in canvas pixels, like pixelate's size
     "sharpen": lambda p, c: [f"unsharp=5:5:{p['amount']:.2f}:5:5:0"],
     "denoise": lambda p, c: [f"hqdn3d={p['strength']:.1f}"],
     "hflip": lambda p, c: ["hflip"],

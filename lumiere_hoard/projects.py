@@ -116,9 +116,12 @@ def view(svc: "Services", project_id: str) -> dict[str, Any]:
     look = media_lookup(svc)
     used = {}
     for mid in sorted(p.media_ids() | p.sequence_ids()):
+        if not mid.startswith("prj_"):
+            media_store.ensure_color_space(svc, mid)
         info = look(mid)
         if info:
-            used[mid] = {k: info[k] for k in ("id", "name", "kind", "duration_ms", "width", "height", "fps", "has_audio", "has_video", "missing", "proxy", "urls")}
+            used[mid] = {k: info.get(k) for k in ("id", "name", "kind", "duration_ms", "width", "height", "fps", "has_audio", "has_video", "missing", "proxy", "urls",
+                                                  "color_space")}
             if info["kind"] == "sequence":
                 used[mid].update(rev=info["rev"], contains=info["contains"])
     can_undo = row["head"] > 1

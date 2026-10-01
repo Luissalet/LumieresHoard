@@ -175,7 +175,7 @@ def summarize(info: dict[str, Any], path: Path) -> dict[str, Any]:
         "fps": _fps(video) if video and kind == "video" else 0.0,
         "has_video": bool(video), "has_audio": bool(audio),
         "video_codec": (video or {}).get("codec_name"), "audio_codec": (audio or {}).get("codec_name"),
-        "pix_fmt": (video or {}).get("pix_fmt"), "sample_rate": int((audio or {}).get("sample_rate") or 0),
+        "pix_fmt": (video or {}).get("pix_fmt"), "color_space": (video or {}).get("color_space") or "", "sample_rate": int((audio or {}).get("sample_rate") or 0),
         "channels": int((audio or {}).get("channels") or 0), "rotation": rotation,
         "bit_rate": int(fmt.get("bit_rate") or 0), "format": fmt.get("format_name"),
         "audio_streams": sum(1 for s in streams if s.get("codec_type") == "audio"),

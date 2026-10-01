@@ -39,7 +39,10 @@ const es = {
   tab_timeline: "Línea de tiempo", tab_transcript: "Transcripción",
   // player
   play: "Reproducir", pause: "Pausa", prev_frame: "Fotograma anterior", next_frame: "Fotograma siguiente", exact_frame: "Fotograma exacto",
-  exact_frame_help: "En pausa, muestra el fotograma tal como lo dibuja la exportación (tarda un momento).", player_empty: "Añade un medio desde la biblioteca para empezar.",
+  exact_frame_help: "En pausa, muestra el fotograma tal como lo dibuja la exportación (tarda un momento).",
+  gl_preview: "Vista previa acelerada (WebGL)", gl_preview_help: "Dibuja la vista previa con la GPU, con las mismas transiciones, efectos y ajustes que la exportación. Desactívala para volver a la vista previa sencilla.",
+  gl_preview_unavailable: "Este navegador no ofrece WebGL2: se usa la vista previa sencilla.", gl_preview_settings: "Vista previa", gl_preview_setting_help: "Se guarda en este navegador.",
+  gl_preview_status_on: "Activa (WebGL2)", gl_preview_status_off: "Desactivada", gl_preview_status_missing: "WebGL2 no disponible: vista previa sencilla", player_empty: "Añade un medio desde la biblioteca para empezar.",
   // timeline
   split: "Dividir", split_here: "Dividir en el cabezal", split_outside: "El cabezal no está dentro de los clips seleccionados.", duplicate: "Duplicar", close_gaps: "Cerrar huecos",
   close_gaps_help: "Elimina los huecos entre clips (de la pista seleccionada o de todas)", marker: "Marcador", marker_add: "Añadir marcador", marker_hint: "clic: ir · clic derecho: borrar",
@@ -219,7 +222,10 @@ const en = {
   tab_media: "Media", tab_text: "Text", tab_transitions: "Transitions", tab_effects: "Effects", tab_captions: "Captions", tab_assistant: "Assistant", tab_tools: "Tools",
   tab_timeline: "Timeline", tab_transcript: "Transcript",
   play: "Play", pause: "Pause", prev_frame: "Previous frame", next_frame: "Next frame", exact_frame: "Exact frame",
-  exact_frame_help: "When paused, shows the frame as the export draws it (takes a moment).", player_empty: "Add media from the library to start.",
+  exact_frame_help: "When paused, shows the frame as the export draws it (takes a moment).",
+  gl_preview: "Accelerated preview (WebGL)", gl_preview_help: "Draws the preview on the GPU with the same transitions, effects and fit modes as the export. Turn it off to go back to the simple preview.",
+  gl_preview_unavailable: "This browser has no WebGL2: the simple preview is used.", gl_preview_settings: "Preview", gl_preview_setting_help: "Kept in this browser.",
+  gl_preview_status_on: "On (WebGL2)", gl_preview_status_off: "Off", gl_preview_status_missing: "WebGL2 not available: simple preview", player_empty: "Add media from the library to start.",
   split: "Split", split_here: "Split at playhead", split_outside: "The playhead is not inside the selected clips.", duplicate: "Duplicate", close_gaps: "Close gaps",
   close_gaps_help: "Removes the gaps between clips (selected track or all of them)", marker: "Marker", marker_add: "Add marker", marker_hint: "click: go · right click: delete",
   marker_kind_note: "Note", marker_kind_beat: "Beat", marker_kind_scene: "Scene", marker_kind_highlight: "Highlight", marker_kind_chapter: "Chapter",

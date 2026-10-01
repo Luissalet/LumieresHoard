@@ -51,6 +51,7 @@ def _check_root(svc: "Services", path: Path) -> None:
 
 def view(svc: "Services", row) -> dict[str, Any]:
     path = Path(row["path"])
+    probe = json.loads(row["probe"] or "{}")
     mid = row["id"]
     analyses = {r["kind"]: r["updated_ts"] for r in svc.db.query("SELECT kind, updated_ts FROM analysis WHERE media_id = ?", (mid,))}
     cdir = svc.config.cache_dir / mid
@@ -60,7 +61,10 @@ def view(svc: "Services", row) -> dict[str, Any]:
         "has_video": bool(row["has_video"]), "has_audio": bool(row["has_audio"]), "bytes": row["bytes"],
         "missing": not path.exists(), "proxy": row["proxy"], "tags": json.loads(row["tags"] or "[]"),
         "analysis": sorted(analyses), "created_ts": row["created_ts"],
-        "audio_streams": json.loads(row["probe"] or "{}").get("audio_streams", 1 if row["has_audio"] else 0),
+        "audio_streams": probe.get("audio_streams", 1 if row["has_audio"] else 0),
+        # the YUV matrix the file is tagged with ("bt709", "smpte170m"...; "" = untagged, None = not probed yet): the editor's
+        # accelerated preview needs it to undo the browser's YUV -> RGB conversion before it applies colour effects
+        "color_space": probe.get("color_space"),
         "urls": {
             "play": f"/api/media/{mid}/play", "file": f"/api/media/{mid}/file",
             "poster": f"/api/media/{mid}/poster" if (cdir / "poster.jpg").exists() or row["kind"] == "image" else None,
@@ -68,6 +72,21 @@ def view(svc: "Services", row) -> dict[str, Any]:
             "waveform": f"/api/media/{mid}/waveform" if (cdir / "wave.bin").exists() else None,
         },
     }
+
+
+def ensure_color_space(svc: "Services", media_id: str) -> None:
+    """Media imported before the colour matrix was recorded: read it once from the file and keep it with the probe summary."""
+    row = svc.db.one("SELECT path, probe FROM media WHERE id = ?", (media_id,))
+    if not row:
+        return
+    probe = json.loads(row["probe"] or "{}")
+    if "color_space" in probe or not Path(row["path"]).exists():
+        return
+    try:
+        probe["color_space"] = ff.summarize(ff.probe(svc.tools(), Path(row["path"])), Path(row["path"])).get("color_space") or ""
+    except Exception:  # noqa: BLE001 - a file ffprobe cannot read now is shown as untagged; the preview falls back to BT.601
+        probe["color_space"] = ""
+    svc.db.execute("UPDATE media SET probe = ? WHERE id = ?", (dumps(probe), media_id))
 
 
 def lookup(svc: "Services", media_id: str) -> Optional[dict[str, Any]]:

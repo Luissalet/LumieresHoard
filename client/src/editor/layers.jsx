@@ -1,4 +1,5 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { frameTime } from "./gl/scene.js";
 import { clamp, clipDur, kfValue, speedAt, srcAt } from "./time.js";
 
 // ---------- geometry: where the picture sits inside the preview box (mirrors the render's fit / crop / focus logic) ----------
@@ -165,10 +166,19 @@ function SequencePoster({ name }) {
 }
 
 // One media clip as a live element (video / image / audio) kept in sync with the playback clock.
-export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, next, canvas, box, k, z, pb, projectMuted }) {
+// With `gl` the picture is drawn by the WebGL preview: the element stays here (clock sync, sound) but is only a hidden source
+// whose frames the compositor reads (onEl hands it over).
+const GL_SOURCE_STYLE = { position: "absolute", left: 0, top: 0, width: 16, height: 16, opacity: 0, pointerEvents: "none", maxWidth: "none" };
+
+export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, next, canvas, box, k, z, pb, projectMuted, gl, onEl }) {
   const root = useRef(null);
   const xf = useRef(null);
   const el = useRef(null);
+  const clipId = clip.id;
+  const setEl = useCallback((node) => {
+    el.current = node;
+    if (onEl) onEl(clipId, node);
+  }, [onEl, clipId]);
   const bgc = useRef(null);
   const pic = useRef(null);
   const state = useRef({});
@@ -258,7 +268,11 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
       if (!media_el.paused) media_el.pause();
       return;
     }
-    const target = (inside ? srcAt(c, t) : c.reverse ? c.src_out : c.src_in) / 1000;
+    // The accelerated preview shows the frame the render would for this moment (snapped to the timeline's frame grid, plus a
+    // millisecond so a frame that starts exactly there is not missed by a rounding error); the CSS preview follows the raw time.
+    const exactFrame = gl && !playing;
+    const at = exactFrame ? frameTime(t, canvas.fps || 30).A : t;
+    const target = ((inside ? srcAt(c, at) : c.reverse ? c.src_out : c.src_in) + (exactFrame && inside ? 1 : 0)) / 1000;
     const kf = c.keyframes || {};
     let db = kfValue(kf.volume_db, local, c.volume_db) + tr.volume_db;
     let gain = dbToGain(db);
@@ -319,6 +333,11 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
 
   if (isAudio) {
     return <audio ref={el} src={src} preload="auto" style={{ display: "none" }} />;
+  }
+  if (gl) {
+    return isImage
+      ? <img ref={setEl} src={src} alt="" style={GL_SOURCE_STYLE} draggable={false} />
+      : <video ref={setEl} src={src} preload="auto" playsInline style={GL_SOURCE_STYLE} />;
   }
   const mediaStyle = {
     position: "absolute",

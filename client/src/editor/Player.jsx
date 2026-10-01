@@ -5,7 +5,10 @@ import { Icon, Spinner } from "../components/ui.jsx";
 import { useEd } from "./EditorContext.js";
 import { ClipLayer, TextLayer } from "./layers.jsx";
 import Captions from "./Captions.jsx";
+import GLStage from "./GLStage.jsx";
+import { SourceRegistry } from "./gl/sources.js";
 import { usePlaybackState, useTime } from "./playback.js";
+import { setGlPreview, useGlPreview, webglAvailable } from "./previewPrefs.js";
 import { clipDur, clipEnd, fmtFrames } from "./time.js";
 
 const PRELOAD = 2000;
@@ -117,6 +120,16 @@ export default function Player() {
   const time = useTime(pb, 50);
   const [exact, setExact] = useState(false);
   const total = ed.duration;
+  // Accelerated preview (WebGL): on when the person wants it and the browser can; any failure drops back to the CSS preview.
+  const glWanted = useGlPreview();
+  const [glFailed, setGlFailed] = useState(false);
+  const glOk = webglAvailable();
+  const useGL = glWanted && glOk && !glFailed;
+  const registry = useMemo(() => new SourceRegistry(), []);
+  const onGlFail = useCallback((error) => {
+    console.warn("WebGL preview unavailable, using the CSS preview:", error);
+    setGlFailed(true);
+  }, []);
 
   // rank within the stack: track layer first, then start time
   const zOf = useMemo(() => {
@@ -136,10 +149,11 @@ export default function Player() {
       <div className="stage" ref={stage} onClick={(e) => { if (e.target === stage.current) pb.toggle(); }}>
         {box.w ? (
           <div className="stage-box" style={boxStyle} onClick={() => pb.toggle()} role="img" aria-label="Preview">
+            {useGL ? <GLStage doc={doc} media={media} box={box} pb={pb} registry={registry} onFail={onGlFail} /> : null}
             {ordered.map(({ clip, track, next }) => (clip.type === "text"
-              ? <TextLayer key={clip.id} clip={clip} track={track} box={box} k={k} z={zOf.get(clip.id)} pb={pb} />
+              ? <TextLayer key={clip.id} clip={clip} track={track} box={box} k={k} z={useGL ? 8000 + (zOf.get(clip.id) || 0) : zOf.get(clip.id)} pb={pb} />
               : (
-                <ClipLayer key={clip.id} clip={clip} track={track} next={next} media={media[clip.media]} canvas={doc.canvas} box={box} k={k} z={zOf.get(clip.id)} pb={pb} projectMuted={false} />
+                <ClipLayer key={clip.id} clip={clip} track={track} next={next} media={media[clip.media]} canvas={doc.canvas} box={box} k={k} z={zOf.get(clip.id)} pb={pb} projectMuted={false} gl={useGL} onEl={useGL ? registry.set : undefined} />
               )))}
             <Captions doc={doc} words={ed.transcript?.words} box={box} k={k} pb={pb} />
             {showExact ? <ExactFrame projectId={ed.projectId} rev={view.rev} pb={pb} width={frameWidth} /> : null}
@@ -160,6 +174,17 @@ export default function Player() {
         <span className="tc num" data-testid="timecode" style={{ marginLeft: 8 }}>{fmtFrames(time, doc.canvas.fps)} <span className="dim">/ {fmtFrames(total, doc.canvas.fps)}</span></span>
         {ps.rate !== 1 ? <span className="chip chip-info">×{ps.rate}</span> : null}
         <div style={{ flex: 1 }} />
+        <button
+          type="button"
+          className={`btn btn-sm ${useGL ? "btn-on" : "btn-ghost"}`}
+          aria-pressed={useGL}
+          disabled={!glOk}
+          data-testid="gl-toggle"
+          onClick={() => { setGlFailed(false); setGlPreview(!glWanted); }}
+          title={glOk ? t("gl_preview_help") : t("gl_preview_unavailable")}
+        >
+          <Icon name="effects" size={14} />WebGL
+        </button>
         <button type="button" className={`btn btn-sm ${exact ? "btn-on" : "btn-ghost"}`} aria-pressed={exact} onClick={() => setExact((v) => !v)} title={t("exact_frame_help")}>
           <Icon name="image" size={14} />{t("exact_frame")}
         </button>
