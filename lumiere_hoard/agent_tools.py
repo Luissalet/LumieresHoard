@@ -102,6 +102,10 @@ class ProjectCreateArgs(BaseModel):
 class ProjectGetArgs(BaseModel):
     project: str = ProjectId
     detail: Literal["outline", "full"] = Field("outline", description="outline: compact tracks/clips; full: the whole document (large).")
+    track: str = Field("", max_length=40, description="Only this track (id, or kind: video|audio|text).")
+    start: TimeVal = Field(None, description="Only clips that overlap from this time...")
+    end: TimeVal = Field(None, description="...to this time (ms or '1:23.5').")
+    max_clips: int = Field(40, ge=1, le=2000, description="Per track; longer tracks say how many clips were left out.")
 
 
 class ProjectDeleteArgs(BaseModel):
@@ -335,6 +339,24 @@ def run_project_get(svc: Services, a: ProjectGetArgs) -> dict:
         return {k: v[k] for k in ("id", "name", "rev", "doc", "media", "issues", "can_undo", "can_redo")}
     out = project_store.outline(svc, a.project)
     out["rev"] = project_store.summary(svc, svc.db.one("SELECT * FROM projects WHERE id = ?", (a.project,)))["rev"]
+    p = project_store.doc(svc, a.project)
+    styles = {c.id: c.style for t in p.tracks for c in t.clips if c.type == "text" and c.style}
+    lo, hi = _t(a.start), _t(a.end)
+    tracks = []
+    for t in out["tracks"]:
+        if a.track and a.track not in (t["id"], t["kind"]):
+            continue
+        clips = [c for c in t["clips"] if (lo is None or c["end_ms"] > lo) and (hi is None or c["start_ms"] < hi)]
+        for c in clips:
+            if c["id"] in styles:  # titles: what an assistant needs to restyle them
+                st = styles[c["id"]]
+                c["style"] = {"position": st.position, "size": st.size, "color": st.color, "animation": st.animation}
+        t = dict(t, clip_count=len(clips), clips=clips[: a.max_clips])
+        if len(clips) > a.max_clips:
+            t["more"] = f"{len(clips) - a.max_clips} more clips until {clips[-1]['end']}: ask with start/end or track"
+        tracks.append(t)
+    # titles and overlays first: they are few and usually what a request is about
+    out["tracks"] = sorted(tracks, key=lambda t: {"text": 0, "audio": 2}.get(t["kind"], 1))
     return out
 
 
@@ -524,7 +546,7 @@ TOOLS: list[Tool] = [
          "Presets: reels, youtube, square... Keywords: new project, timeline.", ProjectCreateArgs, _ann(False), run_project_create),
     Tool("project_list", "List the editing projects. Proyectos de vídeo.\nKeywords: projects, list.", Empty, _ann(True), run_project_list),
     Tool("project_get", "Read a project's timeline: tracks, clips with ids and times, captions, issues. Ver timeline.\n"
-         "Keywords: timeline, outline, clips, tracks.", ProjectGetArgs, _ann(True), run_project_get),
+         "Titles first; filter by track or time on long timelines. Keywords: timeline, outline, clips, tracks, titles.", ProjectGetArgs, _ann(True), run_project_get),
     Tool("project_delete", "Delete a project and its history (needs confirm=true). Borrar proyecto.\nKeywords: delete project.",
          ProjectDeleteArgs, _ann(False, True, True), run_project_delete),
     Tool("timeline_edit", "Edit the timeline with operations (split, trim, move, delete, titles, speed...). Editar timeline.\n"

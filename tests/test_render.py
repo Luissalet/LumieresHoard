@@ -180,3 +180,17 @@ def test_blur_fill_vertical_and_zoom_cuts(services, lib):
     assert sum(top) > 30  # the blurred fill, not black bars
     res = _render(services, pid, preset="preview", end=4000)
     assert res["qc"]["ok"]
+
+
+def test_project_get_for_assistants_is_small_and_puts_titles_first(services, lib):
+    from lumiere_hoard import agent_tools
+
+    pid = store.create(services, "Muchos", preset="hd720", media=[lib["talk"]])["id"]
+    store.edit(services, pid, [{"op": "split", "at": t} for t in range(1000, 12000, 1000)]
+               + [{"op": "add_text", "text": "Título", "start": 0, "length": 2000, "style": {"position": "top"}}])
+    out = agent_tools.call_tool(services, "project_get", {"project": pid, "max_clips": 5})
+    assert out["tracks"][0]["kind"] == "text" and out["tracks"][0]["clips"][0]["style"]["position"] == "top"
+    main = next(t for t in out["tracks"] if t["role"] == "main")
+    assert main["clip_count"] == 12 and len(main["clips"]) == 5 and "7 more clips" in main["more"]
+    window = agent_tools.call_tool(services, "project_get", {"project": pid, "track": "video", "start": "0:03", "end": "0:05"})
+    assert [c["start_ms"] for c in window["tracks"][0]["clips"]] == [3000, 4000]
