@@ -95,7 +95,7 @@ def discover(ffmpeg: str = "", ffprobe: str = "") -> Tools:
         out = subprocess.run([ff, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=20, creationflags=NO_WINDOW).stdout
         for line in out.splitlines():
             parts = line.split()
-            if len(parts) >= 3 and re.fullmatch(r"[TSC.]{3}", parts[0]):
+            if len(parts) >= 3 and re.fullmatch(r"[TSC.]{2,3}", parts[0]) and "->" in line:
                 filters.add(parts[1])
         out = subprocess.run([ff, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=20, creationflags=NO_WINDOW).stdout
         for line in out.splitlines():

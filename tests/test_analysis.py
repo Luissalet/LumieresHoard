@@ -112,3 +112,26 @@ def test_keyframe_ease_points_monotonic():
     pts = _ease_points([Keyframe(t=0, v=0, ease="ease_in_out"), Keyframe(t=1000, v=1)])
     vals = [v for _, v in pts]
     assert vals == sorted(vals) and vals[0] == 0 and vals[-1] == 1 and len(pts) > 3
+
+
+def test_filter_list_parsing_for_old_and_new_ffmpeg(monkeypatch):
+    import subprocess as sp
+
+    from lumiere_hoard import ffmpeg as ff
+
+    outputs = {
+        "-version": "ffmpeg version 8.0.1-full_build Copyright (c) 2000-2025\n",
+        "-filters": "Filters:\n  T.. = Timeline support\n ---\n TS allpass           A->A       Apply\n .. ass               V->V       Render ASS\n"
+                    " ..C sidechaincompress AA->A      Sidechain\n ... vidstabdetect     V->V       Extract\n",
+        "-encoders": "Encoders:\n ------\n V....D h264_nvenc           NVIDIA NVENC H.264 encoder\n A....D aac                  AAC\n",
+    }
+
+    class R:
+        def __init__(self, out):
+            self.stdout = out
+
+    monkeypatch.setattr(sp, "run", lambda args, **kw: R(outputs[args[2]]))
+    monkeypatch.setattr(ff, "_which", lambda name, explicit="": name)
+    t = ff.discover()
+    assert {"allpass", "ass", "sidechaincompress", "vidstabdetect"} <= t.filters
+    assert "h264_nvenc" in t.encoders and t.version.startswith("8.0.1")
