@@ -51,16 +51,14 @@ def test_rotated_phone_footage_renders_upright(services, tmp_path, rotation):
     assert _red_corner(proxy_frame) == _red_corner(ref)
 
 
-def _first_flash_s(path: Path) -> float:
-    """Time of the first bright frame of the video stream."""
-    out = subprocess.run(["ffprobe", "-v", "error", "-f", "lavfi", "-i", f"movie='{path.as_posix()}',signalstats",
-                          "-show_entries", "frame=pts_time:frame_tags=lavfi.signalstats.YAVG", "-of", "csv=p=0"],
-                         capture_output=True, text=True, check=True).stdout
-    for line in out.splitlines():
-        parts = [p for p in line.split(",") if p]
-        if len(parts) >= 2 and float(parts[1]) > 128:
-            return float(parts[0])
-    raise AssertionError("no flash found")
+def _first_flash_s(path: Path, fps: int = 30) -> float:
+    """Time of the first bright frame (the renders are constant frame rate, so frame index / fps is the time)."""
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vf", "scale=16:9,format=gray", "-fps_mode", "passthrough",
+                          "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
+    frames = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 16 * 9)
+    bright = np.nonzero(frames.mean(axis=1) > 128)[0]
+    assert len(bright), "no flash found"
+    return float(bright[0] / fps)
 
 
 def _first_beep_s(path: Path) -> float:
