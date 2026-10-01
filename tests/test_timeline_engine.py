@@ -219,6 +219,34 @@ def test_speed_ramp_render_shows_the_expected_source_frames_and_sound_follows(se
 
 
 @needs_ffmpeg
+def test_speed_ramp_sound_stays_in_sync_with_the_curve(services, tmp_path):
+    """A click every source second must be heard when the curve shows that second (within a frame), slow and fast parts."""
+    _ff("-f", "lavfi", "-i", "color=s=192x64:r=30:d=12", "-f", "lavfi", "-i", "aevalsrc='if(lt(mod(t,1),0.01),sin(2*PI*2000*t)*0.9,0)':s=48000:d=12",
+        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "pcm_s16le", "-shortest", str(tmp_path / "clicks.mov"))
+    mid = media_store.import_path(services, str(tmp_path / "clicks.mov"))["id"]
+    pid = store.create(services, "Sincronía", width=192, height=64, fps=30, media=[mid])["id"]
+    cid = store.doc(services, pid).main_track().clips[0].id
+    store.edit(services, pid, [{"op": "trim", "clip": cid, "src_in": 500, "src_out": 10500},
+                               {"op": "speed_ramp", "clip": cid, "keys": [{"t": 0, "v": 0.5, "ease": "ease_in_out"}, {"t": 4000, "v": 3},
+                                                                           {"t": 7000, "v": 3, "ease": "ease_in_out"}, {"t": 9000, "v": 0.6}]}])
+    clip = store.doc(services, pid).main_track().clips[0]
+    res = _render(services, pid, preset="audio_wav", lufs=None)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", res["path"], "-f", "s16le", "-ac", "1", "-"], capture_output=True).stdout
+    pcm = np.abs(np.frombuffer(raw, np.int16).astype(float))
+    env = np.array([pcm[i:i + 48].max() for i in range(0, len(pcm) - 48, 48)])  # peak per ms
+    onsets, i = [], 0
+    while i < len(env):
+        if env[i] > 3000:
+            onsets.append(i)
+            i += 150
+        else:
+            i += 1
+    want = [clip.timeline_at(k * 1000) - clip.start for k in range(1, 11)]
+    assert len(onsets) == len(want), onsets
+    assert max(abs(a - b) for a, b in zip(onsets, want)) <= 33, list(zip(onsets, want))
+
+
+@needs_ffmpeg
 def test_speed_ramp_sound_is_continuous(services, emedia):
     pid = store.create(services, "Rampa audio", width=192, height=64, fps=30, media=[emedia["counter"]])["id"]
     cid = store.doc(services, pid).main_track().clips[0].id
@@ -334,3 +362,26 @@ def test_assistant_tools_reach_the_new_features(services, emedia):
     assert info["sequences"][0]["name"] == "Escenas" and info["sequences"][0]["ready"] is False
     back = agent_tools.call_tool(services, "timeline_nest", {"project": pid, "action": "unnest", "clip": nested["clip"]})
     assert back["results"][0]["clips"]
+
+
+@needs_ffmpeg
+def test_nesting_routes_for_the_editor(client, media_dir):
+    talk = client.post("/api/media/import", json={"path": str(media_dir / "talk.mp4")}).json()["id"]
+    scenes = client.post("/api/media/import", json={"path": str(media_dir / "scenes.mp4")}).json()["id"]
+    pid = client.post("/api/projects", json={"name": "Rutas", "preset": "hd720", "media": [talk, scenes]}).json()["id"]
+    clips = client.get(f"/api/projects/{pid}").json()["doc"]["tracks"][0]["clips"]
+    r = client.post(f"/api/projects/{pid}/nest", json={"clips": [c["id"] for c in clips], "name": "Todo"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    seq = body["sequence"]
+    assert body["view"]["media"][seq]["kind"] == "sequence" and body["view"]["media"][seq]["urls"]["play"] is None
+    assert client.get(f"/api/projects/{pid}/nesting").json()["sequences"][0]["project"] == seq
+    assert client.get(f"/api/projects/{seq}/nesting").json()["used_by"] == [{"id": pid, "name": "Rutas"}]
+    assert client.get(f"/api/projects/{seq}/sequence.mp4").status_code == 404
+    job = client.post(f"/api/projects/{seq}/sequence/prepare").json()
+    assert client.get(f"/api/jobs/{job['job']}").json()["state"] == "done"
+    assert client.get(f"/api/projects/{pid}").json()["media"][seq]["urls"]["play"]
+    video = client.get(f"/api/projects/{seq}/sequence.mp4")
+    assert video.status_code == 200 and len(video.content) > 1000
+    bad = client.post(f"/api/projects/{seq}/edit", json={"ops": [{"op": "add_sequence", "project": pid}]})
+    assert bad.status_code == 400 and "loop" in bad.json()["error"]
