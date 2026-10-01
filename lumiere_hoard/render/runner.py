@@ -49,16 +49,21 @@ def export_presets() -> list[dict[str, Any]]:
     return [{"id": k, **v} for k, v in EXPORTS.items()]
 
 
-def _video_args(svc: "Services", codec: str, quality: str, fps: float) -> tuple[list[str], str]:
+def _video_args(svc: "Services", codec: str, quality: str, fps: float, width: int = 1920, height: int = 1080) -> tuple[list[str], str]:
     tools = svc.tools()
     gop = str(max(1, int(round(fps * 2))))
+    # constant quality with a ceiling: phone footage is noisy and pure CQ balloons (a 1080x1920 talk came out at 16 Mbit/s)
+    pixels = width * height * fps
+    cap_mbps = {"high": 0.17, "medium": 0.085, "draft": 0.05}[quality] * pixels / 1e6
+    cap_mbps = max(1.5, min(cap_mbps, 80.0))
+    rate = ["-maxrate", f"{cap_mbps:.1f}M", "-bufsize", f"{cap_mbps * 2:.1f}M"]
     if codec == "prores":
         return ["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le", "-vendor", "apl0"], "prores_ks"
     enc = tools.video_encoder(svc.config.encoder, "hevc" if codec == "hevc" else "h264")
     if "nvenc" in enc:
-        cq = {"high": "19", "medium": "24", "draft": "30"}[quality]
+        cq = {"high": "20", "medium": "24", "draft": "30"}[quality]
         preset = {"high": "p5", "medium": "p4", "draft": "p1"}[quality]
-        args = ["-c:v", enc, "-preset", preset, "-tune", "hq", "-rc", "vbr", "-cq", cq, "-b:v", "0", "-g", gop, "-bf", "2", "-pix_fmt", "yuv420p"]
+        args = ["-c:v", enc, "-preset", preset, "-tune", "hq", "-rc", "vbr", "-cq", cq, "-b:v", "0", *rate, "-g", gop, "-bf", "2", "-pix_fmt", "yuv420p"]
         if enc == "h264_nvenc":
             args += ["-profile:v", "high"]
         else:
@@ -66,11 +71,11 @@ def _video_args(svc: "Services", codec: str, quality: str, fps: float) -> tuple[
         return args, enc
     if enc == "libx265":
         crf = {"high": "21", "medium": "26", "draft": "32"}[quality]
-        return ["-c:v", "libx265", "-preset", "fast" if quality != "draft" else "ultrafast", "-crf", crf, "-g", gop, "-pix_fmt", "yuv420p",
+        return ["-c:v", "libx265", "-preset", "fast" if quality != "draft" else "ultrafast", "-crf", crf, *rate, "-g", gop, "-pix_fmt", "yuv420p",
                 "-tag:v", "hvc1", "-x265-params", "log-level=error"], enc
     crf = {"high": "18", "medium": "23", "draft": "30"}[quality]
     preset = {"high": "medium", "medium": "veryfast", "draft": "ultrafast"}[quality]
-    return ["-c:v", "libx264", "-preset", preset, "-crf", crf, "-g", gop, "-bf", "2", "-pix_fmt", "yuv420p", "-profile:v", "high"], enc
+    return ["-c:v", "libx264", "-preset", preset, "-crf", crf, *rate, "-g", gop, "-bf", "2", "-pix_fmt", "yuv420p", "-profile:v", "high"], enc
 
 
 def _out_size(W: int, H: int, spec: dict[str, Any]) -> tuple[int, int]:
@@ -197,7 +202,7 @@ def render_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
             hwdec = svc.hwdec_enabled() and not rc.use_proxies
             cx = C.ChainCtx(out, rc.lut_name, lambda c: None, hwdec=hwdec)
             plan = C.plan_chunks(p, total, fps)
-            vargs, encoder = _video_args(svc, spec.get("codec", "h264"), spec.get("quality", "high"), fps)
+            vargs, encoder = _video_args(svc, spec.get("codec", "h264"), spec.get("quality", "high"), fps, W, H)
             frames_total = sum(b - a for a, b in plan)
             done_frames = [0]
             progress_lock = threading.Lock()
