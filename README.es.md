@@ -66,7 +66,7 @@ Ajustes (entorno): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE_ROOT
  "env": {"LUMIERE_URL": "http://127.0.0.1:5198", "LUMIERE_TOKEN_FILE": "<repo>/data/mcp-token"}}
 ```
 
-Las herramientas cubren la biblioteca (`media_import`, `media_analyze`, `transcript_get`, `highlights_find`…), los proyectos y el timeline (`project_create`, `project_get`, `timeline_edit` con 31 operaciones, `timeline_history`), la edición inteligente (`edit_command`, `text_cut`, `timeline_transcript`), los planes (`plan_create`, `plan_apply`), la salida (`render_start`, `job_status`, `renders_list`, `frame_snapshot`, `subtitles_export`) y los ajustes. `faustus-plugin.json` describe la app, cómo se arranca y el puente para los anfitriones que lo leen.
+Las herramientas cubren la biblioteca (`media_import`, `media_analyze`, `transcript_get`, `highlights_find`…), los proyectos y el timeline (`project_create`, `project_get`, `timeline_edit` con 31 operaciones, `timeline_history`), la edición inteligente (`edit_command`, `text_cut`, `timeline_transcript`), los planes (`plan_create`, `plan_apply`), la salida (`render_start`, `job_status`, `renders_list`, `frame_snapshot`, `subtitles_export`) y los ajustes. Si una operación o un campo no existe, la respuesta lista todas las operaciones con sus campos; `frame_snapshot` devuelve la imagen (una imagen MCP) y las capas que se dibujan en ese instante (rótulos, subtítulos, medios), para que un asistente compruebe su propio trabajo. `faustus-plugin.json` describe la app, cómo se arranca y el puente para los anfitriones que lo leen.
 
 ## Cómo está hecha
 
