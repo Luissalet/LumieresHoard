@@ -115,12 +115,10 @@ def test_keyframe_ease_points_monotonic():
 
 
 def test_filter_list_parsing_for_old_and_new_ffmpeg(monkeypatch):
-    import subprocess as sp
-
     from lumiere_hoard import ffmpeg as ff
+    from lumiere_hoard.hoard_link import proc as hlproc
 
     outputs = {
-        "-version": "ffmpeg version 8.0.1-full_build Copyright (c) 2000-2025\n",
         "-filters": "Filters:\n  T.. = Timeline support\n ---\n TS allpass           A->A       Apply\n .. ass               V->V       Render ASS\n"
                     " ..C sidechaincompress AA->A      Sidechain\n ... vidstabdetect     V->V       Extract\n",
         "-encoders": "Encoders:\n ------\n V....D h264_nvenc           NVIDIA NVENC H.264 encoder\n A....D aac                  AAC\n",
@@ -128,10 +126,9 @@ def test_filter_list_parsing_for_old_and_new_ffmpeg(monkeypatch):
 
     class R:
         def __init__(self, out):
-            self.stdout = out
+            self.stdout, self.stderr, self.returncode = out, "", 0
 
-    monkeypatch.setattr(sp, "run", lambda args, **kw: R(outputs[args[2]]))
-    monkeypatch.setattr(ff, "_which", lambda name, explicit="": name)
-    t = ff.discover()
+    monkeypatch.setattr(hlproc, "run", lambda args, **kw: R(outputs[args[2]]))
+    t = ff.Tools("ffmpeg", "ffprobe", "8.0.1-full_build")
     assert {"allpass", "ass", "sidechaincompress", "vidstabdetect"} <= t.filters
     assert "h264_nvenc" in t.encoders and t.version.startswith("8.0.1")

@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import math
 import re
-import subprocess
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import numpy as np
 
-from ..ffmpeg import NO_WINDOW, Cancelled, RunHandle, Tools
+from .. import ffmpeg as ff
+from ..ffmpeg import Cancelled, RunHandle, Tools
 from . import faces
 
 
@@ -61,16 +61,14 @@ def read_frames(tools: Tools, path: Path, *, width: int, fps: float, gray: bool,
                 duration_ms: int = 0, handle: Optional[RunHandle] = None):
     """Yield (index, frame ndarray) at ``fps`` scaled to ``width`` without loading the whole clip."""
     h = max(2, int(round(src_h * width / max(1, src_w) / 2)) * 2) if src_w else width
-    cmd = [tools.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error"]
+    cmd: list[str] = []
     if start_ms:
-        cmd += ["-ss", f"{start_ms / 1000:.3f}"]
+        cmd += ["-ss", ff.seconds(start_ms)]
     cmd += ["-i", str(path)]
     if duration_ms:
-        cmd += ["-t", f"{duration_ms / 1000:.3f}"]
+        cmd += ["-t", ff.seconds(duration_ms)]
     cmd += ["-an", "-vf", f"fps={fps},scale={width}:{h}:flags=area", "-f", "rawvideo", "-pix_fmt", "gray" if gray else "rgb24", "pipe:1"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
-    if handle is not None:
-        handle.proc = proc
+    proc = ff.spawn(tools, cmd, handle)
     size = width * h * (1 if gray else 3)
     i = 0
     assert proc.stdout is not None

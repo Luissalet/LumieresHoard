@@ -3,16 +3,14 @@ silences, loudness and the beat grid of music."""
 
 from __future__ import annotations
 
-import json
 import math
-import re
-import subprocess
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
 import numpy as np
 
-from ..ffmpeg import NO_WINDOW, Cancelled, RunHandle, Tools, capture, seconds
+from .. import ffmpeg as ff
+from ..ffmpeg import Cancelled, RunHandle, Tools
 
 RATE = 16000
 HOP = 160  # 10 ms
@@ -22,11 +20,8 @@ ENV_HZ = RATE // HOP  # 100 values per second
 def stream_pcm(tools: Tools, path: Path, *, stream: int = 0, rate: int = RATE, handle: Optional[RunHandle] = None,
                block_s: float = 30.0) -> Iterator[np.ndarray]:
     """Mono int16 blocks of ~block_s seconds, read from ffmpeg without holding the whole file in memory."""
-    cmd = [tools.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(path), "-map", f"0:a:{stream}", "-ac", "1",
-           "-ar", str(rate), "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
-    if handle is not None:
-        handle.proc = proc
+    proc = ff.spawn(tools, ["-i", str(path), "-map", f"0:a:{stream}", "-ac", "1", "-ar", str(rate), "-f", "s16le", "-acodec", "pcm_s16le",
+                            "pipe:1"], handle)
     size = int(rate * block_s) * 2
     assert proc.stdout is not None
     try:
@@ -118,34 +113,14 @@ def silences(rms: np.ndarray, *, threshold_db: Optional[float] = None, min_silen
     return out, thr
 
 
-def loudness(tools: Tools, path: Path, *, stream: int = 0, start_ms: int = 0, duration_ms: int = 0, handle: Optional[RunHandle] = None) -> dict[str, Any]:
-    """EBU R128 integrated loudness, range and true peak of one audio stream."""
-    args = ["-loglevel", "info"]
-    if start_ms:
-        args += ["-ss", seconds(start_ms)]
-    args += ["-i", str(path)]
-    if duration_ms:
-        args += ["-t", seconds(duration_ms)]
-    args += ["-map", f"0:a:{stream}", "-af", "ebur128=peak=true", "-f", "null", "-"]
-    _, err = capture(tools, args, handle=handle)
-    summary = err[err.rfind("Summary:"):] if "Summary:" in err else err
-
-    def grab(name: str) -> Optional[float]:
-        m = re.search(rf"{name}:\s*(-?[\d.]+|-inf)", summary)
-        if not m or m.group(1) == "-inf":
-            return None
-        return float(m.group(1))
-
-    return {"integrated_lufs": grab("I"), "range_lu": grab("LRA"), "true_peak_dbtp": grab("Peak")}
+def loudness(tools: Tools, path: Path, *, stream: int = 0, handle: Optional[RunHandle] = None) -> dict[str, Any]:
+    """EBU R128 integrated loudness, range and true peak of one audio stream (the shared ``ebur128`` reading)."""
+    return ff.loudness(tools, path, stream=stream, handle=handle)
 
 
 def loudnorm_measure(tools: Tools, path: Path, target: float, tp: float = -1.5, lra: float = 11.0, handle: Optional[RunHandle] = None) -> dict[str, Any]:
-    _, err = capture(tools, ["-loglevel", "info", "-i", str(path), "-af", f"loudnorm=I={target}:TP={tp}:LRA={lra}:print_format=json", "-f", "null", "-"],
-                     handle=handle)
-    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", err, re.S)
-    if not m:
-        return {}
-    return json.loads(m.group(0))
+    """First pass of two-pass loudnorm for a final render (``{}`` when there is nothing to measure)."""
+    return ff.loudnorm_measure(tools, path, target, tp, lra, handle)
 
 
 # ---------------------------------------------------------------- beats

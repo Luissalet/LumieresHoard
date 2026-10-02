@@ -312,9 +312,8 @@ def render_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
         if target is not None and ag.clips:
             ctx.progress(0.21, "loudness", force=True)
             m = audio_an.loudnorm_measure(tools, audio_wav, float(target), handle=ctx.handle())
-            if m and m.get("input_i") not in (None, "-inf") and float(m["input_i"]) > -70:
-                af = ["-af", (f"loudnorm=I={target}:TP=-1.5:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}:"
-                              f"measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true,aresample=48000")]
+            if m and m["input_i"] > -70:  # NaN / -inf (nothing audible to measure) fail this test
+                af = ["-af", f"{ff.loudnorm_filter(m, float(target))},aresample=48000"]
                 loud_info = {"measured_lufs": float(m["input_i"]), "target_lufs": target}
         # 2. every output: picture and mux
         span = 0.77
