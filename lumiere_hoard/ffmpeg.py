@@ -20,7 +20,6 @@ from typing import Any, Callable, Iterable, Optional
 from .errors import FfmpegFailed, FfmpegMissing, LumiereError
 from .hoard_link import proc as hlproc
 from .hoard_link.errors import Unavailable
-from .hoard_link.media import bins
 from .hoard_link.media import ffmpeg as shared
 from .hoard_link.media.ffmpeg import (  # noqa: F401 - re-exported: the app imports these from here
     IMAGE_CODECS, MEDIA_EXTENSIONS, FFmpeg, FFmpegError, filter_path, filter_text, fps_fraction)

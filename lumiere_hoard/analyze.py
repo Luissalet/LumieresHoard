@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Optional
 from . import media as media_store
 from .analysis import audio as audio_an
 from .analysis import faces
-from .analysis import speech
 from .analysis import video as video_an
 from .errors import LumiereError, NotFound
 from .util import clip
@@ -97,30 +96,8 @@ def transcribe_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
     model = ctx.params.get("model") or svc.db.get_setting("whisper_model", "") or ""
     language = ctx.params.get("language") or svc.db.get_setting("transcript_language", "") or ""
     device = svc.db.get_setting("whisper_device", "auto") or "auto"
-    status = speech.engine_status() if svc.transcriber is speech.transcribe else {"available": True, "cuda_devices": 0}
-    if not status["available"]:
-        raise LumiereError(status["reason"] + " Install it with: pip install faster-whisper", code="transcriber_unavailable")
-    gpu = None
-    lease_cm = None
-    if device != "cpu" and status.get("cuda_devices", 0) > 0:
-        try:
-            from .hoard_link import lease
-
-            lease_cm = lease(vram_mb=3500 if not model or "large" in model else 1500, purpose="whisper", owner="lumiere", timeout_s=900)
-            lease_cm.__enter__()
-            gpu = getattr(lease_cm, "gpu", None)
-        except Exception as error:  # noqa: BLE001
-            log.info("no GPU lease (%s); whisper picks the device itself", error)
-            lease_cm = None
-    try:
-        result = svc.transcriber(wav, model=model, language=language, device=device, gpu=gpu, duration_ms=info["duration_ms"],
-                                   progress=lambda p, d: ctx.progress(p, d), cancelled=lambda: ctx.cancelled)
-    finally:
-        if lease_cm is not None:
-            try:
-                lease_cm.__exit__(None, None, None)
-            except Exception:  # noqa: BLE001
-                pass
+    result = svc.transcriber(wav, model=model, language=language, device=device, duration_ms=info["duration_ms"],
+                             progress=lambda p, d: ctx.progress(p, d), cancelled=lambda: ctx.cancelled)
     ctx.check()
     media_store.put_analysis(svc, mid, "transcript", result, {"model": result["model"], "language": result["language"]})
     svc.emit("lumiere.media.transcribed", {"id": mid, "name": clip(info["name"], 80), "words": len(result["words"]), "language": result["language"],

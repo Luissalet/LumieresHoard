@@ -6,11 +6,15 @@ import logging
 import os
 import re
 import sys
+import threading
 import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..errors import TranscriberUnavailable
+from ..hoard_link import fam_media
+from ..hoard_link import proc as hlproc
+from ..hoard_link.media import stt
 
 log = logging.getLogger("lumiere.speech")
 
@@ -31,110 +35,115 @@ def norm(text: str) -> str:
     return re.sub(r"[^\w\s']", "", text).strip()
 
 
-_DLL_DONE = False
-
-
-def cuda_dll_dirs() -> list[str]:
-    """On Windows, the folders of the pip-installed NVIDIA libraries (cuBLAS, cuDNN) go on the DLL search path so the speech
-    model finds them without a system-wide CUDA toolkit (requirements-gpu.txt)."""
-    global _DLL_DONE
-    added: list[str] = []
-    if not sys.platform.startswith("win"):
-        return added
-    import site
-
-    roots = [Path(p) for p in (site.getsitepackages() + [site.getusersitepackages()]) if p]
-    for root in roots:
-        nv = root / "nvidia"
-        if not nv.is_dir():
-            continue
-        for bin_dir in sorted(nv.glob("*/bin")):
-            if bin_dir.is_dir():
-                added.append(str(bin_dir))
-    if added and not _DLL_DONE:
-        for d in added:
-            try:
-                os.add_dll_directory(d)  # type: ignore[attr-defined]
-            except OSError:
-                pass
-        os.environ["PATH"] = os.pathsep.join(added + [os.environ.get("PATH", "")])
-        _DLL_DONE = True
-    return added
+LOCAL_KINDS = frozenset({"hub_down", "app_down", "app_missing", "tool_missing"})   # Funes cannot be reached: transcribe here
+SLICE_S = 15.0                                                                       # how long one wait on Funes blocks
+_local: dict[tuple[str, str], Any] = {}
+_local_lock = threading.Lock()
 
 
 def engine_status() -> dict[str, Any]:
-    dlls = cuda_dll_dirs()
-    try:
-        import faster_whisper  # type: ignore  # noqa: F401
-    except Exception as error:  # noqa: BLE001
-        return {"available": False, "engine": None, "reason": f"faster-whisper is not installed ({type(error).__name__})."}
-    cuda = 0
-    try:
-        import ctranslate2  # type: ignore
+    """What can transcribe: Funes's Hoard through the hub (one Whisper for the family) or faster-whisper in this environment."""
+    local = stt.available()
+    funes = fam_media.available("stt")
+    if not (local or funes):
+        return {"available": False, "engine": None, "funes": False,
+                "reason": "No speech engine: Funes's Hoard is not running and faster-whisper is not installed."}
+    cuda = stt.cuda_available() if local else False
+    return {"available": True, "engine": "funes" if funes else "faster-whisper", "funes": funes, "local": local,
+            "cuda_devices": 1 if cuda else 0, "cuda_libraries": cuda or not sys.platform.startswith("win")}
 
-        cuda = ctranslate2.get_cuda_device_count()
-    except Exception:  # noqa: BLE001
-        cuda = 0
-    return {"available": True, "engine": "faster-whisper", "cuda_devices": cuda, "cuda_libraries": bool(dlls) or not sys.platform.startswith("win")}
+
+def _models_dir(size: str) -> Path:
+    """The shared whisper folder, unless this machine already has the model in the Hugging Face cache faster-whisper used before."""
+    shared = stt.default_models_dir()
+    if stt.model_present(shared, size):
+        return shared
+    hf = Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface") / "hub"
+    return hf if stt.model_present(hf, size) else shared
+
+
+def _as_lumiere(done: dict[str, Any], note: str = "") -> dict[str, Any]:
+    """A shared transcript (seconds, `words` inside `segments`) as Lumiere's: words [{id, t0, t1, text, p}] and segments [{t0, t1, text}] in ms."""
+    words: list[dict[str, Any]] = []
+    segs: list[dict[str, Any]] = []
+    for seg in done.get("segments") or []:
+        segs.append({"t0": int(round(float(seg["start_s"]) * 1000)), "t1": int(round(float(seg["end_s"]) * 1000)), "text": str(seg["text"]).strip()})
+        for w in seg.get("words") or []:
+            text = str(w.get("word") or "").strip()
+            if not text:
+                continue
+            start, end = float(w["start_s"]), float(w["end_s"])
+            words.append({"id": f"w{len(words) + 1}", "t0": int(round(start * 1000)), "t1": int(round(max(end, start + 0.02) * 1000)), "text": text,
+                          "p": round(float(w.get("p") or 0), 3)})
+    out = {"language": done.get("language") or "", "language_p": round(float(done.get("language_probability") or 0), 3),
+           "model": done.get("model") or "", "device": done.get("device") or "", "words": words, "segments": segs}
+    if note or done.get("note"):
+        out["note"] = note or done["note"]
+    return out
+
+
+def _flag(cancelled: Callable[[], bool]) -> Any:
+    class _Flag:
+        def is_set(self) -> bool:
+            return bool(cancelled())
+    return _Flag()
+
+
+def _via_funes(path: Path, model: str, language: str, initial_prompt: str, progress: Optional[Callable[[float, str], None]],
+               cancelled: Callable[[], bool]) -> dict[str, Any]:
+    """Funes's `transcribe_file`, followed in short waits so a cancelled job stops the remote one too."""
+    def on_progress(fraction: float) -> None:
+        if progress:
+            progress(min(0.98, fraction), "transcribing (Funes's Hoard)")
+
+    res = fam_media.transcribe(str(path), language=language or "auto", model=model or None, word_timestamps=True,
+                               initial_prompt=initial_prompt, timeout_s=SLICE_S, local_fallback=False, progress=on_progress)
+    while not res.get("ok") and res.get("kind") == "timeout" and res.get("job_id"):
+        if cancelled():
+            fam_media.transcribe_cancel(res["job_id"])
+            return {"language": language, "language_p": 0, "model": model, "device": "", "words": [], "segments": []}
+        if progress and res.get("progress") is not None:
+            try:
+                on_progress(float(res["progress"]))
+            except (TypeError, ValueError):
+                pass
+        res = fam_media.transcribe_status(res["job_id"], wait_s=SLICE_S)
+    return res
 
 
 def transcribe(path: Path, *, model: str = "", language: str = "", device: str = "auto", gpu: Optional[int] = None,
                progress: Optional[Callable[[float, str], None]] = None, duration_ms: int = 0, cancelled: Callable[[], bool] = lambda: False,
                initial_prompt: str = "") -> dict[str, Any]:
     """Words [{id, t0, t1, text, p}], segments [{t0, t1, text}] and the language. ``path`` is a 16 kHz mono 16-bit WAV
-    (media.speech_wav). Tries the GPU (large-v3-turbo) and falls back to the CPU (small) when CUDA fails."""
-    status = engine_status()
-    if not status["available"]:
-        raise TranscriberUnavailable(status["reason"] + " Install it with: pip install faster-whisper")
-    from faster_whisper import WhisperModel  # type: ignore
-
-    use_cuda = device == "cuda" or (device == "auto" and status.get("cuda_devices", 0) > 0)
-    audio = _load_audio(path)
-    attempts = [("cuda", "float16", model or "large-v3-turbo")] if use_cuda else []
-    attempts.append(("cpu", "int8", model or "small"))
-    last: Optional[Exception] = None
-    for dev, ct, name in attempts:
-        try:
-            kwargs: dict[str, Any] = {"device": dev, "compute_type": ct}
-            if dev == "cuda" and gpu is not None:
-                kwargs["device_index"] = gpu
-            wm = WhisperModel(name, **kwargs)
-            if progress:
-                progress(0.02, f"{name} on {dev}")
-            return _run(wm, audio, name, dev, language, initial_prompt, duration_ms, progress, cancelled, note=str(last) if last else "")
-        except Exception as error:  # noqa: BLE001 - a missing CUDA library shows up only when decoding starts: retry on the CPU
-            last = error
-            log.warning("whisper %s on %s failed: %s", name, dev, error)
-            if dev == "cpu":
-                break
-    raise TranscriberUnavailable(f"Could not run the speech model: {last}")
-
-
-def _run(wm, audio, name: str, dev: str, language: str, initial_prompt: str, duration_ms: int, progress, cancelled, note: str = "") -> dict[str, Any]:
-    segments, info = wm.transcribe(audio, language=language or None, word_timestamps=True, vad_filter=True,
-                                   vad_parameters={"min_silence_duration_ms": 300}, beam_size=5, condition_on_previous_text=False,
-                                   initial_prompt=initial_prompt or None)
-    words: list[dict[str, Any]] = []
-    segs: list[dict[str, Any]] = []
-    n = 0
-    for seg in segments:
-        if cancelled():
-            break
-        segs.append({"t0": int(round(seg.start * 1000)), "t1": int(round(seg.end * 1000)), "text": seg.text.strip()})
-        for w in seg.words or []:
-            text = w.word.strip()
-            if not text:
-                continue
-            n += 1
-            words.append({"id": f"w{n}", "t0": int(round(w.start * 1000)), "t1": int(round(max(w.end, w.start + 0.02) * 1000)), "text": text,
-                          "p": round(float(w.probability or 0), 3)})
-        if progress and duration_ms:
-            progress(min(0.98, seg.end * 1000 / duration_ms), f"{len(words)} words · {name} on {dev}")
-    out = {"language": info.language, "language_p": round(float(info.language_probability or 0), 3), "model": name, "device": dev,
-           "words": words, "segments": segs}
-    if note:
-        out["note"] = f"The GPU failed ({note[:200]}); transcribed on the CPU."
-    return out
+    (media.speech_wav). Funes's Hoard transcribes it when it runs (one model for the family); otherwise the shared transcriber does it
+    here: on the GPU when the hub lends it (large-v3-turbo) and on the CPU (small) when it does not or CUDA fails. Whisper's inventions
+    over silence are filtered out."""
+    res = _via_funes(path, model, language, initial_prompt, progress, cancelled)
+    if res.get("ok"):
+        if progress:
+            progress(0.99, "transcribed (Funes's Hoard)")
+        return _as_lumiere(res)
+    if "words" in res and not res.get("error"):         # cancelled while Funes was working
+        return res
+    if res.get("kind") not in LOCAL_KINDS:
+        raise TranscriberUnavailable(f"Funes's Hoard could not transcribe it: {res.get('error') or 'unknown error'}")
+    if not stt.available():
+        raise TranscriberUnavailable("Funes's Hoard is not running and faster-whisper is not installed here. Install it with: pip install faster-whisper")
+    size = model or ("large-v3-turbo" if device != "cpu" and stt.cuda_available() else "small")
+    with _local_lock:
+        engine = _local.get((size, device))
+        if engine is None:
+            engine = _local[(size, device)] = stt.Transcriber(models_dir=_models_dir(size), size=size, device=device, owner="lumiere")
+    if progress:
+        progress(0.02, f"{size} (faster-whisper)")
+    try:
+        done = engine.transcribe(str(path), language=language or None, word_timestamps=True, initial_prompt=initial_prompt, cancel=_flag(cancelled),
+                                 progress=(lambda f: progress(min(0.98, f), f"{size} on {engine.device_used or device}")) if progress else None)
+    except hlproc.Cancelled:
+        return {"language": language, "language_p": 0, "model": size, "device": engine.device_used, "words": [], "segments": []}
+    except Exception as error:  # noqa: BLE001 - a model that cannot load or run: say why
+        raise TranscriberUnavailable(f"Could not run the speech model: {error}") from error
+    return _as_lumiere(done.as_dict())
 
 
 def _load_audio(path: Path):
