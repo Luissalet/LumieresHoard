@@ -104,3 +104,10 @@ Tests: `python -m pytest -q` (synthetic media made with ffmpeg; renders are chec
 ## Licence
 
 MIT.
+
+
+## Shared services (HoardLink 0.8.1)
+
+The editor shares request guards, port discovery, tool argument/error handling and notification routing. Its styled ASS subtitles retain speaker colours and timing; image outputs opt out of text caps.
+
+The vendored copy is maintained by HoardLink’s sync script. Windows validation and the family service contract are documented in HoardLink’s `docs/commons/windows-validation.md` and `docs/commons/services.md`.

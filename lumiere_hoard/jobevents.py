@@ -20,6 +20,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from .util import clip
+from .hoard_link.fam_notify import Router
 
 if TYPE_CHECKING:
     from .services import Services
@@ -163,8 +164,9 @@ class Notifier:
             hub = self.hub()
             if self.via() == "auto" and not hub.hub_available():
                 return
-            res = hub.notify(title, body, priority=priority, url=url, group=group, dedupe_key=dedupe)
-            self.sent.append({"title": title, "priority": priority, "ok": bool(res.get("ok")), "error": res.get("error", "")})
+            router = Router(via_getter=lambda: "hub", app_name="lumiere", hub=hub)
+            res = router.send(title, body, priority=priority, url=url, group=group, dedupe_key=dedupe)
+            self.sent.append({"title": title, "priority": priority, "ok": bool(res.get("ok")), "error": res.get("why", "")})
             del self.sent[:-50]
         except Exception:  # noqa: BLE001
             log.debug("notification through the hub failed", exc_info=True)

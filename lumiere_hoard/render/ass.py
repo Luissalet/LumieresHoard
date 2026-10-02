@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from ..timeline import Captions, Clip, Project, TextStyle
+from ..hoard_link.media import subs
 
 WordsFor = Callable[[str], Optional[list[dict[str, Any]]]]  # media id -> [{t0, t1, text, id?}] in source ms
 # Ready-made caption cues (translations): (start ms, stop ms, lines). The first line is drawn normally, further lines smaller and highlighted.
@@ -41,15 +42,11 @@ def _box_color(value: Optional[str]) -> tuple[str, int]:
 
 
 def _clean(text: str) -> str:
-    return text.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\r", "").replace("\n", "\\N")
+    return subs.ass_escape(text)
 
 
 def _ts(ms: float) -> str:
-    cs = max(0, int(round(ms / 10)))
-    h, rem = divmod(cs, 360000)
-    m, rem = divmod(rem, 6000)
-    s, c = divmod(rem, 100)
-    return f"{h}:{m:02d}:{s:02d}.{c:02d}"
+    return subs.ass_time(ms / 1000)
 
 
 # ---------------------------------------------------------------- words on the timeline
@@ -302,11 +299,7 @@ def _text_events(c: Clip, st: TextStyle, style: str, W: int, H: int, stop: int) 
 # ---------------------------------------------------------------- SRT / VTT
 
 def _srt_ts(ms: int, sep: str = ",") -> str:
-    ms = max(0, int(ms))
-    h, rem = divmod(ms, 3_600_000)
-    m, rem = divmod(rem, 60_000)
-    s, f = divmod(rem, 1000)
-    return f"{h:02d}:{m:02d}:{s:02d}{sep}{f:03d}"
+    return (subs.srt_time if sep == "," else subs.vtt_time)(ms / 1000)
 
 
 def raw_cues(project: Project, words_for: WordsFor) -> list[tuple[int, int, str]]:
@@ -359,7 +352,4 @@ def build_srt(project: Project, words_for: WordsFor, cues: Optional[CueLines] = 
 
 
 def build_vtt(project: Project, words_for: WordsFor, cues: Optional[CueLines] = None) -> str:
-    out = ["WEBVTT", ""]
-    for a, b, text, _color in _cue_texts(project, words_for, cues):
-        out.append(f"{_srt_ts(a, '.')} --> {_srt_ts(b, '.')}\n{text}\n")
-    return "\n".join(out)
+    return subs.to_vtt(subs.Cue(a / 1000, b / 1000, text) for a, b, text, _ in _cue_texts(project, words_for, cues))

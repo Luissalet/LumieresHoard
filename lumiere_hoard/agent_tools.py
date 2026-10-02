@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import base64
-import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
@@ -18,6 +16,9 @@ from . import media as media_store
 from . import plan as plan_mod
 from . import projects as project_store
 from .errors import LumiereError
+from .hoard_link import agentkit
+from .hoard_link.agentkit import Tool, ann as _ann
+from .hoard_link.waiting import MAX_WAIT_S
 from .ops import OP_NAMES, PRESETS, RAMP_PRESETS, op_reference
 from .render import filters as fx
 from .render import formats as formats_mod
@@ -336,7 +337,7 @@ class SubtitlesTranslateArgs(BaseModel):
     glossary: dict[str, str] = Field(default_factory=dict, description="Fixed translations {'term': 'translation'}.")
     keep: list[str] = Field(default_factory=list, max_length=80, description="Names and terms that must NOT be translated.")
     force: bool = Field(False, description="Translate again even when it is up to date.")
-    wait_s: float = Field(0, ge=0, le=3600, description="Wait this long for the job and return its result (0 = return the job at once).")
+    wait_s: float = Field(0, ge=0, le=MAX_WAIT_S, description="Wait this long for the job and return its result (0 = return the job at once).")
     changes: list[dict[str, Any]] = Field(default_factory=list, max_length=500, description="fix: [{n: cue number, text: 'corrected'}].")
     offset: int = Field(0, ge=0)
     limit: int = Field(60, ge=1, le=300)
@@ -399,20 +400,6 @@ class NestArgs(BaseModel):
 
 class SettingsArgs(BaseModel):
     patch: dict[str, Any] = Field(default_factory=dict, description="Omit to read the settings.")
-
-
-@dataclass(frozen=True)
-class Tool:
-    name: str
-    description: str
-    input_model: type[BaseModel]
-    annotations: dict[str, bool]
-    run: Callable[[Services, Any], Any]
-
-
-def _ann(read_only: bool, destructive: bool = False, idempotent: Optional[bool] = None) -> dict[str, bool]:
-    return {"readOnlyHint": read_only, "destructiveHint": destructive, "idempotentHint": read_only if idempotent is None else idempotent,
-            "openWorldHint": False}
 
 
 def _t(value: Any) -> Optional[int]:
@@ -1006,45 +993,15 @@ RESULT_CAP = 24_000
 
 
 def tool_catalog() -> list[dict]:
-    return [{"name": t.name, "description": t.description, "annotations": t.annotations, "inputSchema": t.input_model.model_json_schema(by_alias=True)}
-            for t in TOOLS]
+    return agentkit.tool_catalog(TOOLS)
 
 
 def cap_result(result: Any, limit: int = RESULT_CAP) -> Any:
-    if not isinstance(result, dict) or len(json.dumps(result, ensure_ascii=False, default=str)) <= limit:
-        return result
-    cut: list[str] = []
-    for _ in range(40):
-        if len(json.dumps(result, ensure_ascii=False, default=str)) <= limit:
-            break
-        best: Optional[tuple[int, str]] = None
-        for key, value in result.items():
-            if isinstance(value, list) and len(value) > 1:
-                n = len(json.dumps(value, ensure_ascii=False, default=str))
-                if best is None or n > best[0]:
-                    best = (n, key)
-        if best is None:
-            text_key = max((k for k, v in result.items() if isinstance(v, str)), key=lambda k: len(result[k]), default=None)
-            if text_key and len(result[text_key]) > 1000:
-                result[text_key] = result[text_key][: len(result[text_key]) // 2] + "…"
-                cut.append(text_key)
-                continue
-            break
-        result[best[1]] = result[best[1]][: max(1, len(result[best[1]]) // 2)]
-        cut.append(best[1])
-    if cut:
-        result["truncated"] = True
-        result["truncated_fields"] = sorted(set(cut))
-        result["hint"] = "Trimmed to fit: page with offset/limit or ask for less detail."
-    return result
+    return agentkit.cap_result(result, limit)
 
 
 def call_tool(svc: Services, name: str, arguments: dict | None, *, caller: Optional[str] = None, cap: bool = False) -> Any:
-    tool = TOOLS_BY_NAME.get(name)
-    if tool is None:
-        raise KeyError(f"Unknown tool: {name}")
-    args = tool.input_model.model_validate(arguments or {})
-    result = tool.run(svc, args)
+    result = agentkit.call_tool(TOOLS_BY_NAME, svc, name, arguments, cap=False)
     image = result.pop("_image", None) if isinstance(result, dict) else None
     if cap:
         result = cap_result(result)
