@@ -113,12 +113,36 @@ def offline_fetch(url, dest):
     raise OSError("offline in tests")
 
 
-def make_services(tmp_path: Path, *, link: Any = None, inline: bool = True, **config_overrides) -> Services:
+def make_services(tmp_path: Path, *, link: Any = None, inline: bool = True, hub_notify: Any = None, **config_overrides) -> Services:
     svc = Services(make_config(tmp_path, **config_overrides), link=link if link is not None else FakeLink(available=False), emit_fn=Recorder(),
-                   inline_jobs=inline)
+                   inline_jobs=inline, hub_notify=hub_notify)
     svc.transcriber = fake_transcriber
     svc.model_fetch = offline_fetch  # the face detector model is never downloaded by accident; tests that want it say so
     return svc
+
+
+@pytest.fixture(autouse=True)
+def no_family_hub(monkeypatch):
+    """No test talks to a real hub: it answers "away" unless a test passes its own fake as hub_notify."""
+    from lumiere_hoard.hoard_link import fam_notify
+
+    monkeypatch.setattr(fam_notify, "hub_available", lambda timeout=1.0: False)
+    monkeypatch.setattr(fam_notify, "notify", lambda *a, **k: {"ok": False, "error": "hub unreachable"})
+
+
+class FakeHub:
+    """Stands in for hoard_link.fam_notify: records what the app asks the hub to tell the person."""
+
+    def __init__(self, available: bool = True, ok: bool = True):
+        self.available, self.ok = available, ok
+        self.notices: list[dict[str, Any]] = []
+
+    def hub_available(self, timeout: float = 1.0) -> bool:
+        return self.available
+
+    def notify(self, title, body="", *, priority="normal", url="", group="", dedupe_key="", sphere=None, timeout=5.0):
+        self.notices.append({"title": title, "body": body, "priority": priority, "url": url, "group": group, "dedupe_key": dedupe_key})
+        return {"ok": self.ok, "id": len(self.notices)} if self.ok else {"ok": False, "error": "hub unreachable"}
 
 
 @pytest.fixture

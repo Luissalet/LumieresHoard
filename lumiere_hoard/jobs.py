@@ -42,6 +42,7 @@ class JobCtx:
             sets.append("detail = ?")
             args.append(detail[:300])
         self.queue.db.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", (*args, self.id))
+        self.queue._event("progress", self.id, self.kind, self.params, args[0])
 
     def handle(self) -> RunHandle:
         h = RunHandle()
@@ -59,8 +60,9 @@ JobFn = Callable[[JobCtx], dict[str, Any]]
 
 
 class JobQueue:
-    def __init__(self, db, workers: int = 2, *, on_done: Optional[Callable[[dict], None]] = None, run_inline: bool = False):
+    def __init__(self, db, workers: int = 2, *, on_done: Optional[Callable[[dict], None]] = None, run_inline: bool = False, events: Any = None):
         self.db = db
+        self.events = events  # jobevents.JobEvents: tells the family hub how renders go (hints, never an error)
         self.workers = workers
         self.fns: dict[str, JobFn] = {}
         self.on_done = on_done
@@ -74,6 +76,14 @@ class JobQueue:
 
     def register(self, kind: str, fn: JobFn) -> None:
         self.fns[kind] = fn
+
+    def _event(self, name: str, *args: Any) -> None:
+        if self.events is None:
+            return
+        try:
+            getattr(self.events, name)(*args)
+        except Exception:  # noqa: BLE001
+            log.debug("job event %s failed", name, exc_info=True)
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -125,6 +135,7 @@ class JobQueue:
         job_id = new_id("job")
         self.db.execute("INSERT INTO jobs(id, kind, label, state, media_id, project_id, params, created_ts) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)",
                         (job_id, kind, label[:200], media_id, project_id, dumps(params), time.time()))
+        self._event("queued", self.get(job_id))
         if self.run_inline:
             self._run(job_id)
         else:
@@ -135,6 +146,7 @@ class JobQueue:
         job = self.get(job_id)
         if job["state"] == "queued":
             self.db.execute("UPDATE jobs SET state = 'canceled', finished_ts = ? WHERE id = ? AND state = 'queued'", (time.time(), job_id))
+            self._event("cancelled", self.get(job_id))
         with self._lock:
             ctx = self._running.get(job_id)
             if ctx:
@@ -194,6 +206,7 @@ class JobQueue:
         with self._lock:
             self._running[job_id] = ctx
         self.db.execute("UPDATE jobs SET state = 'running', started_ts = ?, progress = 0 WHERE id = ?", (time.time(), job_id))
+        self._event("started", self.get(job_id))
         state, result, error = "done", {}, ""
         try:
             result = self.fns[row["kind"]](ctx) or {}
@@ -209,6 +222,7 @@ class JobQueue:
                 self._running.pop(job_id, None)
         self.db.execute("UPDATE jobs SET state = ?, result = ?, error = ?, finished_ts = ?, progress = CASE WHEN ? = 'done' THEN 1 ELSE progress END "
                         "WHERE id = ?", (state, dumps(result), error[:2000], time.time(), state, job_id))
+        self._event("forget", job_id)
         if self.on_done:
             try:
                 self.on_done(self.get(job_id))

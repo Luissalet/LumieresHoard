@@ -4,7 +4,7 @@ import { useApp } from "../App.jsx";
 import { Field, Icon, Spinner, Toggle } from "../components/ui.jsx";
 import { setGlPreview, useGlPreview, webglAvailable } from "../editor/previewPrefs.js";
 
-const KEYS = ["whisper_model", "whisper_device", "transcript_language", "hwdec", "export_folder", "auto_transcribe", "model", "default_export", "face_detector"];
+const KEYS = ["whisper_model", "whisper_device", "transcript_language", "hwdec", "export_folder", "auto_transcribe", "model", "default_export", "face_detector", "notify.via"];
 
 function Stat({ label, value, tone }) {
   return (
@@ -97,6 +97,11 @@ export default function Settings() {
             <Field label={t("set_face_detector")} help={t("set_face_detector_help")}>
               <select className="field" value={draft.face_detector || "auto"} onChange={(e) => set("face_detector", e.target.value)} data-testid="face-detector">
                 {["auto", "yunet", "haar", "saliency"].map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </Field>
+            <Field label={t("set_notify_via")} help={t("set_notify_via_help")}>
+              <select className="field" value={draft["notify.via"] || "auto"} onChange={(e) => set("notify.via", e.target.value)} data-testid="notify-via">
+                <option value="auto">auto</option><option value="hub">{t("set_notify_hub")}</option><option value="off">{t("off")}</option>
               </select>
             </Field>
             <h3 style={{ fontSize: 13.5, margin: "10px 0 12px" }}>{t("gl_preview_settings")}</h3>

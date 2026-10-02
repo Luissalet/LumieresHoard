@@ -153,7 +153,8 @@ def test_a_render_that_fails_says_so(services, media_dir, tmp_path):
     (event,) = events(services, "lumiere.render.failed")
     assert event["job"] == job["id"] and event["project"] == pid and event["preset"] == "preview" and "missing" in event["error"]
     assert events(services, "lumiere.render.done") == []
-    assert events(services, "lumiere.job.failed")[0]["kind"] == "render"       # the generic one is still sent
+    assert events(services, "lumiere.job.failed") == []             # a render's failure is sent once: the hub reads render.failed as job.failed
+    assert event["job_id"] == job["id"] and event["kind"] == "render" and event["title"] == "Roto"
 
 
 def test_a_lossless_cut_is_announced_too(services, lib):
@@ -205,7 +206,7 @@ def test_every_event_the_code_sends_is_in_the_contract_and_in_the_instructions()
     for f in (ROOT / "lumiere_hoard").rglob("*.py"):
         if "hoard_link" in f.parts:
             continue
-        sent |= set(re.findall(r'emit\(\s*"(lumiere\.[a-z_.]+)"', f.read_text(encoding="utf-8")))
+        sent |= set(re.findall(r'(?:emit|_send)\(\s*"(lumiere\.[a-z_.]+)"', f.read_text(encoding="utf-8")))
     assert sent and sent <= set(family_events.EMITS), sent - set(family_events.EMITS)
     assert set(family_events.EMITS) - sent == set(), "documented but never sent"
     for name in (*family_events.EMITS, *family_events.ACCEPTS):

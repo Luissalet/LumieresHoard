@@ -10,7 +10,7 @@ from typing import Any, Callable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import analyze, commands, derive, family_events, multicam, speakers
+from . import analyze, commands, derive, family_events, multicam, speakers, timeline_import
 from . import broll as broll_mod
 from . import music as music_mod
 from . import subtitles as subtitles_mod
@@ -47,6 +47,8 @@ not changed; reframe auto|center|blur says how the picture is framed where the s
 Translated subtitles: subtitles_translate (needs the transcript and the local model; a job; cues keep the original timing) then
 subtitles_export with language (srt, vtt, ass; dual = original plus translation) or render_start with captions_language (+ captions_dual) to burn them in;
 a translation goes stale when the transcript or the cuts change: translate again, unchanged cues are reused.
+An edit made in another app arrives with project_from_timeline (an FCP7 XML or EDL file, or a plan of clips and markers); files that cannot be found are
+skipped and listed under skipped.
 """ + family_events.contract_text() + '''
 Family events sent: ''' + ", ".join(family_events.EMITS) + ". Accepted: " + ", ".join(family_events.ACCEPTS) + "."
 
@@ -349,6 +351,16 @@ class MediaReceiveArgs(BaseModel):
     preset: str = Field("", max_length=30, description="Canvas of a new project (reels, youtube, square...); empty = by the media's shape.")
     transcribe: bool = Field(False, description="Queue the transcription.")
     source: str = Field("", max_length=80, description="The app that sends it.")
+
+
+class ProjectFromTimelineArgs(BaseModel):
+    title: str = Field("", max_length=120, description="Name of the new project (empty = the timeline's own name).")
+    fcpxml_path: str = Field("", max_length=2000, description="An FCP7 XML (xmeml) timeline file, e.g. the one Prospero exports.")
+    edl_path: str = Field("", max_length=2000, description="Or a CMX 3600 EDL file (clip files are found by name next to it or in media_dirs).")
+    plan: Optional[dict[str, Any] | str] = Field(None, description="Or a plan: {clips: [{path, in_s, out_s, track, start_s?}], markers: [{t, text}]} "
+                                                 "(seconds; clips without start_s follow the previous one on their track).")
+    fps: Optional[float] = Field(None, ge=1, le=240, description="Frame rate of an EDL (it carries none; 24 when empty) or of a plan (30).")
+    media_dirs: list[str] = Field(default_factory=list, max_length=8, description="Folders to look for the clips' files by name (inside the allowed folders).")
 
 
 class ShortArgs(MediaRef):
@@ -798,6 +810,11 @@ def run_media_receive(svc: Services, a: MediaReceiveArgs) -> dict:
                                        transcribe=a.transcribe, source=a.source)
 
 
+def run_project_from_timeline(svc: Services, a: ProjectFromTimelineArgs) -> dict:
+    return timeline_import.project_from_timeline(svc, title=a.title, fcpxml_path=a.fcpxml_path, edl_path=a.edl_path, plan=a.plan, fps=a.fps,
+                                                 media_dirs=a.media_dirs, actor="agent")
+
+
 def run_short(svc: Services, a: ShortArgs) -> dict:
     return commands.short_from_range(svc, a.media, _t(a.start) or 0, _t(a.end) or 0, name=a.name, preset=a.preset, with_captions=a.captions)
 
@@ -968,6 +985,10 @@ TOOLS: list[Tool] = [
     Tool("media_receive", "Receive a media file from another app (path or local URL), optionally into a project. Recibir medio.\n"
          "Family import: used by sibling apps through the hub. Sinónimos: importar desde otra app, pasar vídeo, enviar a Lumiere.\n"
          "Keywords: receive media, family, hub, import from app, send to editor.", MediaReceiveArgs, _ann(False, False, True), run_media_receive),
+    Tool("project_from_timeline", "Open an edit made elsewhere (FCP7 XML, EDL or plan) as a project. Proyecto desde línea de tiempo.\n"
+         "Reads Prospero's XML/EDL export or a plan of clips and markers; missing files are skipped and listed. Sinónimos: importar montaje, importar XML, "
+         "importar EDL, abrir corte, llevar a Lumiere.\nKeywords: import timeline, fcpxml, xmeml, edl, plan, project from timeline, family.",
+         ProjectFromTimelineArgs, _ann(False, False, False), run_project_from_timeline),
     Tool("clip_stabilize", "Stabilize a shaky clip (background job; the clip is pointed at the stable copy). Estabilizar.\n"
          "Keywords: stabilize, shaky, gimbal.", StabilizeArgs, _ann(False), run_stabilize),
     Tool("clip_freeze", "Insert a freeze frame of a clip at a time. Congelar imagen.\nKeywords: freeze frame, still.", FreezeArgs, _ann(False), run_freeze),

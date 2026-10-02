@@ -18,6 +18,7 @@ from . import ffmpeg as ff
 from . import media as media_store
 from . import plan as plan_mod
 from . import family_events
+from .jobevents import VIA as NOTIFY_VIA, JobEvents, Notifier
 from . import subtitles as subtitles_mod
 from .analysis import faces
 from .config import Config
@@ -41,6 +42,7 @@ SETTINGS = {
     "export_folder": "",         # empty = data/renders
     "auto_transcribe": "off",    # on: transcribe every imported media with speech
     "face_detector": "auto",     # auto | yunet | haar | saliency: who finds the subject when reframing
+    "notify.via": "auto",        # auto | hub | off: who tells the person that an export finished or failed (only the family hub; "off" = nobody)
 }
 
 
@@ -63,7 +65,7 @@ def write_token(config: Config) -> str:
 
 class Services:
     def __init__(self, config: Config, *, link: Any = None, emit_fn: Optional[Callable[[str, dict], None]] = None, tools: Optional[ff.Tools] = None,
-                 inline_jobs: bool = False):
+                 inline_jobs: bool = False, hub_notify: Any = None):
         self.config = config
         self.started_at = time.time()
         config.data_dir.mkdir(parents=True, exist_ok=True)
@@ -84,7 +86,9 @@ class Services:
 
         self.transcriber: Callable[..., dict[str, Any]] = speech.transcribe  # tests replace it
         self.model_fetch: Callable[[str, Path], None] = faces.download  # downloads small model files; tests replace it
-        self.jobs = JobQueue(self.db, config.workers, on_done=self._job_done, run_inline=inline_jobs)
+        self.job_events = JobEvents(self)
+        self.notifier = Notifier(self, hub_notify, background=not inline_jobs)
+        self.jobs = JobQueue(self.db, config.workers, on_done=self._job_done, run_inline=inline_jobs, events=self.job_events)
         self.jobs.register("prepare", lambda ctx: media_store.prepare_job(self, ctx))
         self.jobs.register("analyze", lambda ctx: analyze.analyze_job(self, ctx))
         self.jobs.register("transcribe", lambda ctx: analyze.transcribe_job(self, ctx))
@@ -159,18 +163,27 @@ class Services:
                     analyze.schedule(self, job["media_id"], ["transcript"])
                 except LumiereError:
                     pass
+        render = self.job_events.is_render(job["kind"])
+        if job["state"] == "canceled" and render:
+            self.job_events.cancelled(job)
         if job["state"] == "failed":
-            self.emit("lumiere.job.failed", {"id": job["id"], "kind": job["kind"], "error": clip(job["error"], 160)})
-            # the events other apps react to: a render or a transcription that did not finish
-            if job["kind"] in ("render", "copy_cut"):
-                self.emit("lumiere.render.failed", {"job": job["id"], "project": job.get("project_id"), "preset": job["params"].get("preset", "copy"),
-                                                    "error": clip(job["error"], 200)})
-            elif job["kind"] == "transcribe":
-                self.emit("lumiere.media.transcription_failed", {"job": job["id"], "id": job.get("media_id"), "error": clip(job["error"], 200)})
-        elif job["state"] == "done" and job["kind"] == "copy_cut":
+            if render:
+                # one failure event for a render: the hub reads lumiere.render.failed as lumiere.job.failed (kind render), so the generic
+                # event is only sent for the jobs that are not renders
+                self.emit("lumiere.render.failed", self.job_events.failed_data(job, {
+                    "job": job["id"], "project": job.get("project_id"), "preset": job["params"].get("preset", "copy"), "error": clip(job["error"], 200)}))
+                self.notifier.render_failed(job)
+            else:
+                self.emit("lumiere.job.failed", {"id": job["id"], "kind": job["kind"], "error": clip(job["error"], 160)})
+                if job["kind"] == "transcribe":
+                    self.emit("lumiere.media.transcription_failed", {"job": job["id"], "id": job.get("media_id"), "error": clip(job["error"], 200)})
+        elif job["state"] == "done" and render:
             r = job["result"]
-            self.emit("lumiere.render.done", {"id": r.get("id"), "project": job.get("project_id"), "preset": "copy", "path": r.get("path"),
-                                              "duration_ms": r.get("duration_ms"), "ok": True, "job": job["id"]})
+            if job["kind"] == "copy_cut":
+                self.emit("lumiere.render.done", self.job_events.done_data(r, {
+                    "id": r.get("id"), "project": job.get("project_id"), "preset": "copy", "path": r.get("path"), "duration_ms": r.get("duration_ms"),
+                    "ok": True, "job": job["id"]}, job["id"], job.get("project_id")))
+            self.notifier.render_done(job)
 
     # ------------------------------------------------------------ settings
     def get_settings(self) -> dict[str, Any]:
@@ -184,7 +197,7 @@ class Services:
         unknown = set(patch) - set(SETTINGS)
         if unknown:
             raise LumiereError(f"Unknown settings: {', '.join(sorted(unknown))}.")
-        choices = {"whisper_device": ("auto", "cuda", "cpu"), "hwdec": ("auto", "on", "off"), "auto_transcribe": ("on", "off"), "face_detector": faces.CHOICES,
+        choices = {"notify.via": NOTIFY_VIA, "whisper_device": ("auto", "cuda", "cpu"), "hwdec": ("auto", "on", "off"), "auto_transcribe": ("on", "off"), "face_detector": faces.CHOICES,
                    "default_export": tuple(runner.EXPORTS)}
         for key, value in patch.items():
             value = "" if value is None else str(value).strip()

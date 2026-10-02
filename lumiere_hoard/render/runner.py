@@ -336,7 +336,7 @@ def render_job(svc: "Services", ctx: "JobCtx") -> dict[str, Any]:
             info = _render_target(svc, ctx, params, spec, tg, rid, out_path, twork, audio_wav, af, loud_info, total, audio_only, lo, hi, prefix, cue_lines,
                                   RenderContext(svc, tg.project, twork, use_proxies=bool(spec.get("proxies"))), tools, fps, fps_expr, ext, t_start)
             outputs.append(info)
-            svc.emit("lumiere.render.done", render_event(info, ctx.id))
+            svc.emit("lumiere.render.done", svc.job_events.done_data(info, render_event(info, ctx.id), ctx.id, pid))
         first = outputs[0]
         if not multi:
             return first

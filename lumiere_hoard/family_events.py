@@ -30,9 +30,15 @@ LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
 
 #: events Lumiere sends: type -> (when, payload fields)
 EMITS: dict[str, tuple[str, str]] = {
-    "lumiere.render.done": ("an export finished (one event per output file; a multi-format export sends one per canvas)",
-                            "id, project, preset, path, duration_ms, width, height, bytes, seconds, ok (quality check), problems[], lufs?, variant? (16x9...), job"),
-    "lumiere.render.failed": ("an export did not finish", "job, project, preset, error"),
+    "lumiere.render.done": ("an export finished (one event per output file; a multi-format export sends one per canvas; the hub reads it as lumiere.job.done, kind render)",
+                            "id, project, preset, path, duration_ms, width, height, bytes, seconds, ok (quality check), problems[], lufs?, variant? (16x9...), job, "
+                            "job_id, title (the project), kind (render), progress, url, ref (hoard://lumiere/render/<id>)"),
+    "lumiere.render.failed": ("an export did not finish (the hub reads it as lumiere.job.failed, kind render)",
+                              "job, project, preset, error, job_id, title, kind (render), url"),
+    "lumiere.job.queued": ("an export was queued", "job_id, title (the project), kind (render), progress, url"),
+    "lumiere.job.started": ("an export began", "job_id, title, kind (render), progress, url"),
+    "lumiere.job.progress": ("an export is running (at most one event every 5 s)", "job_id, title, kind (render), progress (0..1), eta_s?, url"),
+    "lumiere.job.cancelled": ("an export was canceled", "job_id, title, kind (render), url"),
     "lumiere.media.transcribed": ("a transcription finished", "id (media), name, words, language, duration_ms, model, job"),
     "lumiere.media.speakers": ("the voices of a transcript were separated", "id (media), speakers, method"),
     "lumiere.media.transcription_failed": ("a transcription failed", "job, id (media), error"),
@@ -42,7 +48,7 @@ EMITS: dict[str, tuple[str, str]] = {
     "lumiere.media.ready": ("proxy, filmstrip and waveform are ready", "id, name"),
     "lumiere.media.analyzed": ("a scene, beat, loudness, motion or focus analysis finished", "id, kind"),
     "lumiere.project.created": ("a project was created", "id, name"),
-    "lumiere.job.failed": ("any background job failed", "id, kind, error"),
+    "lumiere.job.failed": ("a background job that is not an export failed (an export's failure is lumiere.render.failed)", "id, kind, error"),
 }
 #: events Lumiere accepts at POST /api/family/events (Bearer: this app's mcp-token) and as the tool media_receive
 ACCEPTS: dict[str, tuple[str, str]] = {
