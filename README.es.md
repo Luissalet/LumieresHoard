@@ -67,7 +67,12 @@ Ajustes (entorno): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE_ROOT
 
 ## Asistentes (MCP)
 
-`mcp_server.py` es un puente MCP por stdio con 54 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
+`project_contact_sheet` exporta fotogramas nativos con tiempos, hojas JPEG/PNG,
+HTML portátil y recibo JSON de procedencia. Permite muestras distribuidas,
+pares antes/después de comienzos de clips o tiempos explícitos. Rechaza cambios
+de fuente o timeline durante la captura. [API, muestreo y límites verificados](docs/CONTACT-SHEETS.es.md).
+
+`mcp_server.py` es un puente MCP por stdio con 55 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],

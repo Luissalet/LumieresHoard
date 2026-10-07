@@ -67,7 +67,12 @@ Settings (environment): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE
 
 ## Assistants (MCP)
 
-`mcp_server.py` is a stdio MCP bridge with 54 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
+`project_contact_sheet` exports native, timecoded timeline frames as JPEG/PNG,
+portable HTML and a JSON provenance receipt. Choose evenly spaced frames,
+before/after main-track starts, or explicit milliseconds. Source and timeline
+changes during capture reject the sheet. [API, sampling and verified limits](docs/CONTACT-SHEETS.md).
+
+`mcp_server.py` is a stdio MCP bridge with 55 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],

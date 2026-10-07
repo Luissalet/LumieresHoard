@@ -322,6 +322,15 @@ class FrameArgs(BaseModel):
     show: bool = Field(True, description="Also return the picture itself so it can be looked at (MCP image).")
 
 
+class ContactSheetArgs(BaseModel):
+    project: str = ProjectId
+    mode: Literal["overview", "boundaries"] = Field("overview", description="Overview spreads frames; boundaries samples before/after main-track clip starts, not every composite change.")
+    count: int = Field(12, ge=2, le=16, description="Maximum frame count; odd boundary counts use complete pairs.")
+    width: int = Field(320, ge=128, le=640, description="Tile width in pixels; extreme aspect ratios fit into a height of at most 1280.")
+    times: Optional[list[int]] = Field(None, min_length=1, max_length=16, description="Explicit timeline milliseconds inside duration; quantized to native output frames and deduplicated.")
+    show: bool = Field(True, description="Return the JPEG as an MCP image; false returns text/artifact paths only.")
+
+
 class SubtitlesArgs(BaseModel):
     project: str = ProjectId
     format: Literal["srt", "vtt", "ass"] = "srt"
@@ -727,6 +736,14 @@ def run_frame(svc: Services, a: FrameArgs) -> dict:
     return out
 
 
+def run_contact_sheet(svc: Services, a: ContactSheetArgs) -> dict:
+    from .contact_sheet import create
+    out = create(svc, a.project, mode=a.mode, count=a.count, width=a.width, times=a.times)
+    if a.show:
+        out["_image"] = {"mime": "image/jpeg", "data": base64.b64encode(Path(out["path"]).read_bytes()).decode("ascii")}
+    return out
+
+
 def _frame_layers(svc: Services, project: str, t: int) -> list[dict]:
     """What the project draws at t, top layer first, so an assistant looking at the frame knows which text comes from the
     edit (titles, burned-in captions) and which was already in the footage."""
@@ -1041,6 +1058,11 @@ TOOLS: list[Tool] = [
          "Keywords: renders, exports, output files.", RendersArgs, _ann(True), run_renders),
     Tool("frame_snapshot", "Save the frame the timeline shows at a time as an image (exactly as rendered). Fotograma.\n"
          "Use it to look at the edit. Keywords: frame, snapshot, preview image.", FrameArgs, _ann(False, False, True), run_frame),
+    Tool("project_contact_sheet", "Export timecoded native timeline frames in one contact sheet. Hoja de fotogramas del montaje.\n"
+         "Overview, before/after main-track starts, or explicit milliseconds. Returns JPEG/PNG, portable HTML and JSON receipt with frame/source timing, hashes and project revision. "
+         "Inspect image/receipt; this does not prove motion or audio continuity. Sinónimos: revisar cortes, hoja de contacto, storyboard.\n"
+         "Keywords: contact sheet, review cuts, timeline overview, provenance, hoja de fotogramas, revisar montaje.",
+         ContactSheetArgs, _ann(False, False, False), run_contact_sheet),
     Tool("subtitles_export", "Export the captions as SRT, VTT or ASS (to a file or as text). Exportar subtítulos.\n"
          "Keywords: srt, vtt, subtitles file.", SubtitlesArgs, _ann(False, False, True), run_subtitles),
     Tool("subtitles_translate", "Translate the project's subtitles with the local model (keeps the timing). Traducir subtítulos.\n"

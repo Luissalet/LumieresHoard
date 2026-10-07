@@ -1,0 +1,163 @@
+{
+  "candidate": "lumiere-contact-sheet-20261007",
+  "base_head": "be7177446da7d2a68ca09024cac278a5147b90ee",
+  "code_commit": "3de16419f895f9745cd9957aa275f553b6e34eda",
+  "publication": "Parent owns publication and runtime policy; shared working tree/vendor/media pending work untouched.",
+  "changed_files_sha256": {
+    "README.es.md": "4550da81fb8b039f7520782c35bd0fbef4e3fc7a1e62f00404730fe4398b298b",
+    "README.md": "0167616d8f73a48660606ea1314dc3072966effee334a3a7a11d50889fd01ca6",
+    "docs/CONTACT-SHEETS.es.md": "fc0449db3d21d321828fe1a4e9377cccb66f8d3780816a7f478227526a20d77e",
+    "docs/CONTACT-SHEETS.md": "287b5396c99d7d5c396519da4db56b0ec57d99798c63dbc4d28fd11e03f1290f",
+    "lumiere_hoard/agent_tools.py": "dbb8e48f47b9d961fe1a8bd7bd0574a0b116e22b9c4019f60e65f4f83091397d",
+    "lumiere_hoard/api/projects.py": "870bc3b6ea7eac2b767e76fd0726622965eb236854b0f1e5ee52673cd64dc377",
+    "lumiere_hoard/contact_sheet.py": "7a68696449796e9f5c65dad8b22e82c033ca70159ad9be84f735313d03b9caad",
+    "pyproject.toml": "63a49312b2e00807a93a6225c50ad6e2a91fc9a5ab2e507947ed508cef1b7d32",
+    "tests/test_contact_sheet.py": "cbf2854466a6f20bcf63fb01430d4b67a920311a1ee9f1fa7652f6539d2d773d"
+  },
+  "tool": "project_contact_sheet",
+  "schema": {
+    "properties": {
+      "project": {
+        "description": "Project id (prj_...).",
+        "maxLength": 40,
+        "minLength": 1,
+        "title": "Project",
+        "type": "string"
+      },
+      "mode": {
+        "default": "overview",
+        "description": "Overview spreads frames; boundaries samples before/after main-track clip starts, not every composite change.",
+        "enum": [
+          "overview",
+          "boundaries"
+        ],
+        "title": "Mode",
+        "type": "string"
+      },
+      "count": {
+        "default": 12,
+        "description": "Maximum frame count; odd boundary counts use complete pairs.",
+        "maximum": 16,
+        "minimum": 2,
+        "title": "Count",
+        "type": "integer"
+      },
+      "width": {
+        "default": 320,
+        "description": "Tile width in pixels; extreme aspect ratios fit into a height of at most 1280.",
+        "maximum": 640,
+        "minimum": 128,
+        "title": "Width",
+        "type": "integer"
+      },
+      "times": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Explicit timeline milliseconds inside duration; quantized to native output frames and deduplicated.",
+        "title": "Times"
+      },
+      "show": {
+        "default": true,
+        "description": "Return the JPEG as an MCP image; false returns text/artifact paths only.",
+        "title": "Show",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "project"
+    ],
+    "title": "ContactSheetArgs",
+    "type": "object"
+  },
+  "schema_sha256": "e957409929808b9f863be13a68cdfc359ea423c6dfd10617f8caa41dee390fc7",
+  "catalog_tool_count": 55,
+  "api": "POST /api/projects/{project_id}/contact-sheet",
+  "validation": {
+    "tests": "7 passed: tests/test_contact_sheet.py, fresh data/verified-qa",
+    "cut_frames": [
+      24,
+      25,
+      49,
+      50,
+      74,
+      75
+    ],
+    "cut_times_ms": [
+      960,
+      1000,
+      1960,
+      2000,
+      2960,
+      3000
+    ],
+    "pixels": "PNGcellRGBhash equals actualnativeframepixels; JPEGexpectedcolors within5; independent fullH264export ffmpegreadback at all6frames meanRGBdifference<3",
+    "counter": "Numbered-source frame decoding matches native timing rule at2xspeed/reverse/lastvalidframe",
+    "provenance": "Clip IDs/source_time mapping match all6sampledcutframes; titlelayer present; projectdump and originalscene SHAunchanged",
+    "repeat_png_sha256": "8f25c5193142aca1101821e0ffcee278572eb01c55cf3aa8045f3131df6ea574",
+    "negative": "Project revision mutation rejected; sourcebyte mutation withsame-size/restoredmtime rejected; rendererror identifiesframe12@480ms; no sheet/sample/receipt published after these failures",
+    "api": "NormalREST + authenticatedagent endpoint/catalog schema, JPEG/PNG/JSON/HTML downloads, explicit-time snapping/deduplication and out-ofrange rejection pass",
+    "dependency": "Pillow declared in pyproject; verified localPillow12.2.0",
+    "runtime": "No live Lumiereactivation/reload, principalinference or shared-data writes by this task."
+  },
+  "reference": {
+    "repository": "CutWire-Studios/Drift",
+    "observed_head": "17ab04e27076b877fb48e4bc2774d25627d7e761",
+    "url": "https://github.com/CutWire-Studios/Drift/blob/17ab04e27076b877fb48e4bc2774d25627d7e761/docs/MCP.md",
+    "claim": "Reference already documents frames contact-sheets withchanges/dHash,uniform,scenes,explicit timestamps/provenance; this fills Lumieresown gap, not superiority/parity. No Driftcode reused."
+  },
+  "proof_receipt": {
+    "path": "data/evidence/three-cut-proof.json",
+    "sha256": "822aece74ba6346a75f11a03456aa9d42b56a9c2b89ff53816f0e299c785e00e"
+  },
+  "full_export": {
+    "path": "data/verified-qa/test_native_three_cuts_pixels_0/data/renders/Three-cut contact sheet.mp4",
+    "sha256": "5189ff6e624075e80cedec23e70592f940ab481bf324b84f20860486d1bcc7db"
+  },
+  "source_scene_sha256": "052ec0062f120d3391c4be8e5dafa1900008557603f5c317715362f6d05e0fad",
+  "artifacts": [
+    {
+      "kind": "path",
+      "path": "data/verified-qa/test_native_three_cuts_pixels_0/data/renders/frames/sheet_xef2t6vg.jpg",
+      "sha256": "6252b9c6f8e08fe073cba5722fa7ca7c3f3249549bbeb0037dd8ec6d42d37ae0",
+      "bytes": 17723
+    },
+    {
+      "kind": "png_path",
+      "path": "data/verified-qa/test_native_three_cuts_pixels_0/data/renders/frames/sheet_xef2t6vg.png",
+      "sha256": "8f25c5193142aca1101821e0ffcee278572eb01c55cf3aa8045f3131df6ea574",
+      "bytes": 10192
+    },
+    {
+      "kind": "receipt_path",
+      "path": "data/verified-qa/test_native_three_cuts_pixels_0/data/renders/frames/sheet_xef2t6vg.json",
+      "sha256": "41dca458e67d4aa4c76130931dc71a3c167ea096032c5a8bfac3cb9a7b05fd9e",
+      "bytes": 11087
+    },
+    {
+      "kind": "html_path",
+      "path": "data/verified-qa/test_native_three_cuts_pixels_0/data/renders/frames/sheet_xef2t6vg.html",
+      "sha256": "29476120c599e19528f1e78102ebdfa9d61476b3b12155852a25ef99381919a6",
+      "bytes": 14528
+    }
+  ],
+  "limitations": [
+    "Boundaries samples main-track clip starts, not every composite change or source scene.",
+    "Source times are timeline mappings, not decoder PTS; nested sources are attributed to their sequence.",
+    "A sheet does not prove motion/audio continuity or editor parity.",
+    "Extreme aspect-ratio tiles fit within1280pxheight.",
+    "Captions rendered natively; transcript word provenance not expanded.",
+    "Routine renderer frame-cache files can remain afterfailedreviews; unpublishedsheet-specificfiles are deleted."
+  ]
+}

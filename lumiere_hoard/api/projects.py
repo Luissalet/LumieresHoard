@@ -42,6 +42,13 @@ class PatchBody(BaseModel):
     template: Optional[bool] = None
 
 
+class ContactSheetBody(BaseModel):
+    mode: Literal["overview", "boundaries"] = "overview"
+    count: int = Field(12, ge=2, le=16)
+    width: int = Field(320, ge=128, le=640)
+    times: Optional[list[int]] = Field(None, min_length=1, max_length=16)
+
+
 class TemplateBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     slots: dict[str, str] = Field(default_factory=dict)
@@ -266,6 +273,11 @@ def multicam_frame(request: Request, project_id: str, angle: str, t: int = 0, gr
 def frame(request: Request, project_id: str, t: str = "0", width: int = 960):
     path = runner.render_frame(services(request), project_id, parse_time(t) if ":" in t or t.endswith("s") else int(float(t)), width=width)
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/projects/{project_id}/contact-sheet")
+def contact_sheet(request: Request, project_id: str, body: ContactSheetBody):
+    return tool(request, "project_contact_sheet", project=project_id, **body.model_dump(), show=False)
 
 
 @router.get("/projects/{project_id}/subtitles.{fmt}")
