@@ -8,7 +8,7 @@ is the existing `POST /api/agent/call` with name `project_contact_sheet`.
 The stdio bridge discovers its schema automatically. `show=false` keeps MCP
 text only; `true` also returns the JPEG image.
 
-In the video editor, use **Sheet** in the top bar. Choose Overview or Cuts,
+In the video editor, use **Sheet** in the top bar. Choose Overview, Cuts or Adaptive,
 set the frame count and tile width, then generate. The dialog shows the sheet,
 actual timecodes and layer provenance, with downloads for PNG and the JSON
 receipt and a link to the portable HTML page.
@@ -66,12 +66,47 @@ speed 2, reverse and final-frame sampling. Repeat generation gives matching shee
 hashes for these deterministic fixtures. API downloads, MCP schema/agent calls,
 source/project invariance and rejected mixed revisions/source changes are tested.
 
+## Adaptive sampling
+
+`mode="adaptive"` scans low-resolution frames rendered from Lumiere's native
+composited timeline, targeting four grid candidates per second, prioritizing
+main-track clip starts, and capping the combined pass at 120. Each adjacent
+candidate pair receives a score from mean RGB difference
+and the fraction of pixels with a channel change of at least 18/255. Consecutive
+above-threshold changes form an interval; the selected change sample lies near
+the interval midpoint. The sheet reserves timeline endpoints, applies temporal
+spacing to change events, and fills remaining slots with candidates farthest
+from existing samples. If no score reaches the threshold, it reports that
+fallback and spreads samples across the candidate grid. The JSON policy records
+every candidate's frame, time, score components, threshold, selection and
+fallback reason.
+The editor's Adaptive option uses this same API mode; the frame count is the
+maximum number of final samples, not the number of low-resolution scan frames.
+
+This examines the composed edit, including titles and overlays, instead of
+analyzing source files as if they were the final timeline. It remains a bounded
+visual-change heuristic: an event between candidate frames can be missed,
+camera motion or animation can score as change, and similar-looking content can
+score low. It does not identify semantic scenes, establish continuity, or prove
+Drift/FilmCraft parity. The candidate pass invokes the native frame renderer per
+sample; it is capped but can take noticeable time on long or complex timelines.
+
 ## Reference scope
+
+[PySceneDetect v0.7.1](https://github.com/Breakthrough/PySceneDetect/tree/6ebb72392de8acfb6c539bf15d0aa912ce7ab6b2),
+BSD-3-Clause at that pinned release, documents adjacent-frame HSV content
+scores, rolling-average adaptive scores, threshold fades and histogram/hash
+alternatives in its [detector reference](https://www.scenedetect.com/docs/latest/api/detectors.html). Its detector API accepts
+frames, but its ordinary video-input path sees a source file rather than
+Lumiere's live edit composite. [FFmpeg's filter documentation](https://ffmpeg.org/ffmpeg-filters.html#select_002c-aselect)
+also exposes a scene-change score for selecting frames from an encoded input.
+Those are useful algorithm references; Lumiere keeps its native compositor in
+the loop. No external detector dependency or Drift code is included.
 
 [Drift's MCP documentation](https://github.com/CutWire-Studios/Drift/blob/17ab04e27076b877fb48e4bc2774d25627d7e761/docs/MCP.md)
 at HEAD `17ab04e27076b877fb48e4bc2774d25627d7e761` (observed 2026-10-07) already
 documents contact sheets with change, uniform, scene and explicit sampling,
 clip/source attribution and beyond-end flags. This feature fills Lumiere's own
 batch-review gap; it is not an advantage established over Drift or full editor
-parity. Change/dHash and source-scene sampling remain unimplemented here. No
-Drift code is copied. [Spanish guide](CONTACT-SHEETS.es.md).
+parity. Drift's source-scene mode and specific dHash implementation are not
+reproduced here. No Drift code is copied. [Spanish guide](CONTACT-SHEETS.es.md).

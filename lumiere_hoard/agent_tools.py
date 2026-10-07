@@ -324,8 +324,8 @@ class FrameArgs(BaseModel):
 
 class ContactSheetArgs(BaseModel):
     project: str = ProjectId
-    mode: Literal["overview", "boundaries"] = Field("overview", description="Overview samples a uniform grid across output frames; it does not target clip starts. Boundaries samples before/at main-track clip starts, not every composite change.")
-    count: int = Field(12, ge=2, le=16, description="Maximum frame count; odd boundary counts use complete pairs.")
+    mode: Literal["overview", "boundaries", "adaptive"] = Field("overview", description="Overview samples a uniform grid; boundaries samples before/at main-track clip starts; adaptive scans bounded low-resolution native composites for color/pixel change and keeps temporal endpoints. It is not source-scene detection.")
+    count: int = Field(12, ge=2, le=16, description="Maximum frame count; odd boundary counts use complete pairs. Adaptive may return fewer frames on very short timelines.")
     width: int = Field(320, ge=128, le=640, description="Tile width in pixels; extreme aspect ratios fit into a height of at most 1280.")
     times: Optional[list[int]] = Field(None, min_length=1, max_length=16, description="Explicit timeline milliseconds inside duration; quantized to native output frames and deduplicated.")
     show: bool = Field(True, description="Return the JPEG as an MCP image; false returns text/artifact paths only.")
@@ -1059,7 +1059,7 @@ TOOLS: list[Tool] = [
     Tool("frame_snapshot", "Save the frame the timeline shows at a time as an image (exactly as rendered). Fotograma.\n"
          "Use it to look at the edit. Keywords: frame, snapshot, preview image.", FrameArgs, _ann(False, False, True), run_frame),
     Tool("project_contact_sheet", "Export timecoded native timeline frames in one contact sheet. Hoja de fotogramas del montaje.\n"
-         "Overview samples a uniform grid across output frames; it does not target clip starts. Boundaries samples before/at main-track clip starts; explicit milliseconds snap to output frames. Returns JPEG/PNG, portable HTML and JSON receipt with sampling policy, frame/layer timing, hashes and project revision. "
+         "Overview samples a uniform grid; boundaries samples before/at main-track clip starts. Adaptive scans at most 120 low-resolution native composites (target 4/s), selects color/pixel changes plus endpoints and spread coverage; it is not source-scene detection. Explicit milliseconds snap to output frames. Returns JPEG/PNG, portable HTML and JSON receipt with scores, provenance, hashes and project revision. "
          "Inspect image/receipt; this does not prove motion or audio continuity. Sinónimos: revisar cortes, hoja de contacto, storyboard.\n"
          "Keywords: contact sheet, review cuts, timeline overview, provenance, hoja de fotogramas, revisar montaje.",
          ContactSheetArgs, _ann(False, False, False), run_contact_sheet),

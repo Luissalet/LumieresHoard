@@ -6,15 +6,22 @@ import hashlib
 import html
 import json
 import math
+import tempfile
 from fractions import Fraction
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 from . import projects, media, ffmpeg
 from .errors import LumiereError
 from .render import compiler, runner
 from .util import ms_to_tc, new_id
+
+ADAPTIVE_MAX_CANDIDATES = 120
+ADAPTIVE_TARGET_CANDIDATES_PER_SECOND = 4
+ADAPTIVE_CHANGE_THRESHOLD = 0.035
+ADAPTIVE_MIN_EVENT_SPACING_SECONDS = 0.5
 
 
 def _revision(project):
@@ -94,6 +101,186 @@ def _frame_plan(project, *, mode="overview", count=12, times=None):
     return {frame: [round(frame * 1000 / fps)] for frame in frames}, truncated, policy, details
 
 
+def _adaptive_candidate_frames(last_frame: int, fps: float, clip_starts=()) -> list[int]:
+    available = last_frame + 1
+    desired = min(available, ADAPTIVE_MAX_CANDIDATES,
+                  max(2, math.ceil(last_frame / fps * ADAPTIVE_TARGET_CANDIDATES_PER_SECOND) + 1))
+    if desired <= 1:
+        uniform = {0}
+    else:
+        uniform = {round(i * last_frame / (desired - 1)) for i in range(desired)}
+    protected = {0, last_frame, *(frame for frame in clip_starts if 0 <= frame <= last_frame)}
+    if len(protected) >= ADAPTIVE_MAX_CANDIDATES:
+        if len(protected) <= ADAPTIVE_MAX_CANDIDATES:
+            return sorted(protected)
+        interior = sorted(protected - {0, last_frame})
+        slots = ADAPTIVE_MAX_CANDIDATES - len({0, last_frame})
+        chosen = {interior[round(i * (len(interior) - 1) / max(1, slots - 1))] for i in range(slots)}
+        return sorted(chosen | {0, last_frame})
+    selected = set(protected)
+    while len(selected) < ADAPTIVE_MAX_CANDIDATES:
+        remaining = uniform - selected
+        if not remaining:
+            break
+        selected.add(max(remaining, key=lambda frame: (min(abs(frame - prior) for prior in selected), -frame)))
+    return sorted(selected)
+
+
+def _adaptive_candidate_pixels(svc, project_id: str, project, frame: int, output_path: Path) -> np.ndarray:
+    """Read one low-resolution native composite into this request's private scratch path."""
+    fps = project.canvas.fps
+    requested_ms = min(project.duration - 1, round(frame * 1000 / fps))
+    rendered = runner.render_frame(svc, project_id, requested_ms, width=64, fmt="png", output_path=output_path)
+    with Image.open(rendered) as image:
+        sample = image.convert("RGB")
+        sample.thumbnail((48, 48), Image.Resampling.BILINEAR)
+        return np.asarray(sample, dtype=np.uint8).copy()
+
+
+def _snapshot_sources(svc, project, frames):
+    sources = {}
+    for frame in frames:
+        actual_ms = float(frame * 1000 / project.canvas.fps)
+        for layer in _source_layers(_layers(svc, project, frame, actual_ms)):
+            media_id, source_path = layer.get("media"), layer.get("source_path")
+            if not media_id or not source_path or media_id in sources:
+                continue
+            source = Path(source_path)
+            try:
+                stat = source.stat()
+                sources[media_id] = {"path": str(source), "sha256": _sha(source), "bytes": stat.st_size,
+                                     "mtime_ns": stat.st_mtime_ns}
+            except OSError as exc:
+                raise LumiereError(f"Contact sheet source is unavailable at output frame {frame} ({ms_to_tc(round(actual_ms))}): {exc}", code="contact_sheet_frame_failed") from exc
+    return sources
+
+
+def _source_changed(info):
+    source = Path(info["path"])
+    try:
+        stat = source.stat()
+        return stat.st_size != info["bytes"] or stat.st_mtime_ns != info["mtime_ns"] or _sha(source) != info["sha256"]
+    except OSError:
+        return True
+
+
+def _adaptive_frame_plan(svc, project_id: str, project, *, count: int):
+    """Scan bounded native composites, then select high-change and coverage frames."""
+    if project.duration <= 0:
+        raise LumiereError("The timeline is empty.")
+    if type(count) is not int or not 2 <= count <= 16:
+        raise LumiereError("count must be 2–16.")
+    fps = project.canvas.fps
+    last = max(0, compiler.frame_of_ms(project.duration, fps) - 1)
+    track = project.main_track()
+    clip_start_frames = sorted({compiler.frame_of_ms(clip.start, fps) for clip in track.clips
+                                if 0 < compiler.frame_of_ms(clip.start, fps) <= last}) if track else []
+    candidates = _adaptive_candidate_frames(last, fps, clip_start_frames)
+    sources = _snapshot_sources(svc, project, candidates)
+    records = []
+    previous = None
+    svc.config.work_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="adaptive-scan-", dir=svc.config.work_dir) as scratch_dir:
+        scratch = Path(scratch_dir)
+        for frame in candidates:
+            pixels = _adaptive_candidate_pixels(svc, project_id, project, frame, scratch / f"{frame}.png")
+            if previous is None:
+                record = {"frame": frame, "time_ms": round(frame * 1000 / fps),
+                          "mean_rgb_delta": None, "changed_pixel_fraction": None, "score": None}
+            else:
+                if pixels.shape != previous.shape:
+                    image = Image.fromarray(pixels).resize((previous.shape[1], previous.shape[0]), Image.Resampling.BILINEAR)
+                    pixels = np.asarray(image, dtype=np.uint8)
+                delta = np.abs(pixels.astype(np.int16) - previous.astype(np.int16))
+                mean_rgb = float(delta.mean() / 255.0)
+                changed_fraction = float((delta.max(axis=2) >= 18).mean())
+                score = 0.65 * mean_rgb + 0.35 * changed_fraction
+                record = {"frame": frame, "time_ms": round(frame * 1000 / fps),
+                          "mean_rgb_delta": round(mean_rgb, 6),
+                          "changed_pixel_fraction": round(changed_fraction, 6), "score": round(score, 6)}
+            records.append(record)
+            previous = pixels
+
+    # Consecutive above-threshold changes form one event. A hard cut is usually
+    # a single sample; a gradual blend often spans several samples, so choose
+    # the center of its tied/near-tied strongest changes.
+    active = [i for i, row in enumerate(records) if row["score"] is not None and
+              row["score"] >= ADAPTIVE_CHANGE_THRESHOLD]
+    groups = []
+    for index in active:
+        if not groups or index != groups[-1][-1] + 1:
+            groups.append([index])
+        else:
+            groups[-1].append(index)
+    events = []
+    for group in groups:
+        maximum = max(records[i]["score"] for i in group)
+        near_best = [i for i in group if maximum - records[i]["score"] <= max(0.002, maximum * 0.02)]
+        interval_midpoint = (records[group[0]]["frame"] + records[group[-1]]["frame"]) / 2
+        chosen_index = min(near_best, key=lambda i: (abs(records[i]["frame"] - interval_midpoint), records[i]["frame"]))
+        events.append({**records[chosen_index], "event_start_frame": records[group[0]]["frame"],
+                       "event_end_frame": records[group[-1]]["frame"], "peak_score": round(maximum, 6)})
+
+    selected = {0, last}
+    event_frames = []
+    min_spacing = max(1, round(fps * ADAPTIVE_MIN_EVENT_SPACING_SECONDS))
+    for event in sorted(events, key=lambda row: (-row["peak_score"], row["frame"])):
+        frame = event["frame"]
+        if len(selected) >= count:
+            break
+        if frame not in selected and all(abs(frame - prior) >= min_spacing for prior in event_frames):
+            selected.add(frame)
+            event_frames.append(frame)
+
+    # If the visual pass finds few changes, fill remaining slots by choosing
+    # candidates farthest from the current set, preserving temporal coverage.
+    while len(selected) < min(count, len(candidates)):
+        remaining = [frame for frame in candidates if frame not in selected]
+        if not remaining:
+            break
+        frame = max(remaining, key=lambda candidate: (min(abs(candidate - prior) for prior in selected), -candidate))
+        selected.add(frame)
+
+    frames = sorted(selected)
+    events_by_frame = {event["frame"]: event for event in events}
+    details = {}
+    for frame in frames:
+        event = events_by_frame.get(frame)
+        if event and frame in event_frames:
+            details[frame] = {"kind": "adaptive_change_sample",
+                              "reason": "selected near the midpoint of this above-threshold change interval",
+                              "score": event["score"], "peak_score": event["peak_score"],
+                              "mean_rgb_delta": event["mean_rgb_delta"],
+                              "changed_pixel_fraction": event["changed_pixel_fraction"],
+                              "event_start_frame": event["event_start_frame"],
+                              "event_end_frame": event["event_end_frame"]}
+        elif frame == 0 or frame == last:
+            details[frame] = {"kind": "adaptive_context_sample",
+                              "reason": "reserved timeline endpoint for temporal context",
+                              "endpoint": "start" if frame == 0 else "last_valid_frame"}
+        else:
+            details[frame] = {"kind": "adaptive_coverage_sample",
+                              "reason": "candidate farthest in time from already selected samples"}
+
+    fallback = None if events else "no_candidate_change_reached_threshold; selected endpoints and spread candidates"
+    policy = {"strategy": "bounded_native_color_and_pixel_change",
+              "requested_frame_count": count, "selected_frame_count": len(frames),
+              "selected_output_frames": frames, "candidate_frame_count": len(records),
+              "candidate_frame_cap": ADAPTIVE_MAX_CANDIDATES,
+              "candidate_target_rate_per_second": ADAPTIVE_TARGET_CANDIDATES_PER_SECOND,
+              "candidate_main_track_clip_start_frames": clip_start_frames,
+              "change_threshold": ADAPTIVE_CHANGE_THRESHOLD,
+              "score_formula": "0.65 * mean_absolute_RGB_delta/255 + 0.35 * fraction_of_pixels_with_any_channel_delta_at_least_18/255",
+              "minimum_event_spacing_seconds": ADAPTIVE_MIN_EVENT_SPACING_SECONDS,
+              "detected_change_event_count": len(events), "selected_change_frames": event_frames,
+              "candidate_scores": records, "fallback_reason": fallback,
+              "truncated": len(event_frames) < len(events)}
+    requests = {frame: [round(frame * 1000 / fps)] for frame in frames}
+    if any(_source_changed(info) for info in sources.values()):
+        raise LumiereError("A source changed during adaptive sampling; create a fresh contact sheet.")
+    return requests, len(event_frames) < len(events), policy, details, sources
+
+
 def sample_times(project, *, mode="overview", count=12):
     """Sample real output frames, including the last valid frame, never the end."""
     requests, truncated, _, _ = _frame_plan(project, mode=mode, count=count)
@@ -160,10 +347,19 @@ def create(svc, project_id, *, mode="overview", count=12, width=320, times=None)
     project = projects.doc(svc, project_id)
     if type(width) is not int or not 128 <= width <= 640:
         raise LumiereError("width must be 128–640 pixels.")
-    requests, truncated, sampling_policy, frame_sampling = _frame_plan(project, mode=mode, count=count, times=times)
     revisions = {project_id: _revision(project)}
     for nested in projects.nested_ids(svc, project_id):
         revisions[nested] = _revision(projects.doc(svc, nested))
+    pre_scanned_sources = {}
+    if times is not None:
+        requests, truncated, sampling_policy, frame_sampling = _frame_plan(project, mode="overview", count=count, times=times)
+    elif mode == "adaptive":
+        requests, truncated, sampling_policy, frame_sampling, pre_scanned_sources = _adaptive_frame_plan(
+            svc, project_id, project, count=count)
+    else:
+        requests, truncated, sampling_policy, frame_sampling = _frame_plan(project, mode=mode, count=count)
+    if any(_revision(projects.doc(svc, pid)) != revision for pid, revision in revisions.items()):
+        raise LumiereError("The timeline changed during review; create a fresh contact sheet.")
     rate = Fraction(ffmpeg.fps_fraction(project.canvas.fps))
     columns = min(4, len(requests))
     height = max(1, min(1280, round(width * project.canvas.height / project.canvas.width)))
@@ -173,7 +369,7 @@ def create(svc, project_id, *, mode="overview", count=12, width=320, times=None)
     artifact = new_id("sheet")
     folder = svc.config.renders_dir / "frames"
     folder.mkdir(parents=True, exist_ok=True)
-    outputs, frames, sources = [], [], {}
+    outputs, frames, sources = [], [], pre_scanned_sources
     try:
         for index, (frame, requested) in enumerate(sorted(requests.items())):
             actual_ms = float(frame * 1000 / rate)
@@ -189,11 +385,10 @@ def create(svc, project_id, *, mode="overview", count=12, width=320, times=None)
             except OSError as exc:
                 raise LumiereError(f"Contact sheet source is unavailable at output frame {frame} ({ms_to_tc(round(actual_ms))}): {exc}", code="contact_sheet_frame_failed") from exc
             try:
-                original_frame = runner.render_frame(svc, project_id, render_ms, width=width, fmt="png")
-                frame_bytes = original_frame.read_bytes()
                 frame_path = folder / f"{artifact}-{index + 1}.png"
                 outputs.append(frame_path)
-                frame_path.write_bytes(frame_bytes)
+                runner.render_frame(svc, project_id, render_ms, width=width, fmt="png", output_path=frame_path)
+                frame_bytes = frame_path.read_bytes()
                 with Image.open(frame_path) as image:
                     tile = image.convert("RGB")
                     tile.thumbnail((width, height))
@@ -215,15 +410,8 @@ def create(svc, project_id, *, mode="overview", count=12, width=320, times=None)
                            "cell_bbox": [x, y, tile.width, tile.height]})
             if any(_revision(projects.doc(svc, pid)) != revision for pid, revision in revisions.items()):
                 raise LumiereError("The timeline changed during review; create a fresh contact sheet.")
-        for info in sources.values():
-            source = Path(info["path"])
-            try:
-                stat = source.stat()
-                changed = stat.st_size != info["bytes"] or stat.st_mtime_ns != info["mtime_ns"] or _sha(source) != info["sha256"]
-            except OSError:
-                changed = True
-            if changed:
-                raise LumiereError("A source changed during review; create a fresh contact sheet.")
+        if any(_source_changed(info) for info in sources.values()):
+            raise LumiereError("A source changed during review; create a fresh contact sheet.")
         png, jpeg, receipt, page = [folder / f"{artifact}.{ext}" for ext in ("png", "jpg", "json", "html")]
         outputs.extend([png, jpeg, receipt, page])
         sheet.save(png)

@@ -1,7 +1,7 @@
 # Hojas de fotogramas del montaje
 
-En el editor de vídeo, pulsa **Hoja** en la barra superior. Elige Resumen o
-Cortes, ajusta la cantidad de fotogramas y su ancho y genera la hoja. El diálogo
+En el editor de vídeo, pulsa **Hoja** en la barra superior. Elige Resumen,
+Cortes o Adaptativo, ajusta la cantidad de fotogramas y su ancho y genera la hoja. El diálogo
 muestra los tiempos reales y la procedencia de las capas, permite descargar el
 PNG y el recibo JSON y abre la página HTML portátil.
 
@@ -33,6 +33,26 @@ ajusta las peticiones a fotogramas reales y registra duplicados y peticiones
 que convergen en el mismo fotograma. El recibo diferencia tiempo solicitado,
 tiempo real y número de fotograma; una petición válida que redondea al final usa
 el último válido.
+
+El modo `adaptive` captura composiciones nativas de baja resolución, con una
+cuadrícula objetivo de cuatro candidatos por segundo, prioridad para los
+comienzos de clips de la pista principal y un máximo combinado de 120. Compara
+cada par consecutivo mediante diferencia RGB media y proporción de píxeles con algún
+canal que cambie al menos 18/255. Agrupa los cambios sobre el umbral y elige una
+muestra cerca del centro del intervalo. Reserva los extremos del montaje,
+separa temporalmente los cambios y completa espacios con candidatos alejados de
+las muestras ya elegidas. Si ningún cambio supera el umbral, el recibo declara
+el motivo y reparte las muestras por la cuadrícula. Registra fotogramas,
+tiempos, puntuaciones, umbral y motivo de fallback.
+
+El análisis usa el montaje compuesto, incluidos títulos y capas. Sigue siendo
+una heurística visual acotada: puede omitir cambios entre candidatos, puntuar
+movimiento o animación como cambio y pasar por alto contenido visualmente
+parecido. No interpreta escenas semánticas ni comprueba continuidad. El pase
+ejecuta el renderizador nativo por candidato; el límite evita escaneos sin cota,
+pero el proceso puede tardar en montajes largos o complejos. La opción
+Adaptativo del editor usa este mismo modo de API; la cantidad elegida limita
+los fotogramas finales, no los candidatos del análisis.
 
 Cada celda tiene 128–640 píxeles de ancho y hasta 1280 de alto para relaciones
 extremas. Se usa el renderizador final con originales, incluidos recortes,
@@ -66,5 +86,14 @@ esquema MCP, descargas, invariancia y rechazos de cambios/fallos de render.
 en el HEAD observado `17ab04e27076b877fb48e4bc2774d25627d7e761`: muestreo por
 cambios, uniforme, escenas y tiempos explícitos, atribución y avisos del final.
 Esta ampliación cubre una carencia de Lumiere; no demuestra ventaja sobre Drift
-ni paridad completa. Muestreo por dHash/cambios y escenas de origen sigue
-pendiente. No se copia código de Drift.
+ni paridad completa. Este modo propio no reproduce el detector dHash ni el
+muestreo de escenas de origen de Drift. No se copia código de Drift.
+
+Como referencia primaria, [PySceneDetect v0.7.1](https://github.com/Breakthrough/PySceneDetect/tree/6ebb72392de8acfb6c539bf15d0aa912ce7ab6b2),
+con licencia BSD-3-Clause en ese commit, documenta diferencias HSV entre
+fotogramas, promedio adaptativo, histogramas y hashes en su
+[referencia de detectores](https://www.scenedetect.com/docs/latest/api/detectors.html).
+[FFmpeg](https://ffmpeg.org/ffmpeg-filters.html#select_002c-aselect)
+expone una puntuación de cambio de escena para fotogramas de un archivo
+codificado. Lumiere mantiene el compositor nativo como entrada y no añade esas
+dependencias.

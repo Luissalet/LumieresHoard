@@ -15,6 +15,12 @@ test("cut view delegates cut-side sampling to the renderer and forwards the fram
   });
 });
 
+test("adaptive view is sent through the normal contact sheet request", () => {
+  assert.deepEqual(contactSheetRequest("adaptive", "7", "256"), {
+    mode: "adaptive", count: 7, width: 256,
+  });
+});
+
 test("API client posts settings and preserves real sheet, manifest, and frame metadata", async () => {
   const oldWindow = globalThis.window;
   const oldFetch = globalThis.fetch;
@@ -30,10 +36,10 @@ test("API client posts settings and preserves real sheet, manifest, and frame me
     return { ok: true, text: async () => JSON.stringify(fixture) };
   };
   try {
-    const result = await api.projectContactSheet("project / 1", { mode: "boundaries", count: 8, width: 256 });
+    const result = await api.projectContactSheet("project / 1", { mode: "adaptive", count: 8, width: 256 });
     assert.equal(request.url, "http://127.0.0.1/api/projects/project%20%2F%201/contact-sheet");
     assert.equal(request.init.method, "POST");
-    assert.deepEqual(JSON.parse(request.init.body), { mode: "boundaries", count: 8, width: 256 });
+    assert.deepEqual(JSON.parse(request.init.body), { mode: "adaptive", count: 8, width: 256 });
     assert.equal(result.png_url, fixture.png_url);
     assert.equal(result.receipt_url, fixture.receipt_url);
     assert.equal(result.html_url, fixture.html_url);

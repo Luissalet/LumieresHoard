@@ -43,7 +43,7 @@ class PatchBody(BaseModel):
 
 
 class ContactSheetBody(BaseModel):
-    mode: Literal["overview", "boundaries"] = "overview"
+    mode: Literal["overview", "boundaries", "adaptive"] = "overview"
     count: int = Field(12, ge=2, le=16)
     width: int = Field(320, ge=128, le=640)
     times: Optional[list[int]] = Field(None, min_length=1, max_length=16)

@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -74,6 +76,70 @@ def test_boundary_mode_reports_endpoint_fallback_reason():
     assert {row["reason"] for row in details.values()} == {policy["fallback_reason"]}
 
 
+def test_adaptive_candidate_grid_is_capped_and_short_flat_timeline_falls_back(tmp_path, monkeypatch):
+    assert len(sheets._adaptive_candidate_frames(10_000, 25)) == 120
+    crowded = sheets._adaptive_candidate_frames(10_000, 25, range(10_001))
+    assert len(crowded) == 120 and crowded[0] == 0 and crowded[-1] == 10_000
+    assert sheets._adaptive_candidate_frames(1, 25) == [0, 1]
+    project = SimpleNamespace(duration=80, canvas=SimpleNamespace(width=100, height=100, fps=25),
+                              main_track=lambda: None, tracks=[], captions=SimpleNamespace(enabled=False))
+    renders = tmp_path / "renders"
+    svc = SimpleNamespace(config=SimpleNamespace(renders_dir=renders, work_dir=tmp_path / "work"))
+
+    def render(_svc, project_id, time_ms, *, width, fmt, output_path=None):
+        path = Path(output_path) if output_path is not None else renders / "frames" / f"{project_id}-{time_ms}-64.{fmt}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (64, 64), "#354a62").save(path)
+        return path
+
+    monkeypatch.setattr(sheets.runner, "render_frame", render)
+    requests, truncated, policy, details, sources = sheets._adaptive_frame_plan(svc, "short", project, count=8)
+    assert sorted(requests) == [0, 1] and not truncated
+    assert policy["requested_frame_count"] == 8 and policy["selected_frame_count"] == 2
+    assert policy["candidate_frame_count"] == 2
+    assert policy["fallback_reason"].startswith("no_candidate_change_reached_threshold")
+    assert sources == {}
+    assert all(details[frame]["kind"] == "adaptive_context_sample" for frame in requests)
+    assert not list((renders / "frames").glob("short-*.png"))  # candidate renders are temporary
+    assert not list((tmp_path / "work").glob("adaptive-scan-*"))
+
+
+@needs_ffmpeg
+def test_concurrent_adaptive_sheets_use_private_prepass_paths(services, media_dir):
+    source = media.import_path(services, str(media_dir / "scenes.mp4"))
+    pid = projects.create(services, "Concurrent short review", width=320, height=180, fps=25)["id"]
+    projects.edit(services, pid, [{"op": "add_media", "media": source["id"], "src_in": 0, "src_out": 400}])
+
+    cached_files = [services.config.renders_dir / "frames" / f"{pid}-0-{width}.png" for width in (64, 128)]
+    original_cached_bytes = []
+    for cached, color in zip(cached_files, ("magenta", "cyan")):
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (64, 64), color).save(cached)
+        original_cached_bytes.append(cached.read_bytes())
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(sheets.create, services, pid, mode="adaptive", count=4, width=128)
+                   for _ in range(2)]
+        results = [future.result(timeout=120) for future in futures]
+
+    assert [cached.read_bytes() for cached in cached_files] == original_cached_bytes
+    assert results[0]["id"] != results[1]["id"]
+    result_frame_paths = [{row["frame_path"] for row in result["frames"]} for result in results]
+    assert result_frame_paths[0].isdisjoint(result_frame_paths[1])
+    for result in results:
+        assert result["status"] == "complete"
+        assert result["mode"] == "adaptive"
+        assert Path(result["png_path"]).is_file()
+        assert Path(result["path"]).is_file()
+        receipt = json.loads(Path(result["receipt_path"]).read_text(encoding="utf-8"))
+        assert receipt["id"] == result["id"]
+        assert receipt["sampling_policy"]["strategy"] == "bounded_native_color_and_pixel_change"
+        for row in result["frames"]:
+            with Image.open(row["frame_path"]) as frame:
+                assert frame.width == 128
+    assert not list(services.config.work_dir.glob("adaptive-scan-*"))
+
+
 def test_revision_change_never_publishes_mixed_sheet(tmp_path, monkeypatch):
     revision = [1]
     p = SimpleNamespace(duration=1000, canvas=SimpleNamespace(width=100, height=100, fps=25), tracks=[],
@@ -81,7 +147,8 @@ def test_revision_change_never_publishes_mixed_sheet(tmp_path, monkeypatch):
     monkeypatch.setattr(sheets.projects, "doc", lambda *args: p)
     monkeypatch.setattr(sheets.projects, "nested_ids", lambda *args: set())
     def render(*args, **kwargs):
-        path = tmp_path / "frame.png"
+        path = Path(kwargs.get("output_path") or (tmp_path / "frame.png"))
+        path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (100, 100), "red").save(path)
         revision[0] += 1
         return path
@@ -151,8 +218,8 @@ def test_native_three_cuts_pixels_provenance_export_readback_and_sources(service
 def test_api_and_agent_catalog_are_usable_and_validate_times(client, media_dir):
     pid, _ = _timeline(client.svc, media_dir)
     entry = next(item for item in tool_catalog() if item["name"] == "project_contact_sheet")
-    assert entry["inputSchema"]["properties"]["mode"]["enum"] == ["overview", "boundaries"]
-    assert "uniform grid" in entry["description"] and "does not target clip starts" in entry["description"]
+    assert entry["inputSchema"]["properties"]["mode"]["enum"] == ["overview", "boundaries", "adaptive"]
+    assert "uniform grid" in entry["description"] and "120 low-resolution native composites" in entry["description"]
     response = client.post(f"/api/projects/{pid}/contact-sheet", json={"times": [1, 10, 10, 500], "width": 160})
     assert response.status_code == 200, response.text
     body = response.json()
@@ -161,12 +228,104 @@ def test_api_and_agent_catalog_are_usable_and_validate_times(client, media_dir):
     assert body["sampling_policy"]["strategy"] == "explicit_times_rounded_to_output_frames"
     assert body["sampling_policy"]["duplicate_input_times_removed"] == 1
     assert body["sampling_policy"]["distinct_times_merged_by_frame"] == 1
+    adaptive = client.post(f"/api/projects/{pid}/contact-sheet", json={"mode": "adaptive", "count": 4, "width": 128})
+    assert adaptive.status_code == 200, adaptive.text
+    assert adaptive.json()["sampling_policy"]["strategy"] == "bounded_native_color_and_pixel_change"
     for field in ("url", "png_url", "receipt_url", "html_url"):
         assert client.get(body[field]).status_code == 200
     agent = client.post("/api/agent/call", headers={"Authorization": f"Bearer {client.svc.token}"}, json={"name": "project_contact_sheet", "arguments": {"project": pid, "times": [500], "width": 160, "show": False}})
     assert agent.status_code == 200 and "_image" not in agent.json()
     assert client.post(f"/api/projects/{pid}/contact-sheet", json={"times": [-1]}).status_code == 400
     assert client.post(f"/api/projects/{pid}/contact-sheet", json={"times": [4000]}).status_code == 400
+
+
+@needs_ffmpeg
+def test_adaptive_native_sheet_detects_flat_color_cuts_and_preserves_source(services, media_dir, monkeypatch):
+    pid, source = _timeline(services, media_dir)
+    original_source_hash = hashlib.sha256((media_dir / "scenes.mp4").read_bytes()).hexdigest()
+    project_before = projects.doc(services, pid).model_dump(mode="json")
+    calls = []
+    native_render = sheets.runner.render_frame
+
+    def observed_render(*args, **kwargs):
+        calls.append((args[2], kwargs.get("width")))
+        return native_render(*args, **kwargs)
+
+    monkeypatch.setattr(sheets.runner, "render_frame", observed_render)
+    result = call_tool(services, "project_contact_sheet", {
+        "project": pid, "mode": "adaptive", "count": 8, "width": 128, "show": False})
+    policy = result["sampling_policy"]
+    frames = [row["frame"] for row in result["frames"]]
+    assert result["mode"] == "adaptive" and result["status"] == "complete"
+    assert policy["strategy"] == "bounded_native_color_and_pixel_change"
+    assert policy["candidate_frame_count"] <= 120
+    assert len(calls) == policy["candidate_frame_count"] + len(frames)
+    assert {25, 50, 75} <= set(policy["selected_change_frames"])
+    assert len(frames) <= 8 and len(frames) == len(set(frames))
+    for row in result["frames"]:
+        with Image.open(row["frame_path"]) as frame:
+            assert hashlib.sha256(frame.convert("RGB").tobytes()).hexdigest() == row["tile_rgb_sha256"]
+        assert row["sampling"]["kind"] in {"adaptive_change_sample", "adaptive_context_sample", "adaptive_coverage_sample"}
+    assert projects.doc(services, pid).model_dump(mode="json") == project_before
+    assert hashlib.sha256((media_dir / "scenes.mp4").read_bytes()).hexdigest() == original_source_hash
+    assert result["sources"][source["id"]]["sha256"] == original_source_hash
+    assert len(list((services.config.renders_dir / "frames").glob(f"{pid}-*-64.png"))) == 0
+    evidence = os.environ.get("LUMIERE_ADAPTIVE_EVIDENCE")
+    if evidence:
+        destination = Path(evidence)
+        destination.mkdir(parents=True, exist_ok=True)
+        artifacts = {}
+        for label, path in (("sheet.png", result["png_path"]), ("sheet.jpg", result["path"])):
+            target = destination / label
+            shutil.copy2(path, target)
+            artifacts[label] = {"path": str(target), "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+        for row in result["frames"]:
+            target = destination / f"frame-{row['frame']:04d}.png"
+            shutil.copy2(row["frame_path"], target)
+            artifacts[target.name] = {"path": str(target), "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+        (destination / "adaptive-proof.json").write_text(json.dumps({
+            "sampling_policy": policy, "selected_frames": frames, "source_sha256": original_source_hash,
+            "project_unchanged": projects.doc(services, pid).model_dump(mode="json") == project_before,
+            "source_unchanged": hashlib.sha256((media_dir / "scenes.mp4").read_bytes()).hexdigest() == original_source_hash,
+            "renderer_calls": len(calls), "artifacts": artifacts,
+        }, indent=2), encoding="utf-8")
+
+
+@needs_ffmpeg
+def test_adaptive_native_scan_samples_inside_a_crossfade(services, media_dir):
+    scene = media.import_path(services, str(media_dir / "scenes.mp4"))
+    pid = projects.create(services, "Adaptive dissolve", width=320, height=180, fps=25)["id"]
+    projects.edit(services, pid, [
+        {"op": "add_media", "media": scene["id"], "src_in": 0, "src_out": 1000},
+        {"op": "add_media", "media": scene["id"], "src_in": 2000, "src_out": 3000},
+    ])
+    second = projects.doc(services, pid).main_track().clips[1]
+    projects.edit(services, pid, [{"op": "transition", "clip": second.id, "type": "crossfade", "dur": 500}])
+    project = projects.doc(services, pid)
+    transition_clip = project.find(second.id)[1]
+    transition_start, transition_end = transition_clip.start, transition_clip.start + transition_clip.transition_in.dur
+    result = sheets.create(services, pid, mode="adaptive", count=4, width=128)
+    selected = result["sampling_policy"]["selected_change_frames"]
+    assert any(transition_start <= round(frame * 1000 / project.canvas.fps) <= transition_end
+               for frame in selected), (transition_start, transition_end, selected, result["sampling_policy"]["candidate_scores"])
+
+
+@needs_ffmpeg
+def test_adaptive_native_scan_handles_textured_motion_without_duplicate_samples(services, media_dir):
+    source_path = media_dir / "talk.mp4"
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    source = media.import_path(services, str(source_path))
+    pid = projects.create(services, "Adaptive textured movement", width=320, height=180, fps=25)["id"]
+    projects.edit(services, pid, [{"op": "add_media", "media": source["id"], "src_in": 1000, "src_out": 3000}])
+    result = sheets.create(services, pid, mode="adaptive", count=6, width=128)
+    frames = [row["frame"] for row in result["frames"]]
+    policy = result["sampling_policy"]
+    assert 2 <= len(frames) <= 6 and len(frames) == len(set(frames))
+    assert policy["candidate_frame_count"] <= 120
+    assert policy["detected_change_event_count"] >= 1
+    assert any((row["score"] or 0) >= policy["change_threshold"] for row in policy["candidate_scores"])
+    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+    assert result["sources"][source["id"]]["sha256"] == source_hash
 
 
 @needs_ffmpeg
@@ -209,6 +368,35 @@ def test_external_source_change_fails_and_publishes_no_sheet(services, media_dir
     with pytest.raises(LumiereError, match="source changed"):
         sheets.create(services, pid, times=[500], width=160)
     assert not list((services.config.renders_dir / "frames").glob("sheet*"))
+
+
+@needs_ffmpeg
+def test_adaptive_rejects_source_change_during_candidate_scan(services, media_dir, tmp_path, monkeypatch):
+    source = tmp_path / "adaptive-source.mp4"
+    source.write_bytes((media_dir / "scenes.mp4").read_bytes())
+    info = media.import_path(services, str(source))
+    pid = projects.create(services, "Adaptive source race", media=[info["id"]], width=320, height=180, fps=25)["id"]
+    original_render = sheets.runner.render_frame
+    mutated = False
+
+    def render(*args, **kwargs):
+        nonlocal mutated
+        path = original_render(*args, **kwargs)
+        if not mutated:
+            stat = source.stat()
+            data = bytearray(source.read_bytes())
+            data[-1] ^= 1
+            source.write_bytes(data)
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            mutated = True
+        return path
+
+    monkeypatch.setattr(sheets.runner, "render_frame", render)
+    with pytest.raises(LumiereError, match="source changed during adaptive sampling"):
+        sheets.create(services, pid, mode="adaptive", count=4, width=128)
+    frames = services.config.renders_dir / "frames"
+    assert not list(frames.glob("sheet*"))
+    assert not list(frames.glob(f"{pid}-*-64.png"))
 
 
 @needs_ffmpeg

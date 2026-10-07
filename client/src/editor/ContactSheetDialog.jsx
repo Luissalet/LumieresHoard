@@ -47,6 +47,7 @@ export default function ContactSheetDialog({ projectId, onClose }) {
           <select className="field" value={mode} onChange={(e) => setMode(e.target.value)} disabled={busy}>
             <option value="overview">{t("contact_sheet_overview")}</option>
             <option value="boundaries">{t("contact_sheet_boundaries")}</option>
+            <option value="adaptive">{t("contact_sheet_adaptive")}</option>
           </select>
         </label>
         <label className="field-label" style={{ display: "grid", gap: 5 }}>
@@ -59,6 +60,7 @@ export default function ContactSheetDialog({ projectId, onClose }) {
         </label>
       </form>
       {mode === "boundaries" && <p className="muted" style={{ margin: "-4px 0 14px", fontSize: 12 }}>{t("contact_sheet_boundary_help")}</p>}
+      {mode === "adaptive" && <p className="muted" style={{ margin: "-4px 0 14px", fontSize: 12 }}>{t("contact_sheet_adaptive_help")}</p>}
       {error && <div className="chip chip-err" role="alert" style={{ height: "auto", whiteSpace: "normal", padding: "8px 10px", marginBottom: 12 }}>{t("contact_sheet_error")}: {error}</div>}
       {result && <div className="contact-sheet-results" data-testid="contact-sheet-result" style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
         <div>

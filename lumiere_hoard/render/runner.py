@@ -485,7 +485,8 @@ def quality_check(svc: "Services", path: Path, expect_ms: int, W: int, H: int, *
 
 # ---------------------------------------------------------------- frames
 
-def render_frame(svc: "Services", project_id: str, t_ms: int, *, width: int = 0, fmt: str = "jpg") -> Path:
+def render_frame(svc: "Services", project_id: str, t_ms: int, *, width: int = 0, fmt: str = "jpg",
+                 output_path: Path | None = None) -> Path:
     """What the timeline shows at ``t_ms`` (exactly as the render would draw it), as an image."""
     p = project_store.doc(svc, project_id)
     if p.duration <= 0:
@@ -512,9 +513,12 @@ def render_frame(svc: "Services", project_id: str, t_ms: int, *, width: int = 0,
         f0 = C.frame_of_ms(t_ms, fps)
         g = C.chunk_graph(p, 0, f0, f0 + 1, out, rc.media, cx, ass_name)
         (work / "graph.txt").write_text(g.graph, encoding="utf-8")
-        frames_dir = svc.config.renders_dir / "frames"
-        frames_dir.mkdir(parents=True, exist_ok=True)
-        dest = frames_dir / f"{project_id}-{t_ms}-{W}.{fmt}"
+        if output_path is None:
+            frames_dir = svc.config.renders_dir / "frames"
+            dest = frames_dir / f"{project_id}-{t_ms}-{W}.{fmt}"
+        else:
+            dest = Path(output_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
         tools = svc.tools()
         args = [a for inp in g.inputs for a in inp] + _script_flag(tools, "graph.txt") + ["-map", f"[{g.out_label}]", "-frames:v", "1"]
         if fmt == "jpg":
