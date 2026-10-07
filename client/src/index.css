@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+@media (max-width: 720px) {
+  .contact-sheet-results { grid-template-columns: minmax(0, 1fr) !important; }
+}
+
 :root {
   color-scheme: dark;
   /* Everything below maps onto the shared Hoard theme (hoard-theme.css, palette html[data-hoard-app="lumiere"]). */

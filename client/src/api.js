@@ -71,6 +71,7 @@ export const api = {
   timelineImport: (body) => request("POST", "/api/projects/import-timeline", { body }),
   otioUrl: (id) => `/api/projects/${e(id)}/otio`,
   project: (id) => request("GET", `/api/projects/${e(id)}`),
+  projectContactSheet: (id, body) => request("POST", `/api/projects/${e(id)}/contact-sheet`, { body }),
   projectRename: (id, name) => request("PATCH", `/api/projects/${e(id)}`, { body: { name } }),
   projectDelete: (id) => request("DELETE", `/api/projects/${e(id)}`),
   edit: (id, body) => request("POST", `/api/projects/${e(id)}/edit`, { body }),

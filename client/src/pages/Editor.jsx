@@ -7,6 +7,7 @@ import ShortcutsDialog from "../components/ShortcutsDialog.jsx";
 import { useActions } from "../editor/actions.js";
 import { EditorCtx } from "../editor/EditorContext.js";
 import ExportDialog from "../editor/ExportDialog.jsx";
+import ContactSheetDialog from "../editor/ContactSheetDialog.jsx";
 import Inspector from "../editor/Inspector.jsx";
 import { Playback } from "../editor/playback.js";
 import Player from "../editor/Player.jsx";
@@ -34,7 +35,7 @@ const TABS = [
 
 const isTyping = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
 
-function TopBar({ ed, onExport, onJobs, onHelp }) {
+function TopBar({ ed, onExport, onContactSheet, onJobs, onHelp }) {
   const { t, presets, jobs } = useApp();
   const { view, doc } = ed;
   const [name, setName] = useState(view.name);
@@ -62,6 +63,7 @@ function TopBar({ ed, onExport, onJobs, onHelp }) {
         {jobs.active.length ? <span className="spinner" style={{ width: 11, height: 11 }} /> : <Icon name="activity" size={14} />}
         {t("jobs_n", { n: jobs.active.length })}
       </button>
+      <button type="button" className="btn btn-sm" onClick={onContactSheet} title={t("contact_sheet_title")} data-testid="contact-sheet-btn"><Icon name="grid" size={14} />{t("contact_sheet_short")}</button>
       <button type="button" className="btn btn-ghost btn-icon" onClick={onHelp} title={`${t("shortcuts")} (?)`} aria-label={t("shortcuts")}><Icon name="help" size={17} /></button>
       <button type="button" className="btn btn-primary" onClick={onExport} title="Ctrl+E" data-testid="export-btn"><Icon name="download" size={14} />{t("export")}</button>
     </div>
@@ -92,6 +94,7 @@ function EditorInner({ proj }) {
   const [leftTab, setLeftTab] = useState("media");
   const [bottomTab, setBottomTab] = useState("timeline");
   const [exportOpen, setExportOpen] = useState(false);
+  const [contactSheetOpen, setContactSheetOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [transcript, setTranscript] = useState(null);
@@ -226,7 +229,7 @@ function EditorInner({ proj }) {
   return (
     <EditorCtx.Provider value={ed}>
       <div className="ed">
-        <TopBar ed={ed} onExport={() => setExportOpen(true)} onJobs={() => setJobsOpen((v) => !v)} onHelp={() => setHelpOpen(true)} />
+        <TopBar ed={ed} onExport={() => setExportOpen(true)} onContactSheet={() => setContactSheetOpen(true)} onJobs={() => setJobsOpen((v) => !v)} onHelp={() => setHelpOpen(true)} />
         <AnalysisBanner analysis={proj.analysis} />
         <div className="ed-main">
           <div className="ed-left">
@@ -253,6 +256,7 @@ function EditorInner({ proj }) {
         </div>
         {jobsOpen ? <JobsDrawer onClose={() => setJobsOpen(false)} /> : null}
         {exportOpen ? <ExportDialog onClose={() => setExportOpen(false)} /> : null}
+        {contactSheetOpen ? <ContactSheetDialog projectId={projectId} onClose={() => setContactSheetOpen(false)} /> : null}
         {helpOpen ? <ShortcutsDialog onClose={() => setHelpOpen(false)} /> : null}
       </div>
     </EditorCtx.Provider>

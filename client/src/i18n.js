@@ -41,6 +41,7 @@ const es = {
   status_counts: "Contenido", status_counts_v: "medios {media} · proyectos {projects} · exportaciones {renders}", status_version: "Versión",
   // editor chrome
   project_name: "Nombre del proyecto", undo: "Deshacer", redo: "Rehacer", export: "Exportar", shortcuts: "Atajos de teclado",
+  contact_sheet_short: "Hoja", contact_sheet_title: "Hoja de contacto", contact_sheet_mode: "Vista", contact_sheet_overview: "Resumen", contact_sheet_boundaries: "A ambos lados de los cortes", contact_sheet_count: "Fotogramas", contact_sheet_tile_width: "Ancho de cada miniatura (px)", contact_sheet_make: "Crear hoja", contact_sheet_preview: "Hoja de contacto generada", contact_sheet_download_png: "Descargar hoja PNG", contact_sheet_manifest: "Descargar manifiesto", contact_sheet_open_html: "Abrir página de timecodes", contact_sheet_frames: "Fotogramas incluidos: {n}", contact_sheet_boundary_help: "Muestra fotogramas antes y después de los cortes de la secuencia.", contact_sheet_truncated: "La respuesta se ha limitado; consulta el manifiesto para los detalles.", contact_sheet_time_unknown: "Instante sin indicar", contact_sheet_error: "No se pudo crear la hoja",
   tab_media: "Medios", tab_text: "Texto", tab_transitions: "Transiciones", tab_effects: "Efectos", tab_captions: "Subtítulos", tab_assistant: "Asistente", tab_tools: "Herramientas",
   tab_timeline: "Línea de tiempo", tab_transcript: "Transcripción",
   // player
@@ -231,6 +232,7 @@ const en = {
   status_speech: "Speech engine", status_model: "Language model", status_unavailable: "Not available", status_encoder: "Encoder", status_data: "Data",
   status_counts: "Content", status_counts_v: "media {media} · projects {projects} · exports {renders}", status_version: "Version",
   project_name: "Project name", undo: "Undo", redo: "Redo", export: "Export", shortcuts: "Keyboard shortcuts",
+  contact_sheet_short: "Sheet", contact_sheet_title: "Contact sheet", contact_sheet_mode: "View", contact_sheet_overview: "Overview", contact_sheet_boundaries: "Both sides of cuts", contact_sheet_count: "Frames", contact_sheet_tile_width: "Tile width (px)", contact_sheet_make: "Create sheet", contact_sheet_preview: "Generated contact sheet", contact_sheet_download_png: "Download PNG sheet", contact_sheet_manifest: "Download manifest", contact_sheet_open_html: "Open timecode page", contact_sheet_frames: "Frames included: {n}", contact_sheet_boundary_help: "Shows frames before and after the sequence's edit cuts.", contact_sheet_truncated: "The response was limited; see the manifest for details.", contact_sheet_time_unknown: "Time not provided", contact_sheet_error: "Could not create the sheet",
   tab_media: "Media", tab_text: "Text", tab_transitions: "Transitions", tab_effects: "Effects", tab_captions: "Captions", tab_assistant: "Assistant", tab_tools: "Tools",
   tab_timeline: "Timeline", tab_transcript: "Transcript",
   play: "Play", pause: "Pause", prev_frame: "Previous frame", next_frame: "Next frame", exact_frame: "Exact frame",
