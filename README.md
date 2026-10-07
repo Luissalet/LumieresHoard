@@ -68,9 +68,13 @@ Settings (environment): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE
 ## Assistants (MCP)
 
 `project_contact_sheet` exports native, timecoded timeline frames as JPEG/PNG,
-portable HTML and a JSON provenance receipt. Choose evenly spaced frames,
-before/after main-track starts, or explicit milliseconds. Source and timeline
-changes during capture reject the sheet. [API, sampling and verified limits](docs/CONTACT-SHEETS.md).
+portable HTML and a JSON provenance receipt. The editor's **Sheet** menu offers
+Overview, Cuts and Adaptive. The API and MCP `mode` enum is
+`overview | boundaries | adaptive`: Overview samples a uniform timeline grid,
+boundaries samples before and at main-track clip starts, and Adaptive prioritizes
+visible changes in a bounded scan while keeping the timeline endpoints. Explicit
+millisecond samples are also supported. Source and timeline changes during
+capture reject the sheet. [API, sampling and verified limits](docs/CONTACT-SHEETS.md).
 
 `mcp_server.py` is a stdio MCP bridge with 55 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
 
