@@ -125,6 +125,8 @@ def export_project(svc: 'Services', project_id: str) -> dict:
                 _report(report, 'metadata_only', c.id, 'Title text/style uses Lumiere generator metadata; other editors may not render it.')
             else:
                 info = media.get(svc, c.media)
+                if track.kind == 'video' and info.get('has_audio') and not c.mute:
+                    _report(report,'metadata_only',c.id,'Embedded video sound remains in Lumiere metadata; external OTIO editors need a separate audio track to reproduce it.')
                 ref = S.ExternalReference(target_url=Path(info['path']).resolve().as_uri(),
                                           available_range=_range(0, info.get('duration_ms') or c.src_out, rate))
                 source_start = c.src_at(c.start+lead)
@@ -268,6 +270,9 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
                 if source_in < 0:
                     raise LumiereError('OTIO transition uses negative source handles.',code='unsupported_interchange')
                 c = Clip(media='pending',start=start, src_in=source_in, src_out=source_in+clock(length*speed), speed=speed, reverse=reverse)
+                # OTIO separates video and audio tracks. Native video clips can
+                # carry sound, so enabling that here would double split audio.
+                c.mute = track.kind == 'video'
                 if reverse:
                     raise LumiereError('External reverse clips require explicit source-range mapping; import is not yet supported.', code='unsupported_interchange')
                 if meta:

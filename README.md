@@ -121,7 +121,10 @@ items. FilmCraft sequence dimensions and sample rate are imported from its
 metadata; unrecognized external namespaces, including proprietary effects and
 framing, are reported rather than treated as preserved. Generic OTIO without
 canvas metadata uses the native 1920×1080 canvas and reports that approximation.
-Missing media leave gaps; external fractional times are rounded to the
+Missing media leave gaps. Imported standard video tracks are silent; their sound comes
+from OTIO audio tracks. Native embedded video sound round-trips as Lumiere
+metadata, but is not expanded into an external audio track on export.
+External fractional times are rounded to the
 native millisecond clock with the maximum rounding error reported. Other
 editors may not render Lumiere titles or appearance. Nested/trimmed compositions
 and external reverse clips are not yet supported, and are rejected before a
@@ -137,6 +140,7 @@ A different edit needs a different key; reusing one for different content return
 conflict. `rev` is the original result revision and `current_rev` reports the current
 project revision. A retry after Undo returns the receipt without redoing the edit.
 Calls without a key retain the normal behavior of applying each requested edit.
+
 
 ## Shared services (HoardLink 0.8.1)
 

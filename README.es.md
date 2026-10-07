@@ -120,7 +120,11 @@ Cada operación informa de valores conservados solo como metadatos, aproximados,
 no compatibles u omitidos. Se importan las dimensiones y la frecuencia de audio
 de los metadatos de FilmCraft; los efectos y encuadres externos sin equivalencia
 se indican como no conservados. OTIO genérico sin dimensiones usa un lienzo
-1920×1080 e informa de esa aproximación. Los medios ausentes dejan huecos. Los tiempos
+1920×1080 e informa de esa aproximación. Las pistas de vídeo OTIO externas son
+silenciosas: el sonido procede de sus pistas de audio. El sonido integrado en
+clips de vídeo nativos se recupera mediante metadatos de Lumiere, pero la
+exportación no lo expande en una pista de audio externa. Los medios ausentes
+dejan huecos. Los tiempos
 fraccionarios externos se redondean al reloj nativo de milisegundos, indicando
 el error máximo. Otros editores pueden no dibujar los rótulos o efectos de
 Lumiere. Las composiciones anidadas/recortadas y los clips externos invertidos

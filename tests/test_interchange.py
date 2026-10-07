@@ -163,3 +163,19 @@ def test_filmcraft_canvas_and_unmapped_appearance_are_reported(services,media_di
     assert (canvas.width,canvas.height,canvas.sample_rate)==(640,360,44100)
     assert any(r['status']=='unsupported' and 'filmcraft' in r['message'] for r in result['report'])
     assert any(r['item']=='canvas' and 'dimensions' in r['message'] for r in result['report'])
+
+
+def test_external_split_audio_is_not_mixed_twice(services,media_dir,tmp_path):
+    from lumiere_hoard.render.compiler import audio_graph, MediaRef
+    reference=lambda: S.ExternalReference(target_url=Path(media_dir/'talk.mp4').as_uri())
+    span=lambda: O.TimeRange(O.RationalTime(0,24),O.RationalTime(48,24))
+    doc=S.Timeline(tracks=[S.Track(kind=S.TrackKind.Video,children=[S.Clip(media_reference=reference(),source_range=span())]),
+                           S.Track(kind=S.TrackKind.Audio,children=[S.Clip(media_reference=reference(),source_range=span())])])
+    result=interchange.import_project(services,write(tmp_path,otio.adapters.write_to_string(doc,adapter_name='otio_json')))
+    p=projects.doc(services,result['id'])
+    assert p.tracks[0].clips[0].mute and not p.tracks[1].clips[0].mute
+    def lookup(mid):
+        info=media.get(services,mid)
+        return MediaRef(**{k:info[k] for k in ('id','path','kind','width','height','has_audio','has_video','duration_ms')})
+    graph=audio_graph(p,p.duration,lookup,lambda mid,stream:'master.flac')
+    assert graph.clips==1, 'The video and separate audio track must not double the mix.'
