@@ -3,6 +3,8 @@ import { api } from "../api.js";
 import { go, useApp } from "../App.jsx";
 import { ConfirmButton, Field, Icon, Modal, Spinner } from "../components/ui.jsx";
 import ImportDialog from "../components/ImportDialog.jsx";
+import TimelineImportDialog from "../components/TimelineImportDialog.jsx";
+import CompositionsSection from "../components/CompositionsSection.jsx";
 import { DropUpload, MediaThumb, useMediaLibrary, useUploadPicker } from "../components/Media.jsx";
 import { SaveTemplateDialog, TemplatesSection } from "../components/Templates.jsx";
 import { fmtBytes, fmtDate, fmtMs } from "../editor/time.js";
@@ -158,6 +160,8 @@ export default function Home() {
   const [projects, setProjects] = useState(null);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importingTimeline, setImportingTimeline] = useState(false);
+  const [creativeMediaId, setCreativeMediaId] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(null);
   const [tplKey, setTplKey] = useState(0);
   const { media, refresh: refreshMedia } = useMediaLibrary();
@@ -173,7 +177,10 @@ export default function Home() {
       <div className="page-inner">
         <div className="section-title" style={{ marginTop: 0 }}>
           <h2>{t("nav_projects")}</h2>
-          <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}><Icon name="plus" size={14} />{t("new_project")}</button>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button type="button" className="btn" onClick={() => setImportingTimeline(true)} data-testid="timeline-import-open">{t("timeline_import")}</button>
+            <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}><Icon name="plus" size={14} />{t("new_project")}</button>
+          </div>
         </div>
         {!projects ? <Spinner /> : projects.length === 0 ? (
           <div className="panel" style={{ padding: 28, textAlign: "center" }}>
@@ -205,8 +212,16 @@ export default function Home() {
             </div>
           )}
         </DropUpload>
+        <Field label={t("creative_video_source")}>
+          <select className="field" value={creativeMediaId} onChange={e => setCreativeMediaId(e.target.value)}>
+            <option value="">{t("creative_video_pick")}</option>
+            {(media || []).filter(item => item.kind === "video").map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </Field>
+        <CompositionsSection mediaId={creativeMediaId || null} />
       </div>
       {creating ? <NewProject onClose={() => setCreating(false)} /> : null}
+      {importingTimeline ? <TimelineImportDialog onClose={() => { setImportingTimeline(false); load(); }} /> : null}
       {savingTemplate ? <SaveTemplateDialog project={savingTemplate} onClose={() => setSavingTemplate(null)} onSaved={() => { setTplKey((k) => k + 1); load(); }} /> : null}
       {importing ? <ImportDialog onClose={() => setImporting(false)} onImported={refreshMedia} /> : null}
     </div>

@@ -67,7 +67,7 @@ Settings (environment): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE
 
 ## Assistants (MCP)
 
-`mcp_server.py` is a stdio MCP bridge with 49 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
+`mcp_server.py` is a stdio MCP bridge with 54 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -126,8 +126,25 @@ editable native transform. Colors and other effects still require visual review.
 Generic OTIO without
 canvas metadata uses the native 1920×1080 canvas and reports that approximation.
 Missing media leave gaps. Imported standard video tracks are silent; their sound comes
-from OTIO audio tracks. Native embedded video sound round-trips as Lumiere
-metadata, but is not expanded into an external audio track on export.
+from OTIO audio tracks. Export creates explicit sound lanes for audio carried by
+native video clips, including sound on hidden picture tracks. Linked lossless
+48 kHz stereo FLAC masters preserve the selected stream and the editor's channel
+mixing; `audio_sources` lists the files the OTIO references. Keep them with the
+referenced video media when moving a montage. FilmCraft clip and track gains
+are mapped; fades, ducking and automation remain metadata unless an editor
+understands them. No original media is modified.
+
+An unchanged reimport restores the native tracks and IDs without doubling
+sound. Moving, muting, deleting or changing derived sound keeps the real
+external audio lanes and mutes the corresponding native picture sound. Offline
+picture does not discard an available audio master. Gain edits in FilmCraft
+take precedence over the exported gain; unchanged gain metadata does not
+overwrite an intentional edit of Lumiere sound metadata.
+
+The Projects page imports OTIO, FCP7 XML and CMX EDL through **Import montage**.
+The export dialog downloads an **Editable montage (.otio)**. The same import
+operation is available at `POST /api/projects/import-timeline` with
+`{path, format?: "auto" | "otio" | "fcpxml" | "edl", title?, media_dirs?, fps?}`.
 External fractional times are rounded to the
 native millisecond clock with the maximum rounding error reported. Other
 editors may not render Lumiere titles or appearance. Nested/trimmed compositions
@@ -135,6 +152,12 @@ and external reverse clips are not yet supported, and are rejected before a
 project is created. This is not a claim of full editor interchange parity.
 
 ## Durable timeline edits over MCP
+
+The Projects page also contains the EffectCraft/FilmCraft creative workshop:
+editable title compositions with opacity keyframes and previews, plus saved
+FilmCraft sequences and actual H264 exports from copied library media. Native
+catalogues and batch dispatch are available over MCP. See
+[creative engines](docs/CREATIVE_ENGINES.md) for setup and exact batch semantics.
 
 Pass an optional `request_id` to `timeline_edit` or `POST /api/projects/{id}/edit`.
 Retry the same key with identical `ops`, `label` and `base_rev` after an interrupted

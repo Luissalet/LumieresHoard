@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import time
+from threading import Lock
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
     from .services import Services
 
 log = logging.getLogger("lumiere.media")
+_MASTER_LOCK_GUARD = Lock()
+_MASTER_LOCKS: dict[Path, Any] = {}
 
 PROXY_SHORT_SIDE = 540
 SPRITE_TILE_W = 160
@@ -356,12 +359,15 @@ def audio_master(svc: "Services", media_id: str, stream: int = 0, handle=None) -
     info = get(svc, media_id)
     cdir = cache_dir(svc, media_id)
     out = cdir / f"a{stream}.flac"
-    if out.exists() and out.stat().st_mtime >= Path(info["path"]).stat().st_mtime:
-        return out
-    tmp = cdir / f"a{stream}.tmp.flac"
-    ff.run(svc.tools(), ["-i", info["path"], "-map", f"0:a:{stream}", "-vn", "-ac", "2", "-ar", "48000", "-c:a", "flac", "-compression_level", "2",
-                         str(tmp)], duration_ms=info["duration_ms"], handle=handle)
-    os.replace(tmp, out)
+    with _MASTER_LOCK_GUARD:
+        lock=_MASTER_LOCKS.setdefault(out.resolve(),Lock())
+    with lock:
+        if out.exists() and out.stat().st_mtime >= Path(info["path"]).stat().st_mtime:
+            return out
+        tmp = cdir / f"a{stream}.tmp.flac"
+        ff.run(svc.tools(), ["-i", info["path"], "-map", f"0:a:{stream}", "-vn", "-ac", "2", "-ar", "48000", "-c:a", "flac", "-compression_level", "2",
+                             str(tmp)], duration_ms=info["duration_ms"], handle=handle)
+        os.replace(tmp, out)
     return out
 
 

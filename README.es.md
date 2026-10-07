@@ -67,7 +67,7 @@ Ajustes (entorno): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE_ROOT
 
 ## Asistentes (MCP)
 
-`mcp_server.py` es un puente MCP por stdio con 49 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
+`mcp_server.py` es un puente MCP por stdio con 54 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -125,10 +125,27 @@ en una transformación editable con ancla centrada y píxeles cuadrados. Los
 encuadres animados/no uniformes, colores y demás efectos siguen pendientes.
 OTIO genérico sin dimensiones usa un lienzo
 1920×1080 e informa de esa aproximación. Las pistas de vídeo OTIO externas son
-silenciosas: el sonido procede de sus pistas de audio. El sonido integrado en
-clips de vídeo nativos se recupera mediante metadatos de Lumiere, pero la
-exportación no lo expande en una pista de audio externa. Los medios ausentes
-dejan huecos. Los tiempos
+silenciosas: el sonido procede de sus pistas de audio. La exportación crea pistas
+de sonido independientes para los vídeos, incluidas las pistas de imagen ocultas.
+Los másteres FLAC enlazados, sin pérdidas, a 48 kHz y estéreo conservan el canal
+seleccionado y la mezcla del editor; `audio_sources` enumera sus archivos.
+Consérvalos con los vídeos al mover un montaje. Se convierten las ganancias de
+clip y pista de FilmCraft; fundidos, ducking y automatización siguen en metadatos.
+Los originales no se modifican.
+
+Una reimportación sin cambios recupera las pistas e identificadores nativos sin
+duplicar sonido. Mover, silenciar, borrar o cambiar el audio derivado conserva
+las pistas externas reales y silencia el sonido de la imagen correspondiente.
+Si la imagen no está disponible, se conserva el máster de audio existente.
+La ganancia modificada en FilmCraft tiene prioridad sobre la exportada; una
+ganancia externa intacta no sobrescribe un cambio intencionado en los metadatos
+de sonido de Lumiere.
+
+**Importar montaje** en Proyectos admite OTIO, FCP7 XML y CMX EDL. El diálogo de
+exportación descarga **Montaje editable (.otio)**. La misma importación se
+expone en `POST /api/projects/import-timeline` con
+`{path, format?: "auto" | "otio" | "fcpxml" | "edl", title?, media_dirs?, fps?}`.
+Los medios ausentes dejan huecos. Los tiempos
 fraccionarios externos se redondean al reloj nativo de milisegundos, indicando
 el error máximo. Otros editores pueden no dibujar los rótulos o efectos de
 Lumiere. Las composiciones anidadas/recortadas y los clips externos invertidos
@@ -136,6 +153,13 @@ aún no son compatibles; se rechazan antes de crear un proyecto. Esto no implica
 paridad completa de intercambio con otros editores.
 
 ## Ediciones duraderas del montaje por MCP
+
+Proyectos también incluye el taller EffectCraft/FilmCraft: composiciones de
+rótulos editables con keyframes de opacidad y vistas previas, además de secuencias
+FilmCraft y exportaciones H264 reales a partir de copias de medios. El catálogo
+y despacho por lotes están disponibles por MCP. Consulta
+[motores creativos](docs/CREATIVE_ENGINES.es.md) para configurar los motores y
+conocer la semántica exacta de cada lote.
 
 Pasa `request_id` opcional a `timeline_edit` o `POST /api/projects/{id}/edit`.
 Repite la misma clave con `ops`, `label` y `base_rev` idénticos tras una respuesta

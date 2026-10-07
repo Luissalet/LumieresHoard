@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Literal
+from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
-from .. import commands, derive, multicam
+from .. import commands, derive, multicam, timeline_import
+from ..errors import LumiereError
 from .. import subtitles as subs
 from .. import plan as plan_mod
 from .. import projects as store
@@ -25,6 +27,14 @@ class CreateBody(BaseModel):
     media: list[str] = Field(default_factory=list)
     from_project: Optional[str] = None
     template: bool = False
+
+
+class ImportTimelineBody(BaseModel):
+    path: str = Field(...,min_length=1,max_length=2000)
+    format: Literal['otio','fcpxml','edl','auto'] = 'auto'
+    title: str = Field('',max_length=120)
+    media_dirs: list[str] = Field(default_factory=list)
+    fps: Optional[float] = Field(None,ge=1,le=240)
 
 
 class PatchBody(BaseModel):
@@ -141,6 +151,15 @@ def create(request: Request, body: CreateBody):
 @router.get("/projects/{project_id}")
 def get(request: Request, project_id: str):
     return store.view(services(request), project_id)
+
+
+@router.post('/projects/import-timeline')
+def import_timeline(request: Request,body: ImportTimelineBody):
+    fmt=body.format
+    if fmt=='auto':fmt={'.otio':'otio','.xml':'fcpxml','.edl':'edl'}.get(Path(body.path).suffix.lower())
+    if not fmt:raise LumiereError('Choose an OTIO, FCP7 XML or EDL timeline.',code='bad_request')
+    return timeline_import.project_from_timeline(services(request),title=body.title,media_dirs=body.media_dirs,fps=body.fps,
+                                                  **{fmt+'_path':body.path},actor='ui')
 
 
 @router.patch("/projects/{project_id}")

@@ -102,6 +102,7 @@ export default function ExportDialog({ onClose }) {
       footer={<><button type="button" className="btn" onClick={onClose}>{t("close")}</button><button type="button" className="btn btn-primary" disabled={!!running || ed.duration === 0 || noFormats} onClick={start}>{running ? <Spinner /> : <Icon name="download" size={14} />}{t("export_start")}</button></>}>
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 22 }}>
         <div>
+          <a className="btn" href={api.otioUrl(ed.projectId)} style={{ marginBottom: 14 }} data-testid="export-otio"><Icon name="download" size={14} />{t("export_otio")}</a>
           <span className="label">{t("export_preset")}</span>
           <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
             {(presets?.export_presets || []).map((p) => (

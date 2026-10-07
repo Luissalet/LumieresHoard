@@ -875,7 +875,72 @@ def run_settings(svc: Services, a: SettingsArgs) -> dict:
     return svc.update_settings(a.patch) if a.patch else svc.get_settings()
 
 
+class CreativeToolsArgs(BaseModel):
+    engine: Literal['effectcraft','filmcraft']
+
+
+class CreativeCallArgs(BaseModel):
+    creative_id: str = Field(...,min_length=32,max_length=32)
+    calls: list[dict[str,Any]] = Field(...,min_length=1,max_length=32)
+
+
+class CreativeRenderArgs(BaseModel):
+    creative_id: str = Field(...,pattern=r'^[0-9a-f]{32}$')
+
+
+class CreativeTitleArgs(BaseModel):
+    text: str = Field(...,min_length=1,max_length=300)
+    width: int = Field(1280,ge=16,le=8192)
+    height: int = Field(720,ge=16,le=8192)
+    fps: float = Field(24,ge=1,le=120)
+    duration: float = Field(3,ge=.5,le=30)
+    project_id: Optional[str] = None
+
+
+class CreativeFilmArgs(BaseModel):
+    media_id: str = MediaId
+    project_id: Optional[str] = None
+    width: Optional[int] = Field(None,ge=16,le=8192)
+    height: Optional[int] = Field(None,ge=16,le=8192)
+    fps: Optional[float] = Field(None,ge=1,le=120)
+
+
+def _creative(svc: Services):
+    from .creative_engines import CreativeEngines
+    return CreativeEngines(svc.config.data_dir,port=svc.config.port)
+
+
+def run_creative_tools(svc: Services,a: CreativeToolsArgs):
+    return _creative(svc).tools(a.engine)
+
+
+def run_creative_call(svc: Services,a: CreativeCallArgs):
+    return _creative(svc).call(a.creative_id,a.calls)
+
+
+def run_creative_render(svc: Services,a: CreativeRenderArgs):
+    return _creative(svc).render_title_video(a.creative_id)
+
+
+def run_creative_title(svc: Services,a: CreativeTitleArgs):
+    if a.project_id:project_store.doc(svc,a.project_id)
+    return _creative(svc).create_title_card(**a.model_dump())
+
+
+def run_creative_film(svc: Services,a: CreativeFilmArgs):
+    if a.project_id:project_store.doc(svc,a.project_id)
+    info=media_store.get(svc,a.media_id)
+    if info['kind']!='video' or not info['has_video']:raise LumiereError('FilmCraft needs a video source.')
+    return _creative(svc).create_film_sequence(Path(info['path']),source_media_id=a.media_id,width=a.width or info['width'],
+                                              height=a.height or info['height'],fps=a.fps or info['fps'],project_id=a.project_id)
+
+
 TOOLS: list[Tool] = [
+    Tool('creative_render_title_video','Render an editable EffectCraft title to verified H264 video. Renderizar cartela animada.\nReturns actual video path, metadata and media_receive_url. Keywords: animation, render title, mp4, motion graphics.',CreativeRenderArgs,_ann(False,False,True),run_creative_render),
+    Tool('creative_tools','Discover full EffectCraft or FilmCraft MCP schemas. Herramientas nativas.\nKeywords: motion graphics, layers, compositing, filmcraft, effectcraft.',CreativeToolsArgs,_ann(True),run_creative_tools),
+    Tool('creative_call','Run native MCP calls on a saved creative project. Ejecutar herramientas nativas.\nEach batch reopens/saves; in-memory selection and undo do not persist between batches.\nKeywords: effects, animation, layers, native tools.',CreativeCallArgs,_ann(False,True,False),run_creative_call),
+    Tool('creative_title_card','Create an editable EffectCraft title with keyframes and PNG preview. Cartela editable.\nNo encoded video render is implied. Keywords: title, keyframes, text animation.',CreativeTitleArgs,_ann(False,True,False),run_creative_title),
+    Tool('creative_film_sequence','Create a FilmCraft sequence from a video copy and export H264 MP4. Secuencia nativa.\nThe original source is preserved. Keywords: native video editor, sequence, video export.',CreativeFilmArgs,_ann(False,True,False),run_creative_film),
     Tool("lumiere_status", "Video editor status: ffmpeg, GPU encoder, speech model, jobs. Estado del editor de vídeo.\n"
          "Sinónimos: estado, capacidades, qué puede hacer.\nKeywords: status, video editor, editor de vídeo.", Empty, _ann(True), run_status),
     Tool("media_import", "Import a video, audio or image file (or a folder) by path; nothing is copied. Importar vídeo.\n"
@@ -985,7 +1050,8 @@ TOOLS: list[Tool] = [
          "Family import: used by sibling apps through the hub. Sinónimos: importar desde otra app, pasar vídeo, enviar a Lumiere.\n"
          "Keywords: receive media, family, hub, import from app, send to editor.", MediaReceiveArgs, _ann(False, False, True), run_media_receive),
     Tool("project_export_otio", "Export a multitrack montage as OpenTimelineIO. Exportar montaje OTIO.\n"
-         "Standard clips, tracks, gaps, dissolves and markers; appearance stays in Lumiere metadata. Returns an actual file and interoperability report. "
+         "Standard clips, tracks, gaps, dissolves and markers, with explicit source-sound audio tracks and lossless stereo files. "
+         "Returns native counts, OTIO counts, audio_sources and a real file/report. Untouched imports coalesce source sound; external audio edits stay independent. "
          "Nested sequences are not supported. Keywords: otio, export timeline, interchange, editable montage.",
          ProjectExportOtioArgs, _ann(False, False, True), run_project_export_otio),
     Tool("project_from_timeline", "Open an edit made elsewhere (FCP7 XML, EDL, OTIO or plan) as a project. Proyecto desde línea de tiempo.\n"

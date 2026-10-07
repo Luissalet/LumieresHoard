@@ -1,5 +1,9 @@
 // UI strings. Spanish (Spain) is the default; English is used when the browser language is English.
 const es = {
+  creative_video_source: "Vídeo para el taller creativo", creative_video_pick: "Elige un vídeo de la biblioteca…",
+  timeline_import: "Importar montaje…", timeline_open: "Abrir montaje", timeline_path: "Ruta del archivo de montaje", timeline_format: "Formato",
+  timeline_name_auto: "Nombre del archivo original", timeline_media_dirs: "Carpetas de los medios (opcional)", timeline_media_dirs_help: "Una carpeta por línea, si los vídeos o sonidos han cambiado de lugar.",
+  timeline_imported: "Montaje importado: {tracks} pistas, {clips} clips.", timeline_import_report: "Detalles del intercambio", export_otio: "Montaje editable (.otio)",
   // navigation / general
   nav_projects: "Proyectos", nav_settings: "Ajustes", back: "Volver", loading: "Cargando…", network_error: "No se puede conectar con la aplicación.",
   cancel: "Cancelar", close: "Cerrar", confirm_delete: "Confirmar", delete: "Borrar", rename: "Renombrar", create: "Crear", save: "Guardar",
@@ -191,6 +195,10 @@ copied_n: "{n} clips copiados", copied_n_1: "1 clip copiado", pasted_n: "{n} cli
 };
 
 const en = {
+  creative_video_source: "Video for the creative workshop", creative_video_pick: "Choose a library video…",
+  timeline_import: "Import montage…", timeline_open: "Open montage", timeline_path: "Timeline file path", timeline_format: "Format",
+  timeline_name_auto: "Original file name", timeline_media_dirs: "Media folders (optional)", timeline_media_dirs_help: "One folder per line, if the video or audio files have moved.",
+  timeline_imported: "Imported montage: {tracks} tracks, {clips} clips.", timeline_import_report: "Interchange details", export_otio: "Editable montage (.otio)",
   nav_projects: "Projects", nav_settings: "Settings", back: "Back", loading: "Loading…", network_error: "Cannot reach the application.",
   cancel: "Cancel", close: "Close", confirm_delete: "Confirm", delete: "Delete", rename: "Rename", create: "Create", save: "Save",
   apply: "Apply", discard: "Discard", remove: "Remove", search: "Search…", all: "All", yes: "Yes", no: "No", on: "On", off: "Off",

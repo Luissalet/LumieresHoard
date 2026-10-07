@@ -42,11 +42,13 @@ def test_real_serializer_roundtrip_all_tracks_and_render(services,media_dir,tmp_
     pid,before=montage(services,media_dir)
     exported=interchange.export_project(services,pid)
     parsed=otio.adapters.read_from_string(exported['otio'],adapter_name='otio_json')
-    assert len(parsed.tracks)==4 and parsed.tracks[0][1].schema_name()=='Transition'
+    assert len(parsed.tracks)==6 and exported['tracks']==4 and exported['derived_audio_tracks']==2
+    assert parsed.tracks[0][1].schema_name()=='Transition'
     assert parsed.tracks[0].duration().to_seconds()==pytest.approx(3.5)
     assert parsed.tracks[0][0].visible_range().duration.to_seconds()==pytest.approx(2)
     assert parsed.tracks[0][2].visible_range().duration.to_seconds()==pytest.approx(2)
     assert parsed.tracks[2][0].schema_name()=='Gap'
+    assert parsed.tracks.markers[0].color==S.MarkerColor.ORANGE
     result=interchange.import_project(services,write(tmp_path,exported['otio']))
     after=projects.doc(services,result['id'])
     assert after.dump()==before.dump()
@@ -79,6 +81,7 @@ def test_external_otio_relative_refs_missing_gap_transition_and_fractional_rate(
     assert [(c.start,c.src_in,c.src_out) for c in p.tracks[0].clips]==[(500,1001,2753),(1752,1752,3504)]
     assert p.tracks[0].clips[1].transition_in.dur==500
     assert p.markers[0].t==42
+    assert p.markers[0].color=='#FF0000' and p.markers[0].kind=='note'
     statuses={r['status'] for r in result['report']}
     assert {'omitted','approximated','unsupported'} <= statuses
 

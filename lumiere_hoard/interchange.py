@@ -26,6 +26,18 @@ if TYPE_CHECKING:
 META = 'lumiere'
 S = otio.schema
 O = otio.opentime
+MARKER_COLORS={'BLACK':'#000000','WHITE':'#FFFFFF','RED':'#FF0000','PINK':'#FF69B4','ORANGE':'#FFA500',
+               'YELLOW':'#FFFF00','GREEN':'#00FF00','CYAN':'#00FFFF','BLUE':'#0000FF','PURPLE':'#800080','MAGENTA':'#FF00FF'}
+
+
+def _standard_marker_color(color: str) -> str:
+    rgb=tuple(int(color[i:i+2],16) for i in (1,3,5))
+    return min(MARKER_COLORS,key=lambda name:sum((a-b)**2 for a,b in zip(rgb,tuple(int(MARKER_COLORS[name][i:i+2],16) for i in (1,3,5)))))
+
+
+def _native_marker(marker: Any,time: int) -> Marker:
+    data=_json(marker.metadata.get(META,{})).get('marker',{})
+    return Marker.model_validate({'color':MARKER_COLORS.get(marker.color,'#F5B700'),**data,'t':time,'label':marker.name[:120]})
 
 
 def _json(value: Any) -> Any:
@@ -55,6 +67,10 @@ def _report(report: list, status: str, item: str, message: str) -> None:
 def _foreign_metadata(report: list, node: Any, item: str) -> None:
     for namespace in node.metadata:
         if namespace != META:
+            own=_json(node.metadata.get(META,{}))
+            foreign=_json(node.metadata[namespace])
+            if namespace=='filmcraft' and own.get('filmcraft_sound_adapter')==1 and isinstance(foreign,dict) and set(foreign)<={'gain_db','volume_db'}:
+                continue
             _report(report, 'unsupported', item,
                     f'External metadata namespace {namespace} is not fully mapped; unmapped appearance/audio/settings may differ. Keep the source OTIO file.')
 
@@ -102,6 +118,7 @@ def _signature(node: Any, position: float, lead: float, tail: float) -> dict:
             'generator': _json(ref.parameters) if isinstance(ref,S.GeneratorReference) else {},
             'enabled': node.enabled,
             'transition': previous.transition_type if isinstance(previous,S.Transition) else '',
+            'foreign_gain': _json(node.metadata.get('filmcraft',{})).get('gain_db'),
             'effects': otio.adapters.write_to_string(S.SerializableCollection(children=list(node.effects)), adapter_name='otio_json')}
 
 
@@ -121,11 +138,16 @@ def export_project(svc: 'Services', project_id: str) -> dict:
     refs = {mid: media.get(svc, mid)['path'] for mid in p.media_ids() | {a.media for g in p.multicams for a in g.angles}}
     timeline.metadata[META] = {'version': 1, 'settings': settings, 'media': refs}
     rate = p.canvas.fps
+    sound_files=set()
     timeline.global_start_time = _time(0, rate)
     for track in p.tracks:
         native_track = track.model_dump(exclude={'clips'})
         out = S.Track(name=track.name, kind=S.TrackKind.Audio if track.kind == 'audio' else S.TrackKind.Video)
         out.metadata[META] = {'version': 1, 'track': native_track}
+        if track.kind=='audio':
+            out.metadata['filmcraft']={'volume_db':track.volume_db}
+            out.metadata[META]['filmcraft_sound_adapter']=1
+            out.metadata[META]['filmcraft_volume_at_export']=track.volume_db
         out.enabled = not (track.muted or track.hidden)
         if track.volume_db or track.duck:
             _report(report,'metadata_only',track.id,'Track volume and ducking remain Lumiere metadata.')
@@ -157,10 +179,12 @@ def export_project(svc: 'Services', project_id: str) -> dict:
                 _report(report, 'metadata_only', c.id, 'Title text/style uses Lumiere generator metadata; other editors may not render it.')
             else:
                 info = media.get(svc, c.media)
-                if track.kind == 'video' and info.get('has_audio') and not c.mute:
-                    _report(report,'metadata_only',c.id,'Embedded video sound remains in Lumiere metadata; external OTIO editors need a separate audio track to reproduce it.')
                 ref = S.ExternalReference(target_url=Path(info['path']).resolve().as_uri(),
                                           available_range=_range(0, info.get('duration_ms') or c.src_out, rate))
+                if track.kind=='audio' and info.get('has_audio'):
+                    master=media.audio_master(svc,c.media,c.audio_stream)
+                    sound_files.add(str(master))
+                    ref.target_url=master.resolve().as_uri()
                 source_start = c.src_at(c.start+lead)
             node = S.Clip(name=c.label or (c.text if c.type == 'text' else info['name']), media_reference=ref,
                           source_range=_range(source_start, length, rate))
@@ -171,22 +195,38 @@ def export_project(svc: 'Services', project_id: str) -> dict:
             if c.filters or c.keyframes or c.mask or c.reframe or c.speed_keys or c.transform != Transform() or c.crop != Crop() or c.volume_db or c.mute or c.fade_in or c.fade_out or c.audio_fade_in or c.audio_fade_out:
                 _report(report, 'metadata_only', c.id, 'Appearance/audio/keyframes or speed ramps remain editable in Lumiere metadata; external rendering is editor-dependent.')
             out.append(node)
+            if track.kind=='audio':node.metadata['filmcraft']={'gain_db':c.volume_db}
             node.metadata[META] = {'version': 1, 'clip': c.model_dump(), 'name':node.name, 'signature': _signature(node, position, lead, tail)}
+            if track.kind=='audio':
+                node.metadata[META]['audio_original_source']=c.media
+                node.metadata[META]['filmcraft_sound_adapter']=1
+                node.metadata[META]['filmcraft_gain_at_export']=c.volume_db
             if c.transition_in and i not in transitions:
                 _report(report,'metadata_only',c.id,'Non-overlapping incoming transition is retained in metadata.')
             cursor = position + length
         timeline.tracks.append(out)
+    from .interchange_audio import derive_audio
+    derived_audio=derive_audio(timeline,svc,report)
     for marker in p.markers:
-        timeline.tracks.markers.append(S.Marker(name=marker.label, marked_range=_range(marker.t, 0, rate),
+        timeline.tracks.markers.append(S.Marker(name=marker.label,color=_standard_marker_color(marker.color),marked_range=_range(marker.t, 0, rate),
                                                metadata={META: {'marker': marker.model_dump()}}))
+        _report(report,'metadata_only',marker.id,'Marker kind and exact hex color remain Lumiere metadata; standard OTIO carries its name, time and nearest named color.')
     if p.captions.enabled or p.multicams or p.notes or p.canvas.background != '#000000':
         _report(report, 'metadata_only', project_id, 'Captions, multicam groups, notes and canvas settings are Lumiere metadata, not generic OTIO rendering instructions.')
     return {'otio': otio.adapters.write_to_string(timeline, adapter_name='otio_json'), 'report': report,
-            'tracks': len(p.tracks), 'clips': sum(len(t.clips) for t in p.tracks), 'fps': rate}
+            'tracks': len(p.tracks), 'clips': sum(len(t.clips) for t in p.tracks), 'fps': rate,
+            'otio_tracks':len(timeline.tracks),'derived_audio_tracks':derived_audio['tracks'],'audio_sources':sorted(sound_files|set(derived_audio['files']))}
 
 
 def _close(a: dict, b: dict) -> bool:
-    return a.keys() == b.keys() and all(abs(a[k]-b[k]) < .001 if isinstance(b[k], (int,float)) else a[k] == b[k] for k in b)
+    if 'foreign_gain' not in a and b.get('foreign_gain') is None:
+        a={**a,'foreign_gain':None}  # Earlier v1 snapshots had no target-editor gain field.
+    if a.keys()!=b.keys():return False
+    for key,value in b.items():
+        if isinstance(value,(int,float)) and not isinstance(value,bool):
+            if not isinstance(a[key],(int,float)) or isinstance(a[key],bool) or not math.isclose(a[key],value,rel_tol=0,abs_tol=.001):return False
+        elif a[key]!=value:return False
+    return True
 
 
 def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: list[str] | None = None, actor: str = 'family') -> dict:
@@ -214,6 +254,8 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
     if not math.isfinite(rate) or not 1 <= rate <= 240:
         raise LumiereError('OTIO frame rate must be between 1 and 240.', code='bad_request')
     report: list[dict] = []
+    from .interchange_audio import classify_audio,restore_derived_audio
+    skip_audio,mute_video=classify_audio(timeline,native,report,svc,where.parent)
     _foreign_metadata(report,timeline,'timeline')
     for effect in timeline.tracks.effects:
         _report(report,'unsupported','timeline',f'Stack effect {effect.name or effect.schema_name()} is not applied.')
@@ -241,6 +283,7 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
 
     count = 0
     for ti, source in enumerate(timeline.tracks):
+        if ti in skip_audio:continue
         if not isinstance(source,S.Track) or source.source_range is not None:
             raise LumiereError('Nested or trimmed OTIO tracks are not yet supported.', code='unsupported_interchange')
         _foreign_metadata(report,source,source.name or f'track {ti}')
@@ -251,6 +294,11 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
         if (native_kind == 'audio') != (kind == 'audio'):
             native_kind = kind
         track = Track.model_validate({**data, 'name': source.name[:60], 'kind': native_kind, 'clips': []})
+        foreign_track=_json(source.metadata.get('filmcraft',{}))
+        foreign_volume=foreign_track.get('volume_db')
+        if foreign_volume is not None and foreign_volume!=source_meta.get('filmcraft_volume_at_export'):
+            if isinstance(foreign_volume,(int,float)) and math.isfinite(foreign_volume) and -60<=foreign_volume<=24:track.volume_db=foreign_volume
+            else:_report(report,'unsupported',source.name,'FilmCraft track volume is outside the native supported range.')
         if source.enabled != (not (track.muted or track.hidden)):
             track.muted, track.hidden = not source.enabled, False
         if not data:
@@ -258,7 +306,7 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
         for effect in source.effects:
             _report(report,'unsupported',source.name,f'Track effect {effect.name or effect.schema_name()} is not applied.')
         for marker in source.markers:
-            p.markers.append(Marker(t=clock(_ms(marker.marked_range.start_time)),label=marker.name[:120]))
+            p.markers.append(_native_marker(marker,clock(_ms(marker.marked_range.start_time))))
             if _ms(marker.marked_range.duration):
                 _report(report,'approximated',marker.name,'Track marker range reduced to its start point.')
         for ni,node in enumerate(source):
@@ -311,6 +359,8 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
                     _report(report,'approximated',node.name,'External timing/effect edits take precedence; previous Lumiere appearance metadata was not reapplied.')
             if not unchanged or node.name != meta.get('name'):
                 c.label = node.name[:120]
+            if track.kind=='audio':c=restore_derived_audio(c,node)
+            elif track.id in mute_video:c.mute=True
             if ni and isinstance(source[ni-1],S.Transition):
                 trans = source[ni-1]
                 duration = clock(_ms(trans.in_offset)+_ms(trans.out_offset))
@@ -323,7 +373,14 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
             if c.type == 'text' and unchanged and isinstance(ref,S.GeneratorReference) and ref.generator_kind == 'LumiereText':
                 pass
             elif isinstance(ref,S.ExternalReference):
-                url = url_to_path(ref.target_url)
+                original_audio=native.get('media',{}).get(c.media) if unchanged and meta.get('audio_original_source') else None
+                if original_audio:
+                    media._check_root(svc,Path(original_audio).resolve())
+                    if not Path(original_audio).is_file():
+                        original_audio=None
+                        c.audio_stream=0
+                        _report(report,'approximated',node.name,'Original audio source is offline; the normalized stereo reference is imported instead.')
+                url = original_audio or url_to_path(ref.target_url)
                 target = Path(url)
                 if not target.is_absolute() and not (len(url)>2 and url[1]==':'):
                     target = where.parent / target
@@ -336,6 +393,12 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
                 if c.media:
                     media_mapping[c.media] = info['id']
                 c.media = info['id']
+                if track.kind=='audio' and not unchanged:
+                    foreign=_json(node.metadata.get('filmcraft',{}))
+                    gain=foreign.get('gain_db')
+                    if gain is not None and gain!=meta.get('filmcraft_gain_at_export'):
+                        if isinstance(gain,(int,float)) and math.isfinite(gain) and -60<=gain<=24:c.volume_db=gain
+                        else:_report(report,'unsupported',node.name,'FilmCraft clip gain is outside the native supported range.')
                 if not unchanged and track.kind == 'video':
                     _filmcraft_framing(c,node,info,p.canvas,report)
             else:
@@ -345,13 +408,12 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
             for marker in node.markers:
                 at = c.start + (_ms(marker.marked_range.start_time) - c.src_in) / c.speed
                 if at >= 0:
-                    p.markers.append(Marker(t=clock(at),label=marker.name[:120]))
+                    p.markers.append(_native_marker(marker,clock(at)))
                 else:
                     _report(report,'omitted',marker.name,'Clip marker lies before the timeline.')
         p.tracks.append(track)
     for marker in timeline.tracks.markers:
-        data = _json(marker.metadata.get(META,{})).get('marker',{})
-        p.markers.append(Marker.model_validate({**data,'t':clock(_ms(marker.marked_range.start_time)), 'label':marker.name[:120]}))
+        p.markers.append(_native_marker(marker,clock(_ms(marker.marked_range.start_time))))
         if _ms(marker.marked_range.duration):
             _report(report,'approximated',marker.name,'Marker range reduced to its start point.')
     # Relink angles even when the angle has no visible clip.
