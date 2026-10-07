@@ -322,7 +322,11 @@ class Resolver:
         looks_like_path = bool(re.match(r"^(?:[A-Za-z]:[\\/]|/|\\\\|~)", ref)) or "/" in ref or "\\" in ref
         if looks_like_path:
             candidates.append(ref)
-            if not Path(ref).is_file():
+            try:
+                present = Path(ref).is_file()
+            except OSError as error:
+                return None, f'The media cannot be read: {error}'
+            if not present:
                 found = _find_by_name(Path(ref.replace("\\", "/")).name, self.dirs)     # the file moved: look for it by name
                 if found:
                     candidates.append(str(found))
@@ -341,7 +345,7 @@ class Resolver:
                 return media_store.import_path(self.svc, cand), ""
             except Refused as error:
                 reason = str(error)
-            except (LumiereError, NotFound) as error:
+            except (LumiereError, NotFound, OSError) as error:
                 reason = str(error)
         return None, reason
 
@@ -429,12 +433,15 @@ def build(svc: "Services", tl: Timeline, title: str, dirs: Optional[list[tuple[P
             "canvas": view["canvas"], "issues": res["issues"][:5]}
 
 
-def project_from_timeline(svc: "Services", *, title: str = "", fcpxml_path: str = "", edl_path: str = "", plan: Any = None, fps: Optional[float] = None,
+def project_from_timeline(svc: "Services", *, title: str = "", fcpxml_path: str = "", edl_path: str = "", otio_path: str = "", plan: Any = None, fps: Optional[float] = None,
                           media_dirs: Optional[list[str]] = None, actor: str = "family") -> dict[str, Any]:
-    """A new project from exactly one of an FCP7 XML file, an EDL file or a native plan (see the module docs)."""
-    given = [n for n, v in (("fcpxml_path", fcpxml_path), ("edl_path", edl_path), ("plan", plan)) if v not in (None, "", {}, [])]
+    """A new project from exactly one XML, EDL, OTIO file or native plan."""
+    given = [n for n, v in (("fcpxml_path", fcpxml_path), ("edl_path", edl_path), ("otio_path", otio_path), ("plan", plan)) if v not in (None, "", {}, [])]
     if len(given) != 1:
-        raise LumiereError("Give exactly one of fcpxml_path, edl_path or plan.", code="bad_request")
+        raise LumiereError("Give exactly one of fcpxml_path, edl_path, otio_path or plan.", code="bad_request")
+    if otio_path:
+        from .interchange import import_project
+        return import_project(svc,otio_path,title=title,media_dirs=media_dirs,actor=actor)
     if fps is not None and not 1 <= float(fps) <= 240:
         raise LumiereError("fps must be between 1 and 240.", code="bad_request")
     folders = [Path(os.path.expandvars(os.path.expanduser(d))).resolve() for d in (media_dirs or []) if d]

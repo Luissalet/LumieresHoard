@@ -67,7 +67,7 @@ Ajustes (entorno): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE_ROOT
 
 ## Asistentes (MCP)
 
-`mcp_server.py` es un puente MCP por stdio con 48 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
+`mcp_server.py` es un puente MCP por stdio con 49 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -104,3 +104,36 @@ Pruebas: `python -m pytest -q` (medios sintéticos hechos con ffmpeg; los render
 ## Licencia
 
 MIT.
+
+## Intercambio OpenTimelineIO
+
+`project_export_otio` guarda un archivo `.otio` real; también puedes descargarlo
+con `GET /api/projects/{id}/otio`. Se importa con
+`project_from_timeline(otio_path=...)`. El serializador oficial conserva todas las
+pistas, clips, huecos, fundidos, referencias a medios y marcadores del proyecto.
+Rótulos, apariencia, audio, animaciones, curvas de velocidad y ajustes viajan en
+metadatos de Lumiere versionados: al reimportar archivos sin modificaciones se
+recuperan sus valores editables. Los cambios externos de tiempos o efectos
+tienen prioridad sobre los metadatos anteriores del clip.
+
+Cada operación informa de valores conservados solo como metadatos, aproximados,
+no compatibles u omitidos. Se importan las dimensiones y la frecuencia de audio
+de los metadatos de FilmCraft; los efectos y encuadres externos sin equivalencia
+se indican como no conservados. OTIO genérico sin dimensiones usa un lienzo
+1920×1080 e informa de esa aproximación. Los medios ausentes dejan huecos. Los tiempos
+fraccionarios externos se redondean al reloj nativo de milisegundos, indicando
+el error máximo. Otros editores pueden no dibujar los rótulos o efectos de
+Lumiere. Las composiciones anidadas/recortadas y los clips externos invertidos
+aún no son compatibles; se rechazan antes de crear un proyecto. Esto no implica
+paridad completa de intercambio con otros editores.
+
+## Ediciones duraderas del montaje por MCP
+
+Pasa `request_id` opcional a `timeline_edit` o `POST /api/projects/{id}/edit`.
+Repite la misma clave con `ops`, `label` y `base_rev` idénticos tras una respuesta
+interrumpida para recuperar los IDs y el resultado originales sin aplicar dos veces
+el cambio. El recibo persiste tras reinicios y se guarda atómicamente con el proyecto
+y el historial. Un cambio diferente necesita otra clave; reutilizarla con contenido
+distinto devuelve un conflicto. `rev` es la revisión del resultado original y
+`current_rev` informa de la revisión actual. Reintentar tras Deshacer devuelve el
+recibo sin rehacer la edición. Sin clave se conserva la aplicación normal de cada cambio.

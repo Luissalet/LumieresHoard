@@ -31,8 +31,15 @@ def folder(tmp_path, media_dir):
     return d
 
 
+def quoted_folder(folder: Path) -> str:
+    path=folder.resolve().as_posix()
+    if len(path)>1 and path[1]==':':
+        path='/'+path  # file://localhost/D%3A/..., never a hostname localhostD%3A
+    return quote(path,safe='/')
+
+
 def write_fixture(folder: Path, name: str, target: str = "") -> Path:
-    text = (FIX / name).read_text(encoding="utf-8").replace("@MEDIA@", quote(folder.resolve().as_posix(), safe="/"))
+    text = (FIX / name).read_text(encoding="utf-8").replace("@MEDIA@", quoted_folder(folder))
     out = folder / (target or name)
     out.write_text(text, encoding="utf-8")
     return out
@@ -90,7 +97,7 @@ def test_the_edl_files_are_found_by_name_in_media_dirs(services, folder, tmp_pat
 
 def test_an_xml_whose_files_moved_still_finds_them(services, folder, tmp_path):
     xml = write_fixture(folder, "prospero_cut.xml")
-    text = xml.read_text(encoding="utf-8").replace(quote(folder.resolve().as_posix(), safe="/"), "/nowhere/at/all")
+    text = xml.read_text(encoding="utf-8").replace(quoted_folder(folder), "/nowhere/at/all")
     lost = tmp_path / "moved.xml"
     lost.write_text(text, encoding="utf-8")
     res = timeline_import.project_from_timeline(services, fcpxml_path=str(lost), media_dirs=[str(folder)])
@@ -103,6 +110,21 @@ def test_a_missing_file_is_skipped_and_listed_and_the_rest_arrives(services, fol
     assert res["clips"] == 4 and [s["name"] for s in res["skipped"]] == ["shot two.mp4"] and "no file" in res["skipped"][0]["reason"]
     _, video, _ = layout(services, res["project_id"])
     assert [v[:2] for v in video] == [("shot one.mp4", 0), ("still.png", 5500), ("shot one.mp4", 7500)]     # its place stays empty
+
+
+def test_an_unreadable_media_is_reported_without_losing_the_rest(services, folder, monkeypatch):
+    denied = folder/'shot two.mp4'
+    original = Path.is_file
+    def readable(path):
+        if path == denied:
+            raise PermissionError('simulated inaccessible media')
+        return original(path)
+    monkeypatch.setattr(Path,'is_file',readable)
+    result=timeline_import.project_from_timeline(services,fcpxml_path=str(write_fixture(folder,'prospero_cut.xml')))
+    assert result['clips']==4
+    assert len(result['skipped'])==1 and 'inaccessible' in result['skipped'][0]['reason']
+    _, video, _ = layout(services,result['project_id'])
+    assert [v[:2] for v in video] == [('shot one.mp4',0),('still.png',5500),('shot one.mp4',7500)]
 
 
 def test_a_plan_with_tracks_and_markers(services, folder):

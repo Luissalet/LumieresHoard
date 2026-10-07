@@ -241,6 +241,7 @@ class EditArgs(BaseModel):
                                   "A wrong op or field returns every operation with its fields.")
     label: str = Field("", max_length=120, description="Name of the undo step.")
     base_rev: Optional[int] = Field(None, description="Fail if the project changed since this revision.")
+    request_id: str = Field('', max_length=100, description='Optional unique edit key: retry identical ops/label/base_rev after an interrupted response without applying twice. A new edit needs a new key.')
 
 
 class HistoryArgs(BaseModel):
@@ -358,6 +359,7 @@ class ProjectFromTimelineArgs(BaseModel):
     title: str = Field("", max_length=120, description="Name of the new project (empty = the timeline's own name).")
     fcpxml_path: str = Field("", max_length=2000, description="An FCP7 XML (xmeml) timeline file, e.g. the one Prospero exports.")
     edl_path: str = Field("", max_length=2000, description="Or a CMX 3600 EDL file (clip files are found by name next to it or in media_dirs).")
+    otio_path: str = Field("", max_length=2000, description="Or an OpenTimelineIO JSON file: tracks, gaps, transitions, markers and Lumiere metadata. Reports omissions and approximations.")
     plan: Optional[dict[str, Any] | str] = Field(None, description="Or a plan: {clips: [{path, in_s, out_s, track, start_s?}], markers: [{t, text}]} "
                                                  "(seconds; clips without start_s follow the previous one on their track).")
     fps: Optional[float] = Field(None, ge=1, le=240, description="Frame rate of an EDL (it carries none; 24 when empty) or of a plan (30).")
@@ -634,7 +636,7 @@ def run_project_delete(svc: Services, a: ProjectDeleteArgs) -> dict:
 
 
 def run_edit(svc: Services, a: EditArgs) -> dict:
-    return project_store.edit(svc, a.project, a.ops, label=a.label, actor="agent", base_rev=a.base_rev)
+    return project_store.edit(svc, a.project, a.ops, label=a.label, actor="agent", base_rev=a.base_rev, request_id=a.request_id)
 
 
 def run_history(svc: Services, a: HistoryArgs) -> dict:
@@ -798,8 +800,17 @@ def run_media_receive(svc: Services, a: MediaReceiveArgs) -> dict:
 
 
 def run_project_from_timeline(svc: Services, a: ProjectFromTimelineArgs) -> dict:
-    return timeline_import.project_from_timeline(svc, title=a.title, fcpxml_path=a.fcpxml_path, edl_path=a.edl_path, plan=a.plan, fps=a.fps,
+    return timeline_import.project_from_timeline(svc, title=a.title, fcpxml_path=a.fcpxml_path, edl_path=a.edl_path, otio_path=a.otio_path, plan=a.plan, fps=a.fps,
                                                  media_dirs=a.media_dirs, actor="agent")
+
+
+class ProjectExportOtioArgs(BaseModel):
+    project: str = ProjectId
+
+
+def run_project_export_otio(svc: Services, a: ProjectExportOtioArgs) -> dict:
+    from .interchange import export_file
+    return export_file(svc, a.project)
 
 
 def run_short(svc: Services, a: ShortArgs) -> dict:
@@ -929,7 +940,8 @@ TOOLS: list[Tool] = [
     Tool("timeline_edit", "Edit the timeline with operations (split, trim, move, delete, titles, speed...). Editar timeline.\n"
          "All or nothing, one undo step. Speed curves (speed_ramp), shape masks (mask), nested sequences (add_sequence, unnest).\n"
          "Sinónimos: cortar, recortar, mover, añadir texto, título, rótulo, rampa de velocidad, cámara lenta, máscara.\n"
-         "Keywords: edit, cut, trim, split, title, text overlay, ops, speed ramp, slow motion, mask.",
+         "Use request_id for interrupted-response retries: identical ops/label/base_rev recover original IDs without applying twice.\n"
+         "Keywords: edit, cut, trim, split, title, text overlay, ops, speed ramp, slow motion, mask, retry, reintentar.",
          EditArgs, _ann(False, True, False), run_edit),
     Tool("timeline_history", "Undo, redo, list or restore history steps of a project. Deshacer.\n"
          "Sinónimos: deshacer, rehacer, historial, volver atrás.\nKeywords: undo, redo, history.", HistoryArgs, _ann(False, False, False), run_history),
@@ -972,9 +984,13 @@ TOOLS: list[Tool] = [
     Tool("media_receive", "Receive a media file from another app (path or local URL), optionally into a project. Recibir medio.\n"
          "Family import: used by sibling apps through the hub. Sinónimos: importar desde otra app, pasar vídeo, enviar a Lumiere.\n"
          "Keywords: receive media, family, hub, import from app, send to editor.", MediaReceiveArgs, _ann(False, False, True), run_media_receive),
-    Tool("project_from_timeline", "Open an edit made elsewhere (FCP7 XML, EDL or plan) as a project. Proyecto desde línea de tiempo.\n"
+    Tool("project_export_otio", "Export a multitrack montage as OpenTimelineIO. Exportar montaje OTIO.\n"
+         "Standard clips, tracks, gaps, dissolves and markers; appearance stays in Lumiere metadata. Returns an actual file and interoperability report. "
+         "Nested sequences are not supported. Keywords: otio, export timeline, interchange, editable montage.",
+         ProjectExportOtioArgs, _ann(False, False, True), run_project_export_otio),
+    Tool("project_from_timeline", "Open an edit made elsewhere (FCP7 XML, EDL, OTIO or plan) as a project. Proyecto desde línea de tiempo.\n"
          "Reads Prospero's XML/EDL export or a plan of clips and markers; missing files are skipped and listed. Sinónimos: importar montaje, importar XML, "
-         "importar EDL, abrir corte, llevar a Lumiere.\nKeywords: import timeline, fcpxml, xmeml, edl, plan, project from timeline, family.",
+         "importar EDL, abrir corte, llevar a Lumiere. OTIO returns a per-item loss/rounding report.\nKeywords: import timeline, otio, fcpxml, xmeml, edl, plan, project from timeline, family.",
          ProjectFromTimelineArgs, _ann(False, False, False), run_project_from_timeline),
     Tool("clip_stabilize", "Stabilize a shaky clip (background job; the clip is pointed at the stable copy). Estabilizar.\n"
          "Keywords: stabilize, shaky, gimbal.", StabilizeArgs, _ann(False), run_stabilize),

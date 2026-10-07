@@ -54,6 +54,7 @@ class EditBody(BaseModel):
     ops: list[dict[str, Any]]
     label: str = ""
     base_rev: Optional[int] = None
+    request_id: str = Field('', max_length=100)
 
 
 class CommandBody(BaseModel):
@@ -160,7 +161,7 @@ def delete(request: Request, project_id: str):
 @router.post("/projects/{project_id}/edit")
 def edit(request: Request, project_id: str, body: EditBody):
     svc = services(request)
-    res = store.edit(svc, project_id, body.ops, label=body.label, base_rev=body.base_rev)
+    res = store.edit(svc, project_id, body.ops, label=body.label, base_rev=body.base_rev, request_id=body.request_id)
     return {**res, "view": store.view(svc, project_id)}
 
 
@@ -284,6 +285,13 @@ def subtitle_delete(request: Request, project_id: str, language: str):
 @router.get("/projects/{project_id}/edl")
 def edl(request: Request, project_id: str):
     return PlainTextResponse(runner.edl_export(services(request), project_id), headers={"Content-Disposition": 'attachment; filename="montaje.edl"'})
+
+
+@router.get('/projects/{project_id}/otio')
+def otio_export(request: Request, project_id: str):
+    from ..interchange import export_project
+    result = export_project(services(request), project_id)
+    return Response(result['otio'],media_type='application/json',headers={'Content-Disposition':'attachment; filename="montage.otio"'})
 
 
 @router.post("/projects/{project_id}/freeze")

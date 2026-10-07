@@ -113,6 +113,17 @@ MIGRATIONS: list[str] = [
     );
     ALTER TABLE renders ADD COLUMN variant TEXT NOT NULL DEFAULT '';
     """,
+    # 3: durable receipts for explicitly keyed timeline edits
+    """
+    CREATE TABLE edit_receipts (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      request_id TEXT NOT NULL,
+      digest TEXT NOT NULL,
+      result TEXT NOT NULL,
+      created_ts REAL NOT NULL,
+      PRIMARY KEY (project_id, request_id)
+    );
+    """,
 ]
 
 

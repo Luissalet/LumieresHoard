@@ -67,7 +67,7 @@ Settings (environment): `LUMIERE_PORT` (5198), `LUMIERE_DATA_DIR`, `LUMIERE_FILE
 
 ## Assistants (MCP)
 
-`mcp_server.py` is a stdio MCP bridge with 48 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
+`mcp_server.py` is a stdio MCP bridge with 49 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -105,6 +105,38 @@ Tests: `python -m pytest -q` (synthetic media made with ffmpeg; renders are chec
 
 MIT.
 
+
+## OpenTimelineIO interchange
+
+Use `project_export_otio` to save an actual `.otio` file, or download
+`GET /api/projects/{id}/otio`. Import it with `project_from_timeline(otio_path=...)`.
+The official OpenTimelineIO serializer carries every track, clip, gap, dissolve,
+media reference and project marker. Titles, appearance, audio settings,
+keyframes, speed ramps and project settings use versioned Lumiere metadata;
+unchanged files preserve those editable values when reimported. External timing
+or effect changes take precedence over previous clip metadata.
+
+Each operation reports metadata-only, approximated, unsupported or omitted
+items. FilmCraft sequence dimensions and sample rate are imported from its
+metadata; unrecognized external namespaces, including proprietary effects and
+framing, are reported rather than treated as preserved. Generic OTIO without
+canvas metadata uses the native 1920×1080 canvas and reports that approximation.
+Missing media leave gaps; external fractional times are rounded to the
+native millisecond clock with the maximum rounding error reported. Other
+editors may not render Lumiere titles or appearance. Nested/trimmed compositions
+and external reverse clips are not yet supported, and are rejected before a
+project is created. This is not a claim of full editor interchange parity.
+
+## Durable timeline edits over MCP
+
+Pass an optional `request_id` to `timeline_edit` or `POST /api/projects/{id}/edit`.
+Retry the same key with identical `ops`, `label` and `base_rev` after an interrupted
+response to recover the original clip IDs and result without applying the edit twice.
+The receipt survives restarts and is written atomically with the project/history.
+A different edit needs a different key; reusing one for different content returns a
+conflict. `rev` is the original result revision and `current_rev` reports the current
+project revision. A retry after Undo returns the receipt without redoing the edit.
+Calls without a key retain the normal behavior of applying each requested edit.
 
 ## Shared services (HoardLink 0.8.1)
 

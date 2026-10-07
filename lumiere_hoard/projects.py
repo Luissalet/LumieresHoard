@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from contextlib import nullcontext
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -288,10 +290,11 @@ def delete(svc: "Services", project_id: str) -> dict[str, Any]:
     return {"deleted": project_id, "name": row["name"]}
 
 
-def save(svc: "Services", project_id: str, p: Project, label: str, actor: str = "ui", base_rev: Optional[int] = None) -> int:
+def save(svc: "Services", project_id: str, p: Project, label: str, actor: str = "ui", base_rev: Optional[int] = None,
+         *, _receipt: Optional[tuple[str, str, dict[str, Any]]] = None, _conn: Any = None) -> int:
     """Store a new version: drops any redo branch, appends to the history, bumps the revision."""
     now = time.time()
-    with svc.db.transaction() as conn:
+    with (nullcontext(_conn) if _conn is not None else svc.db.transaction()) as conn:
         row = conn.execute("SELECT rev, head FROM projects WHERE id = ?", (project_id,)).fetchone()
         if row is None:
             raise NotFound(f"No project {project_id}.")
@@ -303,20 +306,45 @@ def save(svc: "Services", project_id: str, p: Project, label: str, actor: str = 
                      (project_id, head, clip(label, 200), actor, dumps(p.dump()), now))
         conn.execute("DELETE FROM history WHERE project_id = ? AND seq <= ?", (project_id, head - HISTORY_LIMIT))
         conn.execute("UPDATE projects SET doc = ?, rev = rev + 1, head = ?, updated_ts = ? WHERE id = ?", (dumps(p.dump()), head, now, project_id))
+        if _receipt is not None:
+            request_id, digest, result = _receipt
+            conn.execute("INSERT INTO edit_receipts VALUES (?, ?, ?, ?, ?)",
+                         (project_id, request_id, digest, dumps({**result, 'rev': row['rev'] + 1}), now))
         return row["rev"] + 1
 
 
 def edit(svc: "Services", project_id: str, ops: list[dict[str, Any]], *, label: str = "", actor: str = "ui",
-         base_rev: Optional[int] = None) -> dict[str, Any]:
+         base_rev: Optional[int] = None, request_id: str = "") -> dict[str, Any]:
     if not ops:
         raise LumiereError("No operations.")
-    current = doc(svc, project_id)
-    look = media_lookup(svc)
-    new, results = apply_ops(current, ops, look, project_id=project_id, docs=doc_lookup(svc))
-    rev = save(svc, project_id, new, label or describe(ops), actor, base_rev)
-    issues = validate(new, look)
-    return {"project": project_id, "rev": rev, "results": results, "duration_ms": new.duration, "duration": ms_to_tc(new.duration),
-            "issues": issues}
+    if not isinstance(request_id, str) or len(request_id) > 100:
+        raise LumiereError('request_id must be a string of at most 100 characters.')
+    # Keep read/apply/save together. A keyed retry returns the stored effect;
+    # an edit without a key retains its ordinary apply-again semantics.
+    with svc.db.transaction() as conn:
+        row = _row(svc, project_id)
+        digest = ''
+        if request_id:
+            try:
+                encoded = json.dumps({'ops': ops, 'label': label, 'base_rev': base_rev},
+                                     sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+            except (ValueError, TypeError) as error:
+                raise LumiereError('Edit arguments must contain finite JSON values.') from error
+            digest = hashlib.sha256(encoded.encode('utf-8')).hexdigest()
+            receipt = svc.db.one('SELECT digest, result FROM edit_receipts WHERE project_id=? AND request_id=?',
+                                 (project_id, request_id))
+            if receipt is not None:
+                if receipt['digest'] != digest:
+                    raise Conflict('This request_id already identifies a different edit; use a new key for a new edit.')
+                return {**json.loads(receipt['result']), 'replayed': True, 'current_rev': row['rev']}
+        current = load(json.loads(row['doc']))
+        look = media_lookup(svc)
+        new, results = apply_ops(current, ops, look, project_id=project_id, docs=doc_lookup(svc))
+        result = {'project': project_id, 'results': results, 'duration_ms': new.duration,
+                  'duration': ms_to_tc(new.duration), 'issues': validate(new, look)}
+        receipt = (request_id, digest, result) if request_id else None
+        rev = save(svc, project_id, new, label or describe(ops), actor, base_rev, _receipt=receipt, _conn=conn)
+        return {**result, 'rev': rev, **({'replayed': False, 'current_rev': rev} if request_id else {})}
 
 
 def describe(ops: list[dict[str, Any]]) -> str:
