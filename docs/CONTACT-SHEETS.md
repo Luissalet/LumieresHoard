@@ -13,14 +13,27 @@ set the frame count and tile width, then generate. The dialog shows the sheet,
 actual timecodes and layer provenance, with downloads for PNG and the JSON
 receipt and a link to the portable HTML page.
 
-Overview spreads 2–16 samples across the native output frame grid, ending on
-the last valid frame. Boundaries takes complete before/after pairs at main
-video-track clip starts, reporting `truncated=true` if count cannot cover all
-starts. These are not every layer/effect change, gap end or source scene.
+Overview selects 2–16 frames uniformly across the native output-frame grid,
+ending on the last valid frame. It does not target clip starts: a sample can
+land inside a clip. The JSON receipt records `sampling_policy.strategy`,
+the requested and selected frame counts, and each `frames[].sampling.grid_indices`
+list. If a short timeline maps multiple points from the requested grid onto one
+output frame, that frame records every original grid index. For each visible clip layer,
+`layers[].timeline_position` (`clip_start`, `clip_interior`, `clip_end`, or
+`clip_start_end`) plus `clip_timing` with exact timeline bounds, output-grid
+frames, and distance from the clip edges. These fields make a uniform sample
+distinguishable from a clip boundary. Boundaries takes before/at pairs at main
+video-track clip starts; `truncated=true` reports starts omitted by the count.
+If there are no nonzero main-track starts, the receipt identifies the
+`start_and_last_frame_fallback` and its `fallback_reason`. These modes do not
+cover every layer/effect change, gap end or source scene.
 Explicit `times` accepts 1–16 in-range integer milliseconds; it snaps to the
 renderer frame grid, clamps an in-range request rounding to the exclusive end
 to the last valid frame, and deduplicates requests on the same frame. Requested
-times and actual frame numbers/times remain separate in the receipt.
+times and actual frame numbers/times remain separate in the receipt. Explicit
+requests record duplicate removal and frame-merging counts in
+`sampling_policy`; several requested milliseconds may resolve to one output
+frame.
 
 Tiles are 128–640 pixels wide; extreme aspect ratios fit within 1280 pixels
 of height. Native PNG frames use the same source-resolution timeline renderer

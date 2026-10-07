@@ -37,6 +37,43 @@ def test_boundary_pairs_and_end_frame_are_native_grid_samples():
     assert sheets.sample_times(p, count=2) == ([0, 8960], False)
 
 
+def test_sampling_policy_distinguishes_exact_and_rounded_cut_boundaries():
+    p = SimpleNamespace(duration=4000, canvas=SimpleNamespace(fps=25),
+        main_track=lambda: SimpleNamespace(clips=[SimpleNamespace(start=t) for t in (0, 2000, 2021)]))
+    requests, _, policy, details = sheets._frame_plan(p, mode="boundaries", count=6)
+    assert policy["strategy"] == "main_track_clip_start_pairs"
+    # 2000 ms is exactly frame 50; 2021 ms rounds to frame 51 (2040 ms).
+    assert policy["selected_boundary_frames"] == [50, 51]
+    assert details[49]["cut_relations"] == [{"relation": "before_cut", "boundary_frame": 50, "boundary_time_ms": 2000}]
+    assert details[50]["cut_relations"] == [
+        {"relation": "at_clip_start", "boundary_frame": 50, "boundary_time_ms": 2000},
+        {"relation": "before_cut", "boundary_frame": 51, "boundary_time_ms": 2040},
+    ]
+    assert details[51]["cut_relations"][0]["boundary_time_ms"] == 2040
+
+
+def test_short_timeline_groups_all_original_uniform_grid_indices():
+    # An 80 ms, 25 fps timeline has only two valid output frames for four grid points.
+    p = SimpleNamespace(duration=80, canvas=SimpleNamespace(fps=25), main_track=lambda: None)
+    requests, _, policy, details = sheets._frame_plan(p, mode="overview", count=4)
+    assert sorted(requests) == [0, 1]
+    assert policy["requested_frame_count"] == 4
+    assert policy["selected_frame_count"] == 2
+    assert details[0]["grid_indices"] == [0, 1]
+    assert details[1]["grid_indices"] == [2, 3]
+    assert details[0]["grid_count"] == details[1]["grid_count"] == 4
+
+
+def test_boundary_mode_reports_endpoint_fallback_reason():
+    p = SimpleNamespace(duration=1000, canvas=SimpleNamespace(fps=25),
+        main_track=lambda: SimpleNamespace(clips=[SimpleNamespace(start=0)]))
+    requests, truncated, policy, details = sheets._frame_plan(p, mode="boundaries", count=4)
+    assert sorted(requests) == [0, 24] and not truncated
+    assert policy["strategy"] == "start_and_last_frame_fallback"
+    assert policy["fallback_reason"] == "no_nonzero_main_track_clip_starts"
+    assert {row["reason"] for row in details.values()} == {policy["fallback_reason"]}
+
+
 def test_revision_change_never_publishes_mixed_sheet(tmp_path, monkeypatch):
     revision = [1]
     p = SimpleNamespace(duration=1000, canvas=SimpleNamespace(width=100, height=100, fps=25), tracks=[],
@@ -65,10 +102,13 @@ def test_native_three_cuts_pixels_provenance_export_readback_and_sources(service
     assert [row["frame"] for row in result["frames"]] == [24, 25, 49, 50, 74, 75]
     assert [row["t_ms"] for row in result["frames"]] == [960, 1000, 1960, 2000, 2960, 3000]
     assert not result["truncated"]
+    assert result["sampling_policy"]["strategy"] == "main_track_clip_start_pairs"
     main = projects.doc(services, pid).main_track().clips
     assert [next(layer["clip"] for layer in row["layers"] if layer["role"] == "main") for row in result["frames"]] == [main[i].id for i in (0, 1, 1, 2, 2, 3)]
     for row in result["frames"]:
         layer = next(layer for layer in row["layers"] if layer["role"] == "main")
+        assert layer["timeline_position"] == ("clip_end" if row["frame"] in {24, 49, 74} else "clip_start")
+        assert layer["clip_timing"]["clip_start_output_frame"] in {0, 25, 50, 75}
         expected_source = 500 + row["t_ms"] if row["frame"] < 25 else 2500 + row["t_ms"] - 1000 if row["frame"] < 50 else 4500 + row["t_ms"] - 2000 if row["frame"] < 75 else 500 + row["t_ms"] - 3000
         assert layer["source_time_ms"] == expected_source
     assert any(layer["type"] == "text" and layer["text"] == "Review title" for layer in result["frames"][1]["layers"])
@@ -112,17 +152,43 @@ def test_api_and_agent_catalog_are_usable_and_validate_times(client, media_dir):
     pid, _ = _timeline(client.svc, media_dir)
     entry = next(item for item in tool_catalog() if item["name"] == "project_contact_sheet")
     assert entry["inputSchema"]["properties"]["mode"]["enum"] == ["overview", "boundaries"]
-    response = client.post(f"/api/projects/{pid}/contact-sheet", json={"times": [1, 10, 500], "width": 160})
+    assert "uniform grid" in entry["description"] and "does not target clip starts" in entry["description"]
+    response = client.post(f"/api/projects/{pid}/contact-sheet", json={"times": [1, 10, 10, 500], "width": 160})
     assert response.status_code == 200, response.text
     body = response.json()
     assert "_image" not in body and len(body["frames"]) == 2
     assert body["frames"][0]["frame"] == 0 and body["frames"][0]["requested_times_ms"] == [1, 10]
+    assert body["sampling_policy"]["strategy"] == "explicit_times_rounded_to_output_frames"
+    assert body["sampling_policy"]["duplicate_input_times_removed"] == 1
+    assert body["sampling_policy"]["distinct_times_merged_by_frame"] == 1
     for field in ("url", "png_url", "receipt_url", "html_url"):
         assert client.get(body[field]).status_code == 200
     agent = client.post("/api/agent/call", headers={"Authorization": f"Bearer {client.svc.token}"}, json={"name": "project_contact_sheet", "arguments": {"project": pid, "times": [500], "width": 160, "show": False}})
     assert agent.status_code == 200 and "_image" not in agent.json()
     assert client.post(f"/api/projects/{pid}/contact-sheet", json={"times": [-1]}).status_code == 400
     assert client.post(f"/api/projects/{pid}/contact-sheet", json={"times": [4000]}).status_code == 400
+
+
+@needs_ffmpeg
+def test_overview_is_uniform_grid_and_layers_label_clip_position(services, media_dir):
+    pid, _ = _timeline(services, media_dir)
+    project = projects.doc(services, pid)
+    main = project.main_track().clips
+    result = sheets.create(services, pid, mode="overview", count=4, width=128)
+    assert [row["frame"] for row in result["frames"]] == [0, 33, 66, 99]
+    policy = result["sampling_policy"]
+    assert policy["strategy"] == "uniform_output_frame_grid"
+    assert policy["clip_starts_are_not_sampling_targets"] is True
+    assert all(row["sampling"]["kind"] == "uniform_grid_sample" for row in result["frames"])
+    positions = []
+    for row in result["frames"]:
+        layer = next(layer for layer in row["layers"] if layer["role"] == "main")
+        positions.append(layer["timeline_position"])
+        timing = layer["clip_timing"]
+        assert timing["clip_start_output_frame"] == project.find(layer["clip"])[1].start // 40
+        assert timing["frames_from_clip_start"] == row["frame"] - timing["clip_start_output_frame"]
+    assert positions == ["clip_start", "clip_interior", "clip_interior", "clip_end"]
+    assert [next(layer["clip"] for layer in row["layers"] if layer["role"] == "main") for row in result["frames"]] == [main[0].id, main[1].id, main[2].id, main[3].id]
 
 
 @needs_ffmpeg

@@ -13,14 +13,26 @@ times=None, show=true)` exporta una revisión visual del timeline compuesto.
 descubre el esquema automáticamente. `show=false` devuelve solo texto y
 `true` añade la imagen JPEG.
 
-El modo general reparte 2–16 muestras en la cuadrícula nativa de fotogramas y
-termina en el último fotograma válido. El modo `boundaries` muestra pares antes
-y después de los comienzos de clips de la pista principal; `truncated=true`
-indica cortes no cubiertos. No incluye todos los cambios de capas, finales de
-huecos ni escenas de origen. `times` admite 1–16 milisegundos enteros dentro del
-montaje, ajusta las peticiones a fotogramas reales y combina las que caen en el
-mismo fotograma. El recibo diferencia tiempo solicitado, tiempo real y número
-de fotograma; una petición válida que redondea al final usa el último válido.
+El modo `overview` elige 2–16 fotogramas uniformemente en la cuadrícula nativa
+de salida y termina en el último válido. No busca comienzos de clips: una
+muestra puede caer dentro de un clip. El recibo JSON incluye
+`sampling_policy.strategy`, la cantidad solicitada y la seleccionada, y
+`frames[].sampling.grid_indices`. Si un timeline corto hace coincidir varios
+puntos de la cuadrícula solicitada con el mismo fotograma, ese fotograma guarda
+todos sus índices originales. Por cada capa de clip incluye
+`layers[].timeline_position` (`clip_start`, `clip_interior`, `clip_end` o
+`clip_start_end`) y `clip_timing` con límites exactos del timeline, fotogramas
+de salida y distancia a los bordes del clip. Así se distingue una muestra
+uniforme de un corte. `boundaries` genera pares antes y en los comienzos de
+clips de la pista de vídeo principal; `truncated=true` señala cortes omitidos
+por el límite elegido. Si no hay comienzos posteriores a cero, el recibo indica
+la estrategia `start_and_last_frame_fallback` y el motivo en `fallback_reason`.
+Ningún modo cubre todos los cambios de capas/efectos, finales de huecos ni
+escenas de origen. `times` admite 1–16 milisegundos enteros dentro del montaje,
+ajusta las peticiones a fotogramas reales y registra duplicados y peticiones
+que convergen en el mismo fotograma. El recibo diferencia tiempo solicitado,
+tiempo real y número de fotograma; una petición válida que redondea al final usa
+el último válido.
 
 Cada celda tiene 128–640 píxeles de ancho y hasta 1280 de alto para relaciones
 extremas. Se usa el renderizador final con originales, incluidos recortes,

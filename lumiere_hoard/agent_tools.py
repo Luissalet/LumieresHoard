@@ -324,7 +324,7 @@ class FrameArgs(BaseModel):
 
 class ContactSheetArgs(BaseModel):
     project: str = ProjectId
-    mode: Literal["overview", "boundaries"] = Field("overview", description="Overview spreads frames; boundaries samples before/after main-track clip starts, not every composite change.")
+    mode: Literal["overview", "boundaries"] = Field("overview", description="Overview samples a uniform grid across output frames; it does not target clip starts. Boundaries samples before/at main-track clip starts, not every composite change.")
     count: int = Field(12, ge=2, le=16, description="Maximum frame count; odd boundary counts use complete pairs.")
     width: int = Field(320, ge=128, le=640, description="Tile width in pixels; extreme aspect ratios fit into a height of at most 1280.")
     times: Optional[list[int]] = Field(None, min_length=1, max_length=16, description="Explicit timeline milliseconds inside duration; quantized to native output frames and deduplicated.")
@@ -1059,7 +1059,7 @@ TOOLS: list[Tool] = [
     Tool("frame_snapshot", "Save the frame the timeline shows at a time as an image (exactly as rendered). Fotograma.\n"
          "Use it to look at the edit. Keywords: frame, snapshot, preview image.", FrameArgs, _ann(False, False, True), run_frame),
     Tool("project_contact_sheet", "Export timecoded native timeline frames in one contact sheet. Hoja de fotogramas del montaje.\n"
-         "Overview, before/after main-track starts, or explicit milliseconds. Returns JPEG/PNG, portable HTML and JSON receipt with frame/source timing, hashes and project revision. "
+         "Overview samples a uniform grid across output frames; it does not target clip starts. Boundaries samples before/at main-track clip starts; explicit milliseconds snap to output frames. Returns JPEG/PNG, portable HTML and JSON receipt with sampling policy, frame/layer timing, hashes and project revision. "
          "Inspect image/receipt; this does not prove motion or audio continuity. Sinónimos: revisar cortes, hoja de contacto, storyboard.\n"
          "Keywords: contact sheet, review cuts, timeline overview, provenance, hoja de fotogramas, revisar montaje.",
          ContactSheetArgs, _ann(False, False, False), run_contact_sheet),
