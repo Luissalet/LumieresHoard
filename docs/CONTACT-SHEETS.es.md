@@ -1,5 +1,10 @@
 # Hojas de fotogramas del montaje
 
+En el editor de vídeo, pulsa **Hoja** en la barra superior. Elige Resumen o
+Cortes, ajusta la cantidad de fotogramas y su ancho y genera la hoja. El diálogo
+muestra los tiempos reales y la procedencia de las capas, permite descargar el
+PNG y el recibo JSON y abre la página HTML portátil.
+
 `project_contact_sheet(project, mode="overview", count=12, width=320,
 times=None, show=true)` exporta una revisión visual del timeline compuesto.
 `POST /api/projects/{project}/contact-sheet` recibe las mismas opciones sin

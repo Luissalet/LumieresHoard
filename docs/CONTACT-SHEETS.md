@@ -8,6 +8,11 @@ is the existing `POST /api/agent/call` with name `project_contact_sheet`.
 The stdio bridge discovers its schema automatically. `show=false` keeps MCP
 text only; `true` also returns the JPEG image.
 
+In the video editor, use **Sheet** in the top bar. Choose Overview or Cuts,
+set the frame count and tile width, then generate. The dialog shows the sheet,
+actual timecodes and layer provenance, with downloads for PNG and the JSON
+receipt and a link to the portable HTML page.
+
 Overview spreads 2–16 samples across the native output frame grid, ending on
 the last valid frame. Boundaries takes complete before/after pairs at main
 video-track clip starts, reporting `truncated=true` if count cannot cover all
