@@ -119,7 +119,11 @@ tienen prioridad sobre los metadatos anteriores del clip.
 Cada operación informa de valores conservados solo como metadatos, aproximados,
 no compatibles u omitidos. Se importan las dimensiones y la frecuencia de audio
 de los metadatos de FilmCraft; los efectos y encuadres externos sin equivalencia
-se indican como no conservados. OTIO genérico sin dimensiones usa un lienzo
+se indican como no conservados.
+La posición, escala uniforme y rotación estáticas de FilmCraft se convierten
+en una transformación editable con ancla centrada y píxeles cuadrados. Los
+encuadres animados/no uniformes, colores y demás efectos siguen pendientes.
+OTIO genérico sin dimensiones usa un lienzo
 1920×1080 e informa de esa aproximación. Las pistas de vídeo OTIO externas son
 silenciosas: el sonido procede de sus pistas de audio. El sonido integrado en
 clips de vídeo nativos se recupera mediante metadatos de Lumiere, pero la

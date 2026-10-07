@@ -119,7 +119,11 @@ or effect changes take precedence over previous clip metadata.
 Each operation reports metadata-only, approximated, unsupported or omitted
 items. FilmCraft sequence dimensions and sample rate are imported from its
 metadata; unrecognized external namespaces, including proprietary effects and
-framing, are reported rather than treated as preserved. Generic OTIO without
+framing, are reported rather than treated as preserved.
+Animated/anisotropic FilmCraft framing is not mapped; static position, uniform
+scale and rotation with a centered anchor and square pixels are mapped to an
+editable native transform. Colors and other effects still require visual review.
+Generic OTIO without
 canvas metadata uses the native 1920×1080 canvas and reports that approximation.
 Missing media leave gaps. Imported standard video tracks are silent; their sound comes
 from OTIO audio tracks. Native embedded video sound round-trips as Lumiere

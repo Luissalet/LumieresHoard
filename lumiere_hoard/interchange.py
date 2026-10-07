@@ -59,6 +59,38 @@ def _foreign_metadata(report: list, node: Any, item: str) -> None:
                     f'External metadata namespace {namespace} is not fully mapped; unmapped appearance/audio/settings may differ. Keep the source OTIO file.')
 
 
+def _filmcraft_framing(c: Clip, node: Any, info: dict, canvas: Canvas, report: list) -> None:
+    """Map verified static motion fields; animated/anisotropic framing stays a gap."""
+    data = _json(node.metadata.get('filmcraft', {}))
+    effects = [e for e in data.get('effects', []) if e.get('effect') == 'motion' and e.get('enabled', True)]
+    if len(effects) != 1 or data.get('scale_to_frame', False):
+        return
+    params = effects[0].get('params', {})
+    if any(set(p) != {'value'} for p in params.values()):
+        return  # Keyframes/expressions must not be flattened to their initial value.
+    def value(key, kind, default=None):
+        return params.get(key, {}).get('value', {}).get(kind, default)
+    anchor, position = value('anchor','Vec2'), value('position','Vec2')
+    scale, rotation = value('scale','Float'), value('rotation','Float')
+    if not isinstance(anchor,dict) or not isinstance(position,dict) or scale is None or rotation is None:
+        return
+    if anchor != {'x':info['width']/2, 'y':info['height']/2}:
+        return  # Noncentral anchors need their own comparative rotation tests.
+    if not value('uniform_scale','Bool',True) or value('anti_flicker','Float',0) != 0:
+        return
+    video = _json(node.media_reference.metadata.get('filmcraft', {})).get('info', {}).get('video', {})
+    if video.get('par', [1,1]) != [1,1]:
+        return
+    candidate={'fit':'none','scale':scale/100,'rotation':rotation,
+               'x':(position['x']-canvas.width/2)/canvas.width,
+               'y':(position['y']-canvas.height/2)/canvas.height}
+    try:
+        c.transform=Transform.model_validate(candidate)
+    except ValueError:
+        return
+    _report(report,'approximated',node.name,'Static FilmCraft centered-anchor position, uniform scale and rotation mapped; color/effect rendering remains editor-dependent.')
+
+
 def _signature(node: Any, position: float, lead: float, tail: float) -> dict:
     ref = node.media_reference
     parent = node.parent()
@@ -304,6 +336,8 @@ def import_project(svc: 'Services', path: str, *, title: str = '', media_dirs: l
                 if c.media:
                     media_mapping[c.media] = info['id']
                 c.media = info['id']
+                if not unchanged and track.kind == 'video':
+                    _filmcraft_framing(c,node,info,p.canvas,report)
             else:
                 _report(report,'omitted',node.name,'Missing or unsupported generator/media reference; timeline position retained as a gap.')
                 continue

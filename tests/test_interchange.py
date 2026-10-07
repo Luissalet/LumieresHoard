@@ -7,7 +7,7 @@ import pytest
 from conftest import needs_ffmpeg
 from lumiere_hoard import interchange, media, projects, agent_tools
 from lumiere_hoard.errors import LumiereError
-from lumiere_hoard.timeline import Clip, Track, Transition, Marker, TextStyle, Filter, Keyframe
+from lumiere_hoard.timeline import Clip, Track, Transition, Marker, TextStyle, Filter, Keyframe, Transform
 
 pytestmark = needs_ffmpeg
 S, O = otio.schema, otio.opentime
@@ -179,3 +179,25 @@ def test_external_split_audio_is_not_mixed_twice(services,media_dir,tmp_path):
         return MediaRef(**{k:info[k] for k in ('id','path','kind','width','height','has_audio','has_video','duration_ms')})
     graph=audio_graph(p,p.duration,lookup,lambda mid,stream:'master.flac')
     assert graph.clips==1, 'The video and separate audio track must not double the mix.'
+
+
+def test_filmcraft_static_framing_and_animated_gap(services,media_dir,tmp_path):
+    info=media.import_path(services,str(media_dir/'talk.mp4'))
+    params={'anchor':{'value':{'Vec2':{'x':info['width']/2,'y':info['height']/2}}},
+            'position':{'value':{'Vec2':{'x':360,'y':160}}},'scale':{'value':{'Float':75}},
+            'rotation':{'value':{'Float':12}},'uniform_scale':{'value':{'Bool':True}}}
+    node=S.Clip(media_reference=S.ExternalReference(target_url=Path(media_dir/'talk.mp4').as_uri()),
+                source_range=O.TimeRange(O.RationalTime(0,24),O.RationalTime(48,24)),
+                metadata={'filmcraft':{'effects':[{'effect':'motion','params':params}]}})
+    doc=S.Timeline(tracks=[S.Track(children=[node])],metadata={'filmcraft':{'settings':{'width':640,'height':360}}})
+    def imported():
+        result=interchange.import_project(services,write(tmp_path,otio.adapters.write_to_string(doc,adapter_name='otio_json')))
+        return projects.doc(services,result['id']).tracks[0].clips[0],result
+    clip,result=imported()
+    assert clip.transform.fit=='none' and clip.transform.scale==.75 and clip.transform.rotation==12
+    assert clip.transform.x==pytest.approx(40/640) and clip.transform.y==pytest.approx(-20/360)
+    assert any('uniform scale' in r['message'] for r in result['report'])
+    node.metadata['filmcraft']['effects'][0]['params']['scale']['keyframes']=[{'time':1,'value':100}]
+    clip,result=imported()
+    assert clip.transform==Transform()
+    assert not any('uniform scale' in r['message'] for r in result['report'])
