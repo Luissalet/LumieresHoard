@@ -279,7 +279,7 @@ def test_slice_single_key_keeps_constant():
     assert keyframe_value(before, 100) == 0.5 and keyframe_value(after, 0) == 0.5
 
 
-def test_keyframes_op_clears_ease_domain_on_edit():
+def test_keyframes_op_clears_ease_domain_only_on_edited_segment():
     p = new_project(1280, 720, 30)
     p, res = apply_ops(p, [{"op": "add_media", "media": "m1", "src_out": 2000}], LOOK)
     cid = res[0]["clip"]
@@ -289,15 +289,48 @@ def test_keyframes_op_clears_ease_domain_on_edit():
     right = sorted(p.main_track().clips, key=lambda c: c.start)[1]
     dom = right.keyframes["opacity"][0]
     assert dom.ease_span == 1000
-    # Edit v through the op: domain must drop so the new endpoint is authoritative.
+    # Edit the end key: domain on the (only) segment must drop.
     p, _ = apply_ops(p, [{"op": "keyframes", "clip": right.id, "prop": "opacity",
-                          "keys": [{"t": 0, "v": 0.9, "ease": "ease_in", "ease_span": 1000,
+                          "keys": [{"t": 0, "v": 0.25, "ease": "ease_in", "ease_span": 1000,
                                     "ease_into": 500, "ease_v0": 0, "ease_v1": 1},
-                                   {"t": 500, "v": 1}]}], LOOK)
-    edited = p.find(right.id)[1].keyframes["opacity"][0]
-    assert edited.ease_span is None and edited.v == 0.9
-    # ease_in 0.9→1 over 500 ms at mid: 0.9 + 0.1*(0.5**2) = 0.925 (not the old domain curve).
-    assert abs(keyframe_value(p.find(right.id)[1].keyframes["opacity"], 250) - 0.925) < 1e-9
+                                   {"t": 500, "v": 0.9}]}], LOOK)
+    edited = p.find(right.id)[1].keyframes["opacity"]
+    assert edited[0].ease_span is None and edited[1].v == 0.9
+    assert abs(keyframe_value(edited, 250) - (0.25 + (0.9 - 0.25) * 0.25)) < 1e-9
+
+
+def test_edit_last_segment_keeps_first_domain_value_537():
+    """Multipoint split: editing the last key must leave the first segment's 537 value exact."""
+    from lumiere_hoard.timeline import reconcile_key_domains
+    p = new_project(1280, 720, 30)
+    p, res = apply_ops(p, [{"op": "add_media", "media": "m1", "src_out": 3000}], LOOK)
+    cid = res[0]["clip"]
+    p, _ = apply_ops(p, [{"op": "keyframes", "clip": cid, "prop": "opacity", "keys": [
+        {"t": 0, "v": 0, "ease": "ease_in"},
+        {"t": 1000, "v": 1, "ease": "ease_out"},
+        {"t": 2000, "v": 0.2},
+    ]}], LOOK)
+    before_537 = keyframe_value(p.find(cid)[1].keyframes["opacity"], 537)
+    assert abs(before_537 - 0.288369) < 1e-9
+    p, _ = apply_ops(p, [{"op": "split", "at": 500}], LOOK)
+    right = sorted(p.main_track().clips, key=lambda c: c.start)[1]
+    rk = right.keyframes["opacity"]
+    assert rk[0].ease_span == 1000 and rk[0].ease_into == 500
+    assert abs(keyframe_value(rk, 37) - before_537) < 1e-12
+    # Edit only the last key (MCP-style: plain t/v/ease, no domain fields).
+    plain = [{"t": k.t, "v": k.v, "ease": k.ease} for k in rk]
+    plain[-1] = {"t": rk[-1].t, "v": 0.05, "ease": "linear"}
+    p, _ = apply_ops(p, [{"op": "keyframes", "clip": right.id, "prop": "opacity", "keys": plain}], LOOK)
+    after = p.find(right.id)[1].keyframes["opacity"]
+    assert after[0].ease_span == 1000 and after[0].ease_into == 500
+    assert abs(keyframe_value(after, 37) - before_537) < 1e-12
+    assert after[-1].v == 0.05
+    # Reconcile restores domain from prev when endpoints match even if the payload lies.
+    lied = [Keyframe(t=after[0].t, v=after[0].v, ease=after[0].ease, ease_span=999, ease_into=0, ease_v0=0, ease_v1=1)]
+    for k in after[1:]:
+        lied.append(Keyframe(t=k.t, v=k.v, ease=k.ease))
+    restored = reconcile_key_domains(after, lied)
+    assert restored[0].ease_span == 1000 and restored[0].ease_into == 500
 
 
 def test_repeated_cuts_preserve_ease_in_domain():

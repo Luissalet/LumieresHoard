@@ -319,6 +319,42 @@ def _segment_domain(a: Keyframe, b: Keyframe) -> tuple[int, int, float, float]:
     return max(1, b.t - a.t), 0, float(a.v), float(b.v)
 
 
+def _domain_fields(k: Keyframe) -> Optional[dict[str, Any]]:
+    if k.ease_span is None or k.ease_into is None or k.ease_v0 is None or k.ease_v1 is None:
+        return None
+    return {"ease_span": int(k.ease_span), "ease_into": int(k.ease_into),
+            "ease_v0": float(k.ease_v0), "ease_v1": float(k.ease_v1)}
+
+
+def reconcile_key_domains(prev: Optional[list[Keyframe]], incoming: list[Keyframe]) -> list[Keyframe]:
+    """Keep ease domains only on segments whose endpoints (t, v, ease→next) still match ``prev``.
+
+    Editing the last key of a multipoint split curve must leave earlier domains intact so
+    mid-span values (e.g. original t=537) stay exact. MCP/UI edits that omit domain fields
+    still restore a previous domain when the segment endpoints are unchanged.
+    """
+    prev_s = sorted(prev or [], key=lambda k: k.t)
+    new_s = sorted(incoming, key=lambda k: k.t)
+    out: list[Keyframe] = []
+    for i, k in enumerate(new_s):
+        keep: Optional[dict[str, Any]] = None
+        if i + 1 < len(new_s):
+            nxt = new_s[i + 1]
+            for j, a in enumerate(prev_s):
+                if j + 1 >= len(prev_s):
+                    break
+                b = prev_s[j + 1]
+                if (a.t == k.t and a.v == k.v and a.ease == k.ease
+                        and b.t == nxt.t and b.v == nxt.v):
+                    keep = _domain_fields(a)
+                    break
+        if keep:
+            out.append(Keyframe(t=k.t, v=k.v, ease=k.ease, **keep))
+        else:
+            out.append(Keyframe(t=k.t, v=k.v, ease=k.ease))
+    return out
+
+
 def keyframe_value(keys: list[Keyframe], local_ms: float) -> float:
     """Animated property value at clip-local time ``local_ms`` (ms), with the key's ease to the next."""
     if not keys:

@@ -1194,11 +1194,10 @@ def _sequence(ctx: Ctx, o: Sequence) -> dict:
 def _keyframes(ctx: Ctx, o: KeyframesOp) -> dict:
     track, c = ctx.p.find(o.clip)
     _unlocked(track)
-    # User edits replace keys: drop split ease domains so displayed v/ease drive evaluation again.
-    keys = sorted(
-        (Keyframe(t=k.t, v=k.v, ease=k.ease) for k in o.keys),
-        key=lambda k: k.t,
-    )
+    # Keep ease domains on segments whose endpoints are unchanged; drop only affected ones
+    # (MCP/UI may omit domain fields — restore from the previous clip keys when compatible).
+    from .timeline import reconcile_key_domains
+    keys = reconcile_key_domains(c.keyframes.get(o.prop), list(o.keys))
     if keys and o.prop in EQ_KEY_PROPS:
         if c.type == "text" or track.kind != "video":
             raise LumiereError(f"{o.prop} keys colour the picture of media clips on video tracks.")

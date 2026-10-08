@@ -208,8 +208,20 @@ function KeyframesSection({ clip }) {
           {clip.keyframes[p].map((k, i) => (
             <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 6, marginTop: 4, alignItems: "center" }}>
               <button type="button" className="btn btn-ghost btn-sm mono" style={{ justifyContent: "flex-start" }} onClick={() => ed.pb.seek(clip.start + k.t)}>{fmtMs(k.t)}</button>
-              <NumInput value={k.v} step={0.05} decimals={3} min={EQ_KF[p]?.range[0]} max={EQ_KF[p]?.range[1]} onCommit={(v) => setKeys(p, clip.keyframes[p].map((x, j) => (j === i ? { t: x.t, v, ease: x.ease || "linear" } : { t: x.t, v: x.v, ease: x.ease || "linear" })))} />
-              <button type="button" className="btn btn-ghost btn-icon btn-sm" style={{ width: 24 }} aria-label={t("remove")} onClick={() => setKeys(p, clip.keyframes[p].map((x) => ({ t: x.t, v: x.v, ease: x.ease || "linear" })).filter((_, j) => j !== i))}><Icon name="x" size={12} /></button>
+              <NumInput value={k.v} step={0.05} decimals={3} min={EQ_KF[p]?.range[0]} max={EQ_KF[p]?.range[1]} onCommit={(v) => {
+                // Drop ease domain only on the edited key and the previous key (segment end);
+                // keep metadata on unedited segments so mid-span values stay exact after a split.
+                const stripDomain = (x) => {
+                  const { ease_span, ease_into, ease_v0, ease_v1, ...rest } = x;
+                  return { ...rest, t: x.t, v: x.v, ease: x.ease || "linear" };
+                };
+                setKeys(p, clip.keyframes[p].map((x, j) => {
+                  if (j === i) return { ...stripDomain(x), v };
+                  if (j === i - 1) return stripDomain(x);
+                  return x;
+                }));
+              }} />
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" style={{ width: 24 }} aria-label={t("remove")} onClick={() => setKeys(p, clip.keyframes[p].filter((_, j) => j !== i))}><Icon name="x" size={12} /></button>
             </div>
           ))}
         </div>
