@@ -99,6 +99,13 @@ class Keyframe(Strict):
     t: int = Field(..., ge=0, description="ms from the clip's start on the timeline.")
     v: float
     ease: Ease = "linear"
+    # When a split cuts inside an eased span, the visible keys keep their local times/values
+    # but evaluation continues the original ease over [ease_v0→ease_v1] of length ease_span,
+    # with this key sitting ease_into ms into that domain (see keyframe_value / slice_keyframes).
+    ease_span: Optional[int] = Field(None, ge=1, description="Original eased segment length (ms).")
+    ease_into: Optional[int] = Field(None, ge=0, description="Ms from the original segment start to this key.")
+    ease_v0: Optional[float] = Field(None, description="Value at the original segment start.")
+    ease_v1: Optional[float] = Field(None, description="Value at the original segment end.")
 
 
 def eq_key_error(prop: str, keys: list[Keyframe]) -> Optional[str]:
@@ -305,6 +312,13 @@ def ease_value(kind: str, u: float) -> float:
     return u
 
 
+def _segment_domain(a: Keyframe, b: Keyframe) -> tuple[int, int, float, float]:
+    """Full ease domain (span, into_at_a, v0, v1) for the segment from ``a`` to ``b``."""
+    if a.ease_span is not None and a.ease_into is not None and a.ease_v0 is not None and a.ease_v1 is not None:
+        return int(a.ease_span), int(a.ease_into), float(a.ease_v0), float(a.ease_v1)
+    return max(1, b.t - a.t), 0, float(a.v), float(b.v)
+
+
 def keyframe_value(keys: list[Keyframe], local_ms: float) -> float:
     """Animated property value at clip-local time ``local_ms`` (ms), with the key's ease to the next."""
     if not keys:
@@ -314,8 +328,11 @@ def keyframe_value(keys: list[Keyframe], local_ms: float) -> float:
         return keys[0].v
     for a, b in zip(keys, keys[1:]):
         if a.t <= local_ms < b.t:
-            u = (local_ms - a.t) / max(1.0, float(b.t - a.t))
-            return a.v + (b.v - a.v) * ease_value(a.ease, u)
+            if a.ease == "hold":
+                return a.v
+            span, into, v0, v1 = _segment_domain(a, b)
+            u = (into + (local_ms - a.t)) / float(span)
+            return v0 + (v1 - v0) * ease_value(a.ease, u)
     return keys[-1].v
 
 
@@ -323,9 +340,10 @@ def slice_keyframes(keyframes: dict[str, list[Keyframe]], lo: int, hi: int) -> d
     """Keys for a subclip covering original clip-local [lo, hi]; times rebased to 0.
 
     Preserves the evaluated curve on both halves for linear/hold/ease_in/out/in_out.
-    Hold keeps a hold key (no linear bake across the step). Eased segments are baked to
-    dense linear samples of ``keyframe_value`` so a cut cannot change mid-span values
-    (e.g. ease_in 0→1 over 1000 ms cut at 500 keeps t=750 → 0.5625 on the right at local 250).
+    Hold keeps a hold key. Eased segments keep the original ease with an explicit domain
+    (ease_span / ease_into / ease_v0 / ease_v1) so a mid-span cut does not restart the curve
+    (e.g. ease_in 0→1 over 1000 ms cut at 500 keeps t=750 → 0.5625 on the right at local 250,
+    and arbitrary times like 537 match exactly before and after the cut).
     """
     if not keyframes or hi <= lo:
         return {}
@@ -334,18 +352,23 @@ def slice_keyframes(keyframes: dict[str, list[Keyframe]], lo: int, hi: int) -> d
         if not keys:
             continue
         ordered = sorted(keys, key=lambda k: k.t)
-        points: list[tuple[int, float, str]] = []  # absolute t, value, ease to next
+        rebuilt: list[Keyframe] = []
 
-        def add_point(t_abs: int, value: float, ease: str) -> None:
-            t_abs = int(t_abs)
-            if t_abs < lo or t_abs > hi:
-                return
-            if points and points[-1][0] == t_abs:
-                points[-1] = (t_abs, value, ease)
+        def push(k: Keyframe) -> None:
+            if rebuilt and rebuilt[-1].t == k.t:
+                rebuilt[-1] = k
             else:
-                points.append((t_abs, value, ease))
+                rebuilt.append(k)
 
-        add_point(lo, keyframe_value(ordered, float(lo)), "linear")
+        if lo >= ordered[-1].t:
+            push(Keyframe(t=0, v=ordered[-1].v, ease="linear"))
+            out[prop] = rebuilt
+            continue
+        if hi <= ordered[0].t:
+            push(Keyframe(t=0, v=ordered[0].v, ease="linear"))
+            out[prop] = rebuilt
+            continue
+
         for a, b in zip(ordered, ordered[1:]):
             if b.t <= lo or a.t >= hi:
                 continue
@@ -353,35 +376,32 @@ def slice_keyframes(keyframes: dict[str, list[Keyframe]], lo: int, hi: int) -> d
             if seg_hi <= seg_lo:
                 continue
             if a.ease == "hold":
-                add_point(seg_lo, a.v, "hold")
-                # hold keeps a.v until b; at b the next key's value applies
+                push(Keyframe(t=seg_lo - lo, v=a.v, ease="hold"))
                 if seg_hi >= b.t:
-                    add_point(b.t, b.v, "linear")
+                    push(Keyframe(t=b.t - lo, v=b.v, ease="linear"))
                 else:
-                    add_point(seg_hi, a.v, "linear")
+                    push(Keyframe(t=seg_hi - lo, v=a.v, ease="linear"))
                 continue
-            samples = {int(seg_lo), int(seg_hi)}
-            if a.ease in ("ease_in", "ease_out", "ease_in_out"):
-                span = seg_hi - seg_lo
-                for frac in (0.25, 0.5, 0.75):
-                    samples.add(int(round(seg_lo + span * frac)))
-                step = max(1, min(25, span // 8 or 1))
-                t = seg_lo + step
-                while t < seg_hi:
-                    samples.add(int(t))
-                    t += step
-            for t_abs in sorted(samples):
-                add_point(t_abs, keyframe_value(ordered, float(t_abs)), "linear")
-        # Only close at hi when it falls inside a key span (segment loop already covers
-        # seg_hi). Past the last key the value is constant — no phantom end key.
-        if ordered and lo < hi <= ordered[-1].t:
-            add_point(hi, keyframe_value(ordered, float(hi)), "linear")
 
-        rebuilt = [Keyframe(t=t - lo, v=v, ease=ease) for t, v, ease in points]
-        # last key's ease is unused by keyframe_value
+            span, into0, v0, v1 = _segment_domain(a, b)
+            into_lo = into0 + (seg_lo - a.t)
+            v_lo = v0 + (v1 - v0) * ease_value(a.ease, into_lo / float(span))
+            v_hi = v0 + (v1 - v0) * ease_value(a.ease, (into0 + (seg_hi - a.t)) / float(span))
+            eased = a.ease in ("ease_in", "ease_out", "ease_in_out")
+            cut_inside = eased and (into_lo > 0 or seg_hi < a.t + (span - into0))
+            if cut_inside or (eased and seg_hi < b.t):
+                push(Keyframe(
+                    t=seg_lo - lo, v=v_lo, ease=a.ease,
+                    ease_span=span, ease_into=into_lo, ease_v0=v0, ease_v1=v1,
+                ))
+            else:
+                push(Keyframe(t=seg_lo - lo, v=v_lo, ease=a.ease if eased else "linear"))
+            push(Keyframe(t=seg_hi - lo, v=v_hi, ease="linear"))
+
         if rebuilt:
-            rebuilt[-1] = Keyframe(t=rebuilt[-1].t, v=rebuilt[-1].v, ease="linear")
-        out[prop] = rebuilt
+            last = rebuilt[-1]
+            rebuilt[-1] = Keyframe(t=last.t, v=last.v, ease="linear")
+            out[prop] = rebuilt
     return out
 
 

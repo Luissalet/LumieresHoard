@@ -22,6 +22,20 @@ export const snap2 = (d) => Math.trunc(d) & ~1;
 
 const cache = new WeakMap();
 
+function easeFn(kind, u) {
+  if (kind === "ease_in") return u * u;
+  if (kind === "ease_out") return 1 - (1 - u) * (1 - u);
+  if (kind === "ease_in_out") return 3 * u * u - 2 * u * u * u;
+  return u;
+}
+
+function segmentDomain(a, b) {
+  if (a.ease_span != null && a.ease_into != null && a.ease_v0 != null && a.ease_v1 != null) {
+    return { span: a.ease_span, into: a.ease_into, v0: a.ease_v0, v1: a.ease_v1 };
+  }
+  return { span: Math.max(1, b.t - a.t), into: 0, v0: a.v, v1: b.v };
+}
+
 function easePoints(keys) {
   const sorted = [...keys].sort((a, b) => a.t - b.t);
   const out = [];
@@ -33,13 +47,12 @@ function easePoints(keys) {
     if (k.ease === "hold") {
       out.push([(n.t - 1) / 1000, k.v]);
     } else if (k.ease && k.ease !== "linear") {
-      for (let j = 1; j < 6; j++) {
-        const u = j / 6;
-        let e;
-        if (k.ease === "ease_in") e = u * u;
-        else if (k.ease === "ease_out") e = 1 - (1 - u) * (1 - u);
-        else e = 3 * u * u - 2 * u * u * u;
-        out.push([(k.t + (n.t - k.t) * u) / 1000, k.v + (n.v - k.v) * e]);
+      const { span, into, v0, v1 } = segmentDomain(k, n);
+      const steps = k.ease_span != null ? 24 : 6;
+      for (let j = 1; j < steps; j++) {
+        const localT = k.t + (n.t - k.t) * (j / steps);
+        const u = (into + (localT - k.t)) / span;
+        out.push([localT / 1000, v0 + (v1 - v0) * easeFn(k.ease, u)]);
       }
     }
   }
