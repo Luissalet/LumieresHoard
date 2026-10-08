@@ -34,9 +34,12 @@ FilterType = Literal["eq", "lut", "grayscale", "sepia", "vignette", "blur", "sha
                      "audio_denoise", "voice_enhance", "highpass", "lowpass", "compressor", "pitch", "echo"]
 CaptionStyle = Literal["clean", "bold", "karaoke", "pop", "boxed", "minimal"]
 Ease = Literal["linear", "hold", "ease_in", "ease_out", "ease_in_out"]
-KeyProp = Literal["x", "y", "scale", "opacity", "rotation", "volume_db", "mask_x", "mask_y", "mask_w", "mask_h", "mask_feather"]
+KeyProp = Literal["x", "y", "scale", "opacity", "rotation", "volume_db", "mask_x", "mask_y", "mask_w", "mask_h", "mask_feather",
+                  "brightness", "saturation"]
 MaskShape = Literal["rectangle", "rounded", "ellipse"]
 MASK_PROPS = {"mask_x": "x", "mask_y": "y", "mask_w": "w", "mask_h": "h", "mask_feather": "feather"}
+# Colour props animate the clip's eq effect; a key outside the eq range is refused (the same limits as render/filters.py SPECS["eq"]).
+EQ_KEY_PROPS = {"brightness": (-1.0, 1.0), "saturation": (0.0, 3.0)}
 RAMP_STEP_MS = 100  # source ms per constant-speed step while the speed changes (picture and sound share the steps)
 RAMP_MAX_STEPS = 24  # steps between two keys at most
 MAX_SPEED_KEYS = 64
@@ -96,6 +99,15 @@ class Keyframe(Strict):
     t: int = Field(..., ge=0, description="ms from the clip's start on the timeline.")
     v: float
     ease: Ease = "linear"
+
+
+def eq_key_error(prop: str, keys: list[Keyframe]) -> Optional[str]:
+    """Why the keys of a colour prop are refused (a value outside the eq range), or None."""
+    if prop not in EQ_KEY_PROPS:
+        return None
+    lo, hi = EQ_KEY_PROPS[prop]
+    bad = next((k for k in keys if not lo <= k.v <= hi), None)
+    return None if bad is None else f"Keyframe {prop} must be between {lo:g} and {hi:g}, not {bad.v:g} (at {bad.t} ms)."
 
 
 class SpeedKey(Strict):
@@ -273,6 +285,10 @@ class Clip(Strict):
         else:
             if self.length < MIN_CLIP_MS:
                 raise ValueError(f"Text clip {self.id} needs a length of at least {MIN_CLIP_MS} ms.")
+        for prop in EQ_KEY_PROPS:
+            problem = eq_key_error(prop, self.keyframes.get(prop, []))
+            if problem:
+                raise ValueError(problem)
         return self
 
 

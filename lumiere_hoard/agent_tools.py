@@ -1021,6 +1021,7 @@ TOOLS: list[Tool] = [
          ProjectDeleteArgs, _ann(False, True, True), run_project_delete),
     Tool("timeline_edit", "Edit the timeline with operations (split, trim, move, delete, titles, speed...). Editar timeline.\n"
          "All or nothing, one undo step. Speed curves (speed_ramp), shape masks (mask), nested sequences (add_sequence, unnest).\n"
+         "Animation (keyframes {clip, prop, keys: [{t, v, ease}]}): x, y, scale, opacity, rotation, volume_db, mask_*, and the clip's colour effect: brightness (-1..1), saturation (0..3).\n"
          "Sinónimos: cortar, recortar, mover, añadir texto, título, rótulo, rampa de velocidad, cámara lenta, máscara.\n"
          "Use request_id for interrupted-response retries: identical ops/label/base_rev recover original IDs without applying twice.\n"
          "Keywords: edit, cut, trim, split, title, text overlay, ops, speed ramp, slow motion, mask, retry, reintentar.",

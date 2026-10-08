@@ -429,6 +429,8 @@ def outline(svc: "Services", project_id: str) -> dict[str, Any]:
                     item["reframed"] = True
             if c.filters:
                 item["effects"] = [f.type for f in c.filters]
+            if c.keyframes:
+                item["keyframes"] = {prop: [{"t": k.t, "v": k.v, "ease": k.ease} for k in keys] for prop, keys in c.keyframes.items()}
             if c.transition_in:
                 item["transition"] = f"{c.transition_in.type} {c.transition_in.dur}ms"
             if c.multicam:

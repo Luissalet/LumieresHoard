@@ -3,6 +3,7 @@ refused when it is added, so an agent cannot pass raw filter strings into the re
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Callable
 
 from ..errors import LumiereError
@@ -84,8 +85,16 @@ def _hex_to_ffmpeg(color: str) -> str:
 VideoBuilder = Callable[[Params, dict[str, Any]], list[str]]
 
 
-def _v_eq(p: Params, _: dict) -> list[str]:
-    return [f"eq=brightness={p['brightness']:.3f}:contrast={p['contrast']:.3f}:saturation={p['saturation']:.3f}:gamma={p['gamma']:.3f}"]
+EQ_KEYED = ("brightness", "saturation")
+
+
+def _v_eq(p: Params, ctx: dict) -> list[str]:
+    """The eq effect. ``ctx['eq_keys']`` ({prop: ffmpeg expression of the clip's time}) is set only for the eq the keyframes
+    drive: those props become per-frame expressions (eval=frame); every other parameter stays as the clip has it."""
+    keys = ctx.get("eq_keys") or {}
+    value = {name: f"'{keys[name]}'" if name in keys else f"{p[name]:.3f}" for name in EQ_KEYED}
+    text = f"eq=brightness={value['brightness']}:contrast={p['contrast']:.3f}:saturation={value['saturation']}:gamma={p['gamma']:.3f}"
+    return [text + ":eval=frame" if keys else text]
 
 
 def _v_lut(p: Params, ctx: dict) -> list[str]:
@@ -171,11 +180,20 @@ def atempo_chain(factor: float) -> list[str]:
 
 
 def video_chain(filters: list[Any], ctx: dict[str, Any]) -> list[str]:
-    """ffmpeg filters for the enabled video effects of one clip, in order."""
+    """ffmpeg filters for the enabled video effects of one clip, in order. With ``ctx['eq_keys']`` (see _v_eq) the first
+    enabled eq is the animated one; a clip with keys and no eq at all gets a default eq in front of its effects."""
     chain: list[str] = []
-    for i, f in enumerate(f for f in filters if f.enabled and f.type not in AUDIO):
+    active = [f for f in filters if f.enabled and f.type not in AUDIO]
+    keys = ctx.get("eq_keys") or {}
+    target = next((i for i, f in enumerate(active) if f.type == "eq"), -1)
+    if keys and target < 0:
+        active.insert(0, SimpleNamespace(type="eq", params={}, enabled=True))
+        target = 0
+    for i, f in enumerate(active):
         ctx["n"] = f"{ctx.get('uid', 'x')}{i}"
+        ctx["eq_keys"] = keys if i == target else None
         chain += VIDEO[f.type](check_params(f.type, f.params), ctx)
+    ctx["eq_keys"] = keys
     return chain
 
 

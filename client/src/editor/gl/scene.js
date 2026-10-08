@@ -125,9 +125,25 @@ function sourceWindow(fc, focus) {
   return [l + kw * u0, t + kh * v0, l + kw * u1, t + kh * v1];
 }
 
+// Brightness / saturation keys (compiler.eq_key_exprs) drive the first enabled eq at clip-local time `local`; with keys and no eq
+// effect at all the clip gets a default one in front; when every eq on the clip is off the keys do nothing.
+const EQ_KEY_RANGE = { brightness: [-1, 1], saturation: [0, 3] };
 // Blur radius and pixelate block are given in canvas pixels, so a smaller output scales them (filters.py does the same).
-function effectList(clip, factor) {
+function effectList(clip, factor, local) {
   const out = [];
+  const eqs = (clip.filters || []).filter((f) => f.type === "eq");
+  const kf = clip.keyframes || {};
+  const keyed = eqs.length && !eqs.some((f) => f.enabled !== false) ? [] : Object.keys(EQ_KEY_RANGE).filter((k) => kf[k] && kf[k].length);
+  let keyedDone = false;
+  const keyedEq = (p) => {
+    for (const k of keyed) p[k] = clamp(kfRender(kf[k], local, p[k]), EQ_KEY_RANGE[k][0], EQ_KEY_RANGE[k][1]);
+  };
+  if (keyed.length && !eqs.length) {
+    const p = { ...FX_DEFAULTS.eq };
+    keyedEq(p);
+    out.push({ type: "eq", p });
+    keyedDone = true;
+  }
   for (const f of clip.filters || []) {
     if (f.enabled === false || AUDIO_FX.has(f.type)) continue;
     const base = FX_DEFAULTS[f.type];
@@ -135,6 +151,10 @@ function effectList(clip, factor) {
     const p = { ...base, ...(f.params || {}) };
     if (f.type === "blur") p.radius *= factor;
     if (f.type === "pixelate") p.size = Math.max(1, pyRound(p.size * factor));
+    if (f.type === "eq" && keyed.length && !keyedDone) {
+      keyedEq(p);
+      keyedDone = true;
+    }
     out.push({ type: f.type, p });
   }
   return out;
@@ -204,7 +224,7 @@ export function layerFor(clip, media, out, A, { fades = true, pieceEndsAtClipEnd
   layer.fitH = h;
 
   // ----- effects (pixelate trims the picture to whole blocks)
-  layer.effects = effectList(clip, out.factor);
+  layer.effects = effectList(clip, out.factor, local);
   for (const fx of layer.effects) {
     if (fx.type === "pixelate") {
       const s = Math.max(1, Math.trunc(fx.p.size));

@@ -12,9 +12,9 @@ from typing import Any, Callable, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from .errors import LumiereError, NotFound
-from .timeline import (MASK_PROPS, MIN_CLIP_MS, Angle, Canvas, Captions, CaptionStyle, Clip, Crop, Ease, Filter, FilterType, Keyframe, KeyProp,
+from .timeline import (EQ_KEY_PROPS, MASK_PROPS, MIN_CLIP_MS, Angle, Canvas, Captions, CaptionStyle, Clip, Crop, Ease, Filter, FilterType, Keyframe, KeyProp,
                        Marker, Mask, MaskShape, Multicam, Project, SpeedKey, TextStyle, Track, TrackKind, Transform, Transition, TransitionType,
-                       clone, snap)
+                       clone, eq_key_error, snap)
 from .util import new_id, parse_time
 
 MediaLookup = Callable[[str], Optional[dict[str, Any]]]
@@ -1195,6 +1195,12 @@ def _keyframes(ctx: Ctx, o: KeyframesOp) -> dict:
     track, c = ctx.p.find(o.clip)
     _unlocked(track)
     keys = sorted(o.keys, key=lambda k: k.t)
+    if keys and o.prop in EQ_KEY_PROPS:
+        if c.type == "text" or track.kind != "video":
+            raise LumiereError(f"{o.prop} keys colour the picture of media clips on video tracks.")
+        problem = eq_key_error(o.prop, keys)
+        if problem:
+            raise LumiereError(problem)
     if keys and o.prop in MASK_PROPS and c.mask is None:
         if c.type == "text" or track.kind != "video":
             raise LumiereError("Masks shape the picture of media clips on video tracks.")

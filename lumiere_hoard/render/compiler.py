@@ -15,7 +15,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from ..timeline import MASK_PROPS, Clip, Keyframe, Mask, Project, Track
+from ..timeline import EQ_KEY_PROPS, MASK_PROPS, Clip, Keyframe, Mask, Project, Track
 from . import filters as fx
 
 XFADE = {
@@ -478,6 +478,24 @@ def _window(points: list[tuple[float, float]], limit: int = 48) -> list[tuple[fl
     return keep
 
 
+def eq_key_exprs(clip: Clip, shift: float) -> dict[str, str]:
+    """Per-frame expressions of the clip's brightness / saturation keyframes (``t`` is the piece's time in seconds; ``shift`` is
+    the clip-local time at its start, as for the other keyed props), clamped to the eq range. Empty when the clip has no such keys.
+
+    Where they apply: the keys animate the clip's first enabled eq effect (its static contrast, gamma and any prop without keys
+    stay as set); a clip with keys and no eq effect at all gets a default one. If every eq on the clip is disabled the keys do
+    nothing, so switching the effect off really switches the grade off."""
+    eqs = [f for f in clip.filters if f.type == "eq"]
+    if eqs and not any(f.enabled for f in eqs):
+        return {}
+    out: dict[str, str] = {}
+    for prop, (lo, hi) in EQ_KEY_PROPS.items():
+        keys = clip.keyframes.get(prop)
+        if keys:
+            out[prop] = f"clip({keyframe_expr(keys, shift, var='t')},{_num(lo)},{_num(hi)})"
+    return out
+
+
 @dataclass
 class ChainCtx:
     out: Output
@@ -527,8 +545,9 @@ def clip_chain(idx: int, piece_clip: Clip, media: MediaRef, t0: float, t1: float
         z = keyframe_expr(scale_keys, shift, var="(on/" + _num(out.fps) + ")")
         chain.append(f"zoompan=z='max(1,{z})':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={w}x{h}:fps={out.fps_expr}")
     others = [f for f in clip.filters if f.enabled and f.type not in fx.AUDIO]
-    if others:
-        chain += fx.video_chain(others, {"lut_name": cx.lut_name, "uid": label, "factor": out.factor})
+    eq_keys = eq_key_exprs(clip, shift)
+    if others or eq_keys:
+        chain += fx.video_chain(others, {"lut_name": cx.lut_name, "uid": label, "factor": out.factor, "eq_keys": eq_keys})
     chain.append("format=yuva420p")
     if clip.mask and clip.mask.enabled:
         # the mask multiplies the clip's alpha: close the chain here, branch, and carry on from the masked picture

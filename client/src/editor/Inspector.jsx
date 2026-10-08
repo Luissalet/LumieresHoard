@@ -79,9 +79,50 @@ async function copyChapters(markers, notify, t) {
   notify(t("chapters_copied", { n: lines.length }), "ok");
 }
 
+// Brightness and saturation of the eq effect can be animated (keyframes on the clip, same names, same ranges as the render).
+const EQ_KF = { brightness: { range: [-1, 1], dflt: 0 }, saturation: { range: [0, 3], dflt: 1 } };
+const eqDriver = (clip) => {
+  const eqs = (clip?.filters || []).map((f, i) => [f, i]).filter(([f]) => f.type === "eq");
+  return (eqs.find(([f]) => f.enabled !== false) || eqs[0] || [null, -1])[1];
+};
+const eqBase = (clip, prop) => (clip?.filters || [])[eqDriver(clip)]?.params?.[prop] ?? EQ_KF[prop].dflt;
+
+// An eq slider with the keyframe diamond: with keys the slider shows the value at the playhead and writes a key there; the diamond
+// adds a key at the playhead or removes the one that is there.
+function KeyedEqRow({ clip, prop, label, local, enabled, base, step, onStatic }) {
+  const { t } = useApp();
+  const ed = useEd();
+  const [lo, hi] = EQ_KF[prop].range;
+  const keys = clip.keyframes?.[prop] || [];
+  const onKey = keys.find((k) => Math.abs(k.t - local) <= 1);
+  const value = kfValue(keys, local, Number.isFinite(base) ? base : EQ_KF[prop].dflt);
+  const round = (v) => Math.round(clamp(v, lo, hi) * 1000) / 1000;
+  const withKey = (v) => [...keys.filter((k) => Math.abs(k.t - local) > 1), { t: local, v: round(v), ease: onKey?.ease || "linear" }].sort((a, b) => a.t - b.t);
+  const setKeys = (next) => ed.edit([{ op: "keyframes", clip: clip.id, prop, keys: next }], t("lbl_keyframes"));
+  const slide = (v) => (keys.length
+    ? ed.commitClipProps(clip.id, { keyframes: { ...(clip.keyframes || {}), [prop]: withKey(v) } }, t("lbl_keyframes"))
+    : onStatic(v));
+  const color = onKey ? "var(--accent)" : keys.length ? "var(--warn)" : "var(--muted, currentColor)";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }} data-testid={`eq-key-${prop}`}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <SliderRow label={label} value={value} min={lo} max={hi} step={step} decimals={2} defaultValue={EQ_KF[prop].dflt} onChange={slide} />
+      </div>
+      <button type="button" className="btn btn-ghost btn-icon btn-sm" style={{ width: 24, color, opacity: onKey || keys.length ? 1 : 0.55 }} data-kf={prop} aria-pressed={!!onKey}
+        title={enabled ? t("kf_eq_key") : t("kf_eq_off")} aria-label={`${t("kf_eq_key")}: ${label}`}
+        onClick={() => setKeys(onKey ? keys.filter((k) => k !== onKey) : withKey(value))}>
+        <Icon name="keyframe" size={11} />
+      </button>
+    </div>
+  );
+}
+
 function EffectsSection({ clip, ids }) {
   const { t, presets } = useApp();
   const ed = useEd();
+  const now = useTime(ed.pb, 120);
+  const local = clip ? Math.round(clamp(now - clip.start, 0, clipDur(clip))) : 0;
+  const driver = eqDriver(clip);
   const [pick, setPick] = useState("");
   const list = Object.keys(presets?.effects || {});
   const isAudioClip = ed.doc.tracks.find((tr) => tr.clips.some((c) => c.id === clip?.id))?.kind === "audio";
@@ -111,6 +152,9 @@ function EffectsSection({ clip, ids }) {
               const val = f.params?.[key] ?? presets?.effects?.[f.type]?.[key];
               if (range === "color") return <Row key={key} label={t(`fxp_${key}`)}><ColorInput value={val} onChange={(v) => setParam(idx, key, v)} /></Row>;
               if (range === "text") return <Row key={key} label={t(`fxp_${key}`)}><input className="field" value={val ?? ""} onChange={(e) => setParam(idx, key, e.target.value)} /></Row>;
+              if (clip && f.type === "eq" && idx === driver && EQ_KF[key]) {
+                return <KeyedEqRow key={key} clip={clip} prop={key} label={t(`fxp_${key}`)} local={local} enabled={f.enabled !== false} base={Number(val)} step={range[2]} onStatic={(v) => setParam(idx, key, v)} />;
+              }
               return <SliderRow key={key} label={t(`fxp_${key}`)} value={Number(val)} min={range[0]} max={range[1]} step={range[2]} decimals={range[2] >= 1 ? 0 : 2} defaultValue={presets?.effects?.[f.type]?.[key]} onChange={(v) => setParam(idx, key, v)} />;
             })}
           </div>
@@ -128,9 +172,9 @@ function EffectsSection({ clip, ids }) {
 }
 
 // ------------------------------------------------------------------ keyframes
-const KF_PROPS = ["x", "y", "scale", "opacity", "rotation"];
+const KF_PROPS = ["x", "y", "scale", "opacity", "rotation", "brightness", "saturation"];
 const MASK_KF = { mask_x: "x", mask_y: "y", mask_w: "w", mask_h: "h", mask_feather: "feather" };
-const kfBase = (clip, prop) => (MASK_KF[prop] ? clip.mask?.[MASK_KF[prop]] ?? 0 : clip.transform[prop]);
+const kfBase = (clip, prop) => (EQ_KF[prop] ? eqBase(clip, prop) : MASK_KF[prop] ? clip.mask?.[MASK_KF[prop]] ?? 0 : clip.transform[prop]);
 
 function KeyframesSection({ clip }) {
   const { t } = useApp();
@@ -142,14 +186,16 @@ function KeyframesSection({ clip }) {
   const add = (prop) => {
     const keys = clip.keyframes?.[prop] || [];
     const value = kfValue(keys, local, kfBase(clip, prop));
-    setKeys(prop, [...keys.filter((k) => Math.abs(k.t - local) > 1), { t: local, v: Math.round(value * 1000) / 1000, ease: "linear" }]);
+    const [lo, hi] = EQ_KF[prop]?.range || [-Infinity, Infinity];
+    setKeys(prop, [...keys.filter((k) => Math.abs(k.t - local) > 1), { t: local, v: Math.round(clamp(value, lo, hi) * 1000) / 1000, ease: "linear" }]);
   };
   const withKeys = [...KF_PROPS, ...Object.keys(MASK_KF)].filter((p) => clip.keyframes?.[p]?.length);
+  const picture = clip.type !== "text" && ed.doc.tracks.find((tr) => tr.clips.some((c) => c.id === clip.id))?.kind === "video"; // colour keys need a picture
   return (
     <Sec title={t("insp_keyframes")}>
       <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }}>{t("kf_help", { t: fmtMs(nowLocal) })}</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-        {KF_PROPS.map((p) => (
+        {KF_PROPS.filter((p) => picture || !EQ_KF[p]).map((p) => (
           <button key={p} type="button" className="btn btn-sm" onClick={() => add(p)}><Icon name="keyframe" size={11} />{t(`kf_${p}`)}</button>
         ))}
       </div>
@@ -162,7 +208,7 @@ function KeyframesSection({ clip }) {
           {clip.keyframes[p].map((k, i) => (
             <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 6, marginTop: 4, alignItems: "center" }}>
               <button type="button" className="btn btn-ghost btn-sm mono" style={{ justifyContent: "flex-start" }} onClick={() => ed.pb.seek(clip.start + k.t)}>{fmtMs(k.t)}</button>
-              <NumInput value={k.v} step={0.05} decimals={3} onCommit={(v) => setKeys(p, clip.keyframes[p].map((x, j) => (j === i ? { ...x, v } : x)))} />
+              <NumInput value={k.v} step={0.05} decimals={3} min={EQ_KF[p]?.range[0]} max={EQ_KF[p]?.range[1]} onCommit={(v) => setKeys(p, clip.keyframes[p].map((x, j) => (j === i ? { ...x, v } : x)))} />
               <button type="button" className="btn btn-ghost btn-icon btn-sm" style={{ width: 24 }} aria-label={t("remove")} onClick={() => setKeys(p, clip.keyframes[p].filter((_, j) => j !== i))}><Icon name="x" size={12} /></button>
             </div>
           ))}
