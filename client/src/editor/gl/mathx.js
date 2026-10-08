@@ -47,12 +47,17 @@ function easePoints(keys) {
     if (k.ease === "hold") {
       out.push([(n.t - 1) / 1000, k.v]);
     } else if (k.ease && k.ease !== "linear") {
+      // Canonical 6-step grid on the full ease domain, clipped to the visible
+      // segment. Denser resampling after a mid-span split would change the
+      // piecewise polyline even when the analytical ease is unchanged.
       const { span, into, v0, v1 } = segmentDomain(k, n);
-      const steps = k.ease_span != null ? 24 : 6;
+      const steps = 6;
+      const origin = k.t - into;
       for (let j = 1; j < steps; j++) {
-        const localT = k.t + (n.t - k.t) * (j / steps);
-        const u = (into + (localT - k.t)) / span;
-        out.push([localT / 1000, v0 + (v1 - v0) * easeFn(k.ease, u)]);
+        const fullT = origin + span * (j / steps);
+        if (fullT <= k.t || fullT >= n.t) continue;
+        const u = j / steps;
+        out.push([fullT / 1000, v0 + (v1 - v0) * easeFn(k.ease, u)]);
       }
     }
   }

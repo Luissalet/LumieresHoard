@@ -113,8 +113,9 @@ def piecewise(points: list[tuple[float, float]], var: str = "t", digits: int = 4
 def _ease_points(keys: list[Keyframe]) -> list[tuple[float, float]]:
     """Keyframes as (seconds, value) points; eased segments get intermediate points, hold segments a step.
 
-    When a key carries an ease domain (after a mid-span split), samples follow that domain so export
-    matches ``keyframe_value`` (denser samples when the visible span is only part of the ease).
+    Samples use a fixed 6-step grid on the full ease domain, then keep only points that fall inside the
+    visible segment. After a mid-span split the polyline therefore matches the pre-split curve (same
+    vertices), instead of denser resampling that would change kfRender / ffmpeg piecewise values.
     """
     from lumiere_hoard.timeline import ease_value, _segment_domain
 
@@ -129,12 +130,14 @@ def _ease_points(keys: list[Keyframe]) -> list[tuple[float, float]]:
             out.append(((n.t - 1) / 1000, k.v))
         elif k.ease != "linear":
             span, into, v0, v1 = _segment_domain(k, n)
-            # Enough samples for ≤0.5px-ish error at 60fps over typical spans; domain cuts need more.
-            steps = 24 if k.ease_span is not None else 6
+            steps = 6
+            origin = k.t - into
             for j in range(1, steps):
-                local_t = k.t + (n.t - k.t) * (j / steps)
-                u = (into + (local_t - k.t)) / float(span)
-                out.append((local_t / 1000, v0 + (v1 - v0) * ease_value(k.ease, u)))
+                full_t = origin + span * (j / steps)
+                if full_t <= k.t or full_t >= n.t:
+                    continue
+                u = j / float(steps)
+                out.append((full_t / 1000, v0 + (v1 - v0) * ease_value(k.ease, u)))
     return out
 
 
