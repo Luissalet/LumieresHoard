@@ -360,12 +360,10 @@ def slice_keyframes(keyframes: dict[str, list[Keyframe]], lo: int, hi: int) -> d
             else:
                 rebuilt.append(k)
 
-        if lo >= ordered[-1].t:
-            push(Keyframe(t=0, v=ordered[-1].v, ease="linear"))
-            out[prop] = rebuilt
-            continue
-        if hi <= ordered[0].t:
-            push(Keyframe(t=0, v=ordered[0].v, ease="linear"))
+        if len(ordered) == 1 or lo >= ordered[-1].t or hi <= ordered[0].t:
+            # One key, or the window is entirely before/after the animated span:
+            # keyframe_value is constant — keep a single local key (never drop the curve).
+            push(Keyframe(t=0, v=keyframe_value(ordered, float(lo)), ease="linear"))
             out[prop] = rebuilt
             continue
 

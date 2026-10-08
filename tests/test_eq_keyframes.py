@@ -268,6 +268,38 @@ def test_slice_multipoint_ease_preserves_mid_spans():
             assert abs(keyframe_value(sliced, t - lo) - keyframe_value(keys, t)) < 1e-9, (lo, hi, t)
 
 
+def test_slice_single_key_keeps_constant():
+    keys = [Keyframe(t=500, v=0.5)]
+    sliced = slice_keyframes({'opacity': keys}, 0, 1000)['opacity']
+    assert sliced and sliced[0].v == 0.5
+    assert abs(keyframe_value(sliced, 0) - 0.5) < 1e-12
+    assert abs(keyframe_value(sliced, 800) - 0.5) < 1e-12
+    before = slice_keyframes({'opacity': keys}, 0, 400)['opacity']
+    after = slice_keyframes({'opacity': keys}, 600, 1000)['opacity']
+    assert keyframe_value(before, 100) == 0.5 and keyframe_value(after, 0) == 0.5
+
+
+def test_keyframes_op_clears_ease_domain_on_edit():
+    p = new_project(1280, 720, 30)
+    p, res = apply_ops(p, [{"op": "add_media", "media": "m1", "src_out": 2000}], LOOK)
+    cid = res[0]["clip"]
+    p, _ = apply_ops(p, [{"op": "keyframes", "clip": cid, "prop": "opacity",
+                          "keys": [{"t": 0, "v": 0, "ease": "ease_in"}, {"t": 1000, "v": 1}]}], LOOK)
+    p, _ = apply_ops(p, [{"op": "split", "at": 500}], LOOK)
+    right = sorted(p.main_track().clips, key=lambda c: c.start)[1]
+    dom = right.keyframes["opacity"][0]
+    assert dom.ease_span == 1000
+    # Edit v through the op: domain must drop so the new endpoint is authoritative.
+    p, _ = apply_ops(p, [{"op": "keyframes", "clip": right.id, "prop": "opacity",
+                          "keys": [{"t": 0, "v": 0.9, "ease": "ease_in", "ease_span": 1000,
+                                    "ease_into": 500, "ease_v0": 0, "ease_v1": 1},
+                                   {"t": 500, "v": 1}]}], LOOK)
+    edited = p.find(right.id)[1].keyframes["opacity"][0]
+    assert edited.ease_span is None and edited.v == 0.9
+    # ease_in 0.9→1 over 500 ms at mid: 0.9 + 0.1*(0.5**2) = 0.925 (not the old domain curve).
+    assert abs(keyframe_value(p.find(right.id)[1].keyframes["opacity"], 250) - 0.925) < 1e-9
+
+
 def test_repeated_cuts_preserve_ease_in_domain():
     keys = [Keyframe(t=0, v=0.0, ease='ease_in'), Keyframe(t=1000, v=1.0)]
     mid = slice_keyframes({'opacity': keys}, 200, 800)['opacity']

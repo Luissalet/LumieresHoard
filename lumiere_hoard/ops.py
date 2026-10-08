@@ -1194,7 +1194,11 @@ def _sequence(ctx: Ctx, o: Sequence) -> dict:
 def _keyframes(ctx: Ctx, o: KeyframesOp) -> dict:
     track, c = ctx.p.find(o.clip)
     _unlocked(track)
-    keys = sorted(o.keys, key=lambda k: k.t)
+    # User edits replace keys: drop split ease domains so displayed v/ease drive evaluation again.
+    keys = sorted(
+        (Keyframe(t=k.t, v=k.v, ease=k.ease) for k in o.keys),
+        key=lambda k: k.t,
+    )
     if keys and o.prop in EQ_KEY_PROPS:
         if c.type == "text" or track.kind != "video":
             raise LumiereError(f"{o.prop} keys colour the picture of media clips on video tracks.")
