@@ -73,14 +73,29 @@ def test_keys_are_added_replaced_and_removed_and_text_or_audio_clips_refuse_them
         apply_ops(p, [{"op": "keyframes", "clip": res[0]["clip"], "prop": "saturation", "keys": [{"t": 0, "v": 1}]}], LOOK)
 
 
-def test_split_shifts_the_keys_of_the_second_half_like_every_other_keyed_prop():
+def test_split_keeps_interpolated_cut_keys_on_both_halves():
     p = new_project(1280, 720, 30)
     p, res = apply_ops(p, [{"op": "add_media", "media": "m1", "src_out": 4000}], LOOK)
     p, _ = apply_ops(p, [{"op": "keyframes", "clip": res[0]["clip"], "prop": "saturation", "keys": [{"t": 0, "v": 0.5}, {"t": 3000, "v": 2}]}], LOOK)
     p, _ = apply_ops(p, [{"op": "split", "at": 1000}], LOOK)
     first, second = sorted(p.main_track().clips, key=lambda c: c.start)
-    assert [k.t for k in first.keyframes["saturation"]] == [0, 3000]
-    assert [(k.t, k.v) for k in second.keyframes["saturation"]] == [(2000, 2)]  # keys before the cut are not carried over (as for x, y, opacity...)
+    # linear: at 1000 ms value is 0.5 + (2-0.5)*(1000/3000) = 1.0
+    assert [(k.t, k.v) for k in first.keyframes["saturation"]] == [(0, 0.5), (1000, 1.0)]
+    assert [(k.t, k.v) for k in second.keyframes["saturation"]] == [(0, 1.0), (2000, 2.0)]
+    # same rule for transform keys (x) and for opacity
+    p = new_project(1280, 720, 30)
+    p, res = apply_ops(p, [{"op": "add_media", "media": "m1", "src_out": 4000}], LOOK)
+    cid = res[0]["clip"]
+    p, _ = apply_ops(p, [
+        {"op": "keyframes", "clip": cid, "prop": "x", "keys": [{"t": 0, "v": 0}, {"t": 2000, "v": 1}]},
+        {"op": "keyframes", "clip": cid, "prop": "opacity", "keys": [{"t": 0, "v": 1}, {"t": 2000, "v": 0}]},
+    ], LOOK)
+    p, _ = apply_ops(p, [{"op": "split", "at": 1000}], LOOK)
+    left, right = sorted(p.main_track().clips, key=lambda c: c.start)
+    assert [(k.t, k.v) for k in left.keyframes["x"]] == [(0, 0.0), (1000, 0.5)]
+    assert [(k.t, k.v) for k in right.keyframes["x"]] == [(0, 0.5), (1000, 1.0)]
+    assert [(k.t, round(k.v, 6)) for k in left.keyframes["opacity"]] == [(0, 1.0), (1000, 0.5)]
+    assert [(k.t, round(k.v, 6)) for k in right.keyframes["opacity"]] == [(0, 0.5), (1000, 0.0)]
 
 
 # ---------------------------------------------------------------- the filter graph

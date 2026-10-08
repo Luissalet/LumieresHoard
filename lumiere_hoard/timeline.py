@@ -305,6 +305,58 @@ def ease_value(kind: str, u: float) -> float:
     return u
 
 
+def keyframe_value(keys: list[Keyframe], local_ms: float) -> float:
+    """Animated property value at clip-local time ``local_ms`` (ms), with the key's ease to the next."""
+    if not keys:
+        return 0.0
+    keys = sorted(keys, key=lambda k: k.t)
+    if local_ms <= keys[0].t:
+        return keys[0].v
+    for a, b in zip(keys, keys[1:]):
+        if a.t <= local_ms < b.t:
+            u = (local_ms - a.t) / max(1.0, float(b.t - a.t))
+            return a.v + (b.v - a.v) * ease_value(a.ease, u)
+    return keys[-1].v
+
+
+def slice_keyframes(keyframes: dict[str, list[Keyframe]], lo: int, hi: int) -> dict[str, list[Keyframe]]:
+    """Keys for a subclip covering original clip-local [lo, hi]; times rebased to 0.
+
+    Always inserts a key at 0 with the interpolated value at ``lo``. Inserts a key at the end with the
+    interpolated value at ``hi`` when the cut falls at or before a later original key (so the left half
+    keeps the cut). Trailing hold past the last original key is not duplicated.
+    """
+    if not keyframes or hi <= lo:
+        return {}
+    out: dict[str, list[Keyframe]] = {}
+    for prop, keys in keyframes.items():
+        if not keys:
+            continue
+        ordered = sorted(keys, key=lambda k: k.t)
+        v_lo = keyframe_value(ordered, lo)
+        v_hi = keyframe_value(ordered, hi)
+        ease_lo = "linear"
+        for a, b in zip(ordered, ordered[1:]):
+            if a.t <= lo < b.t:
+                ease_lo = a.ease
+                break
+        rebuilt: list[Keyframe] = [Keyframe(t=0, v=v_lo, ease=ease_lo)]
+        for kf in ordered:
+            if lo < kf.t < hi:
+                rebuilt.append(Keyframe(t=kf.t - lo, v=kf.v, ease=kf.ease))
+        end_t = hi - lo
+        if any(kf.t >= hi for kf in ordered) and rebuilt[-1].t != end_t:
+            rebuilt.append(Keyframe(t=end_t, v=v_hi, ease="linear"))
+        merged: list[Keyframe] = []
+        for kf in rebuilt:
+            if merged and merged[-1].t == kf.t:
+                merged[-1] = kf
+            else:
+                merged.append(kf)
+        out[prop] = merged
+    return out
+
+
 def speed_value(keys: list[SpeedKey], src: float) -> float:
     """The speed curve at source time ``src``: the first / last key's speed outside them, eased in between."""
     if not keys:
@@ -317,6 +369,33 @@ def speed_value(keys: list[SpeedKey], src: float) -> float:
             u = (src - a.t) / max(1e-9, b.t - a.t)
             return a.v + (b.v - a.v) * ease_value(a.ease, u)
     return keys[-1].v
+
+
+def slice_speed_keys(keys: list[SpeedKey], src_lo: int, src_hi: int) -> list[SpeedKey]:
+    """Speed curve for a subclip source span [src_lo, src_hi]: cut key with interpolated speed, keep interior keys."""
+    if not keys or src_hi <= src_lo:
+        return list(keys or [])
+    ordered = sorted(keys, key=lambda k: k.t)
+    v_lo = speed_value(ordered, float(src_lo))
+    v_hi = speed_value(ordered, float(src_hi))
+    ease_lo = "linear"
+    for a, b in zip(ordered, ordered[1:]):
+        if a.t <= src_lo < b.t:
+            ease_lo = a.ease
+            break
+    rebuilt: list[SpeedKey] = [SpeedKey(t=src_lo, v=v_lo, ease=ease_lo)]
+    for k in ordered:
+        if src_lo < k.t < src_hi:
+            rebuilt.append(SpeedKey(t=k.t, v=k.v, ease=k.ease))
+    if rebuilt[-1].t != src_hi:
+        rebuilt.append(SpeedKey(t=src_hi, v=v_hi, ease="linear"))
+    merged: list[SpeedKey] = []
+    for k in rebuilt:
+        if merged and merged[-1].t == k.t:
+            merged[-1] = k
+        else:
+            merged.append(k)
+    return merged
 
 
 def _inverse_integral(keys: list[SpeedKey], a: float, b: float) -> float:

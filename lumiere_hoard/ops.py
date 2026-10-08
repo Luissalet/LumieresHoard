@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from .errors import LumiereError, NotFound
 from .timeline import (EQ_KEY_PROPS, MASK_PROPS, MIN_CLIP_MS, Angle, Canvas, Captions, CaptionStyle, Clip, Crop, Ease, Filter, FilterType, Keyframe, KeyProp,
                        Marker, Mask, MaskShape, Multicam, Project, SpeedKey, TextStyle, Track, TrackKind, Transform, Transition, TransitionType,
-                       clone, eq_key_error, snap)
+                       clone, eq_key_error, slice_keyframes, snap)
 from .util import new_id, parse_time
 
 MediaLookup = Callable[[str], Optional[dict[str, Any]]]
@@ -600,10 +600,10 @@ def _cut_clip(c: Clip, t0: int, t1: int, new_id_for_part: bool = False) -> Optio
     if t1 < c.end:
         part.fade_out = 0
         part.audio_fade_out = 0
-    if c.keyframes and t0 > c.start:
-        shift = t0 - c.start
-        part.keyframes = {k: [Keyframe(t=max(0, kf.t - shift), v=kf.v, ease=kf.ease) for kf in v if kf.t - shift >= -1]
-                          for k, v in c.keyframes.items()}
+    # Property keys are clip-local: both halves get a cut key with the interpolated value and keep interior keys.
+    # speed_keys stay absolute in source time (deep copy); the trimmed src_in/src_out already scopes them.
+    if c.keyframes and (t0 > c.start or t1 < c.end):
+        part.keyframes = slice_keyframes(c.keyframes, t0 - c.start, t1 - c.start)
     return part
 
 

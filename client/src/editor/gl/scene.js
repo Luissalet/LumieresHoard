@@ -1,6 +1,7 @@
 // What the render draws at one instant, as plain data the WebGL compositor can draw.
 // A port of render/compiler.py (pieces_in, clip_chain, _fit_chain, _focus_exprs, _position, the xfade branch of chunk_graph):
 // the same rounding to even sizes, the same crop / fit rules, the same keyframe maths, the same piece boundaries.
+import { activeEqKeyProps, applyEqKeys } from "../eqKeys.js";
 import { AUDIO_FX, FX_DEFAULTS } from "../fxspec.js";
 import { hasRamp, rampSegments, srcAt } from "../time.js";
 import { clamp, even, evenCeil, hexToRgb, kfRender, pyRound, snap2 } from "./mathx.js";
@@ -126,33 +127,26 @@ function sourceWindow(fc, focus) {
 }
 
 // Brightness / saturation keys (compiler.eq_key_exprs) drive the first enabled eq at clip-local time `local`; with keys and no eq
-// effect at all the clip gets a default one in front; when every eq on the clip is off the keys do nothing.
-const EQ_KEY_RANGE = { brightness: [-1, 1], saturation: [0, 3] };
+// effect at all the clip gets a default one in front; when every eq on the clip is off the keys do nothing (eqKeys.js).
 // Blur radius and pixelate block are given in canvas pixels, so a smaller output scales them (filters.py does the same).
 function effectList(clip, factor, local) {
   const out = [];
   const eqs = (clip.filters || []).filter((f) => f.type === "eq");
-  const kf = clip.keyframes || {};
-  const keyed = eqs.length && !eqs.some((f) => f.enabled !== false) ? [] : Object.keys(EQ_KEY_RANGE).filter((k) => kf[k] && kf[k].length);
+  const keyed = activeEqKeyProps(clip);
   let keyedDone = false;
-  const keyedEq = (p) => {
-    for (const k of keyed) p[k] = clamp(kfRender(kf[k], local, p[k]), EQ_KEY_RANGE[k][0], EQ_KEY_RANGE[k][1]);
-  };
   if (keyed.length && !eqs.length) {
-    const p = { ...FX_DEFAULTS.eq };
-    keyedEq(p);
-    out.push({ type: "eq", p });
+    out.push({ type: "eq", p: applyEqKeys(clip, local, FX_DEFAULTS.eq).params });
     keyedDone = true;
   }
   for (const f of clip.filters || []) {
     if (f.enabled === false || AUDIO_FX.has(f.type)) continue;
     const base = FX_DEFAULTS[f.type];
     if (!base) continue;
-    const p = { ...base, ...(f.params || {}) };
+    let p = { ...base, ...(f.params || {}) };
     if (f.type === "blur") p.radius *= factor;
     if (f.type === "pixelate") p.size = Math.max(1, pyRound(p.size * factor));
     if (f.type === "eq" && keyed.length && !keyedDone) {
-      keyedEq(p);
+      p = applyEqKeys(clip, local, p).params;
       keyedDone = true;
     }
     out.push({ type: f.type, p });

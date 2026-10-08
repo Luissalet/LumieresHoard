@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { filtersWithEqKeys } from "./eqKeys.js";
 import { frameSrcMs, frameTime } from "./gl/scene.js";
 import { clamp, clipDur, kfValue, speedAt, srcAt } from "./time.js";
 
@@ -259,6 +260,10 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
         if (g.blur) drawBg();
         // shape mask: on the picture box, or on the whole frame with fit=blur (the render masks the blurred fill too)
         setMask(g.blur ? xf.current : pic.current, maskCss(c, local, g.blur ? s.box.w : g.w, g.blur ? s.box.h : g.h));
+        // eq brightness / saturation keys: same evaluation as WebGL scene.effectList (shared eqKeys.js)
+        if (media_el) {
+          media_el.style.filter = cssFilter(filtersWithEqKeys(c, local), s.k ?? 1);
+        }
       }
     }
     // ----- sound and time
@@ -348,7 +353,7 @@ export const ClipLayer = React.memo(function ClipLayer({ clip, track, media, nex
     maxWidth: "none",
     pointerEvents: "none",
     objectFit: "fill",
-    filter: cssFilter(clip.filters, k),
+    filter: cssFilter(filtersWithEqKeys(clip, 0), k),
     transform: clip.filters?.some((f) => f.type === "hflip" && f.enabled !== false) ? "scaleX(-1)" : clip.filters?.some((f) => f.type === "vflip" && f.enabled !== false) ? "scaleY(-1)" : undefined,
   };
   return (
