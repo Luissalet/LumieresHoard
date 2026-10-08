@@ -11,6 +11,7 @@ A local video editor that runs in the browser and on your own machine. It has a 
 ## What it does
 
 **Library and timeline**
+- Open Atlas shared originals with `media_shared(file_id)`, without copying them. Repeat after editing the original in Paint, GIMP or another Hoard to keep its media ID in timelines and refresh private caches. Existing folder permissions and active-job checks still apply; files are not watched continuously.
 - Import files or whole folders by path (nothing is copied); drag and drop uploads. Each media gets a 540p proxy with short GOPs for smooth scrubbing, a filmstrip and a waveform, made in the background.
 - Tracks of video, audio and text; the first video track is the main one and the others draw on top (picture in picture, overlays).
 - Split, trim with or without ripple, move, slip (change the content, keep the position), roll (move a cut between two clips), ripple delete, close gaps, duplicate, copy and paste, snapping to the playhead, edges and markers, in/out range, markers and chapters.
@@ -76,14 +77,16 @@ visible changes in a bounded scan while keeping the timeline endpoints. Explicit
 millisecond samples are also supported. Source and timeline changes during
 capture reject the sheet. [API, sampling and verified limits](docs/CONTACT-SHEETS.md).
 
-`mcp_server.py` is a stdio MCP bridge with 55 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
+`mcp_server.py` is a stdio MCP bridge with 56 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
  "env": {"LUMIERE_URL": "http://127.0.0.1:5198", "LUMIERE_TOKEN_FILE": "<repo>/data/mcp-token"}}
 ```
 
-The tools cover the library (`media_import`, `media_analyze`, `transcript_get`, `speakers_edit`, `highlights_find`, `music_pick`, `broll_suggest`…), multicam (`multicam_sync`, `multicam_create`, `multicam_switch`, `multicam_auto`), templates (`template_save`, `template_list`), projects and the timeline (`project_create`, `project_get`, `timeline_edit` with 40 operations, `timeline_nest`, `timeline_history`), smart edits (`edit_command`, `text_cut`, `timeline_transcript`), plans (`plan_create`, `plan_apply`), output (`render_start`, `job_status`, `renders_list`, `frame_snapshot`, `subtitles_export`, `subtitles_translate`) and settings. A wrong operation or field gets an answer listing every operation with its fields; `project_get` lists titles first and reads long timelines by track or time window; `frame_snapshot` returns the picture itself (an MCP image) and the layers drawn at that time (titles, captions, media), so an assistant can check its own work. Sibling apps can send media (`media_receive`, or the `lumiere.media.import` event at `/api/family/events`), bring a whole edit (`project_from_timeline`, below) and hear when renders and transcriptions finish (`GET /api/family/contract` lists the events). `faustus-plugin.json` describes the app, its launch and the bridge for hosts that read it.
+The tools cover the library (`media_import`, `media_analyze`, `transcript_get`, `speakers_edit`, `highlights_find`, `music_pick`, `broll_suggest`…), multicam (`multicam_sync`, `multicam_create`, `multicam_switch`, `multicam_auto`), templates (`template_save`, `template_list`), projects and the timeline (`project_create`, `project_get`, `timeline_edit` with 40 operations, `timeline_nest`, `timeline_history`), smart edits (`edit_command`, `text_cut`, `timeline_transcript`), plans (`plan_create`, `plan_apply`), output (`render_start`, `job_status`, `renders_list`, `frame_snapshot`, `project_contact_sheet`, `subtitles_export`, `subtitles_translate`) and settings. A wrong operation or field gets an answer listing every operation with its fields; `project_get` lists titles first and reads long timelines by track or time window; `frame_snapshot` returns the picture itself (an MCP image) and the layers drawn at that time (titles, captions, media), so an assistant can check its own work. Sibling apps can send media (`media_receive`, or the `lumiere.media.import` event at `/api/family/events`), bring a whole edit (`project_from_timeline`, below) and hear when renders and transcriptions finish (`GET /api/family/contract` lists the events). `faustus-plugin.json` describes the app, its launch and the bridge for hosts that read it.
+
+`project_contact_sheet(project, mode="overview"|"boundaries"|"adaptive", count=12, width=320, times?)` returns one image with up to 16 frames and their times. Overview spreads samples across the timeline; boundaries shows both sides of clip starts in the main track. Adaptive prioritizes visual changes in a bounded scan while retaining timeline endpoints. An explicit list of times in milliseconds is also accepted. It uses the final timeline renderer and refuses a review if the project changes while sampling. The image helps review rhythm and cuts; it does not itself verify motion continuity.
 
 ## Family
 
@@ -113,7 +116,6 @@ Tests: `python -m pytest -q` (synthetic media made with ffmpeg; renders are chec
 ## Licence
 
 MIT.
-
 
 ## OpenTimelineIO interchange
 

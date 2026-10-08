@@ -216,6 +216,38 @@ def relink(svc: "Services", media_id: str, raw: str) -> dict[str, Any]:
     return get(svc, media_id)
 
 
+def open_shared(svc: "Services", raw: str, *, name: str = "") -> dict[str, Any]:
+    """Reuse the same media ID when its shared original changes; rebuild caches.
+
+    Timelines keep their references. Only disposable private cache files and
+    old analyses are removed; the shared original is never moved or deleted.
+    """
+    path = Path(raw).resolve()
+    _check_root(svc, path)
+    row = svc.db.one("SELECT * FROM media WHERE path = ? AND origin = 'atlas' ORDER BY created_ts LIMIT 1", (str(path),))
+    if row is None:
+        return import_path(svc, str(path), origin="atlas", name=name)
+    if row["fingerprint"] == fingerprint(path):
+        return {**get(svc, row["id"]), "existing": True}
+    if svc.jobs.list(state="active", media_id=row["id"]):
+        raise LumiereError("Wait for this media's running jobs before refreshing its edited original.")
+    # Validate before changing metadata or deleting a disposable cache.
+    info = relink(svc, row["id"], str(path))
+    base = svc.config.cache_dir.resolve()
+    cache = (base / row["id"]).resolve()
+    if cache.parent != base or cache == base:
+        raise Refused("The private media cache escaped its folder.", code="outside_roots")
+    files = [p for p in cache.rglob("*") if p.is_file()] if cache.exists() else []
+    if any(not p.resolve().is_relative_to(cache) for p in files):
+        raise Refused("The private media cache contains an external link.", code="outside_roots")
+    for disposable in files:
+        disposable.unlink()
+    svc.db.execute("DELETE FROM analysis WHERE media_id = ?", (row["id"],))
+    svc.db.execute("UPDATE media SET proxy = 'pending' WHERE id = ?", (row["id"],))
+    schedule_prepare(svc, row["id"])
+    return {**get(svc, row["id"]), "existing": True, "refreshed": True}
+
+
 def delete(svc: "Services", media_id: str, *, force: bool = False) -> dict[str, Any]:
     info = get(svc, media_id)
     users = [r["id"] for r in svc.db.query("SELECT id, doc FROM projects") if f'"{media_id}"' in r["doc"]]

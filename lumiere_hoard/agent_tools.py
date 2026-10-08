@@ -16,7 +16,7 @@ from . import media as media_store
 from . import plan as plan_mod
 from . import projects as project_store
 from .errors import LumiereError
-from .hoard_link import agentkit
+from .hoard_link import agentkit, fam_workspace
 from .hoard_link.agentkit import Tool, ann as _ann
 from .hoard_link.waiting import MAX_WAIT_S
 from .ops import OP_NAMES, PRESETS, RAMP_PRESETS, op_reference
@@ -30,6 +30,8 @@ from .util import ms_to_tc, parse_time
 AGENT_INSTRUCTIONS = """Lumiere's Hoard edits videos on this computer. Typical flow: media_import (a file or folder the user names; nothing is
 copied) -> project_create (preset: reels, youtube, square...; media to start with) -> look with project_get (outline) and frame_snapshot ->
 edit -> render_start -> job_status until done -> tell the user the file path.
+For an Atlas shared file, use media_shared(file_id) instead of importing a copy. Repeat after a native edit to refresh caches
+while keeping its media ID in timelines; wait for active jobs on that media first. Files are not watched continuously.
 Two ways to edit: (1) plan_create with the user's words ("quita los silencios, subtítulos y vertical"), show the steps, then plan_apply;
 (2) precise work: timeline_edit with operations (ids come from project_get), or edit_command for smart edits (remove_silences,
 remove_fillers, cut_words, split_scenes, reframe, captions, beat_sync, match_loudness). Times are ms or '1:23.5'.
@@ -67,6 +69,10 @@ class MediaImportArgs(BaseModel):
     path: str = Field("", max_length=2000, description="A video, audio or image file the user named.")
     folder: str = Field("", max_length=2000, description="Or a folder: imports every media file in it.")
     recursive: bool = False
+
+
+class SharedMediaArgs(BaseModel):
+    file_id: str = Field(..., min_length=1, max_length=40, description="Atlas registered file ID; Lumiere must be a project member.")
 
 
 class MediaListArgs(BaseModel):
@@ -432,6 +438,21 @@ def run_media_import(svc: Services, a: MediaImportArgs) -> dict:
         raise LumiereError("Give a path or a folder.")
     m = media_store.import_path(svc, a.path)
     return {k: m[k] for k in ("id", "name", "kind", "duration_ms", "width", "height", "fps", "has_audio", "existing", "path")}
+
+
+def run_media_shared(svc: Services, a: SharedMediaArgs) -> dict:
+    result = fam_workspace.resolve(a.file_id)
+    if not result.get("ok"):
+        raise LumiereError(result.get("error") or "Atlas shared file is unavailable.")
+    file = result.get("file", {})
+    if not file.get("exists") or not file.get("live_file") or not file.get("path"):
+        raise LumiereError("The shared original is missing. Restore its path before importing.")
+    # The ordinary importer keeps the original path and enforces file_roots.
+    # Atlas membership does not bypass Lumiere's local folder policy.
+    media = media_store.open_shared(svc, file["path"], name=file.get("title", ""))
+    return {**{k: media[k] for k in ("id", "name", "kind", "path", "existing")},
+            "shared_file_id": a.file_id, "source_revision": file["revision"], "live_file": True,
+            "refreshed": media.get("refreshed", False)}
 
 
 def run_media_list(svc: Services, a: MediaListArgs) -> dict:
@@ -965,6 +986,9 @@ TOOLS: list[Tool] = [
          MediaImportArgs, _ann(False, False, True), run_media_import),
     Tool("media_list", "List the media library (videos, audios, images) with analyses done. Biblioteca de medios.\n"
          "Sinónimos: mis vídeos, archivos importados.\nKeywords: media, library, list.", MediaListArgs, _ann(True), run_media_list),
+    Tool("media_shared", "Open an Atlas shared original without copying it. Abrir un archivo compartido de Atlas.\n"
+         "Uses the same live path as other project members; local folder restrictions still apply.\n"
+         "Keywords: Atlas, shared file, common storage, archivo compartido.", SharedMediaArgs, _ann(False, False, True), run_media_shared),
     Tool("media_get", "One media in detail: size, length, streams, levels, analyses and running jobs. Ver medio.\n"
          "Keywords: media info, probe.", MediaRef, _ann(True), run_media_get),
     Tool("media_delete", "Remove a media from the library (needs confirm=true). Quitar de la biblioteca.\n"
