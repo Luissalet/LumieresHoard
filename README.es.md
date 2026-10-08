@@ -10,6 +10,14 @@ Un editor de vídeo local que funciona en el navegador y en tu propio ordenador.
 
 ## Qué hace
 
+Comprobado el 9 de octubre de 2026: la vista previa sencilla sigue las claves de
+brillo y saturación con WebGL desactivado. Dividir conserva las claves y sus
+dominios de ease; editar un segmento mantiene los dominios no afectados. Pasan
+MCP nativo, edición/recarga/deshacer en navegador, comprobaciones frontend,
+suite Python y build. El cambio está activo en la app gestionada. Queda una
+diferencia de muestreo de la curva renderizada antes y después de dividir,
+registrada como Ágora124; aún no se certifica su igualdad renderizada.
+
 **Biblioteca y timeline**
 - Abre originales compartidos de Atlas mediante `media_shared(file_id)`, sin copiarlos. Repite la operación tras editar el original en Paint, Gimp u otro Hoard: conserva el ID del medio en los montajes y renueva sus cachés. Respeta las carpetas autorizadas y espera a que terminen los trabajos activos de ese medio; no hay vigilancia continua.
 - Importa archivos o carpetas enteras por ruta (no copia nada) y sube archivos arrastrándolos. Cada medio recibe en segundo plano un proxy de 540p con GOP corto para moverse con fluidez, una tira de miniaturas y la forma de onda.

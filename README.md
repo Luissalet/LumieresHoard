@@ -10,6 +10,14 @@ A local video editor that runs in the browser and on your own machine. It has a 
 
 ## What it does
 
+Verified on 9 October 2026: the simple preview follows brightness and saturation
+keys when WebGL is off. Splits preserve animation keys and their ease domains;
+editing one segment keeps unaffected domains. Native MCP, browser editing,
+reload/undo, frontend checks, the Python suite and the build passed. The change
+is active in the managed app. A remaining sampling discrepancy between an eased
+curve before and after a split is tracked as Agora124; rendered-curve equality
+is not yet certified.
+
 **Library and timeline**
 - Open Atlas shared originals with `media_shared(file_id)`, without copying them. Repeat after editing the original in Paint, GIMP or another Hoard to keep its media ID in timelines and refresh private caches. Existing folder permissions and active-job checks still apply; files are not watched continuously.
 - Import files or whole folders by path (nothing is copied); drag and drop uploads. Each media gets a 540p proxy with short GOPs for smooth scrubbing, a filmstrip and a waveform, made in the background.
