@@ -227,3 +227,54 @@ def test_export_with_keys_on_a_clip_split_in_chunks_is_valid(services, lib):
     assert job["state"] == "done", job["error"]
     assert job["result"]["qc"]["ok"], job["result"]["qc"]
     assert abs(job["result"]["duration_ms"] - 3000) < 70
+
+# ---------------------------------------------------------------- split preserves ease curves
+
+from lumiere_hoard.timeline import keyframe_value, slice_keyframes
+
+
+@pytest.mark.parametrize('ease', ['ease_in', 'ease_out', 'ease_in_out', 'hold', 'linear'])
+def test_slice_keyframes_preserves_curve_both_halves(ease):
+    keys = [Keyframe(t=0, v=0.0, ease=ease), Keyframe(t=1000, v=1.0)]
+    cut = 500
+    left = slice_keyframes({'opacity': keys}, 0, cut)['opacity']
+    right = slice_keyframes({'opacity': keys}, cut, 1000)['opacity']
+    for t in (0, 125, 250, 375, 500):
+        assert abs(keyframe_value(left, t) - keyframe_value(keys, t)) < 1e-9, (ease, 'L', t)
+    for t in (500, 625, 750, 875, 1000):
+        assert abs(keyframe_value(right, t - cut) - keyframe_value(keys, t)) < 1e-9, (ease, 'R', t, keyframe_value(right, t - cut), keyframe_value(keys, t))
+
+
+def test_slice_ease_in_cut_500_keeps_original_750():
+    keys = [Keyframe(t=0, v=0.0, ease='ease_in'), Keyframe(t=1000, v=1.0)]
+    assert abs(keyframe_value(keys, 750) - 0.5625) < 1e-9
+    right = slice_keyframes({'opacity': keys}, 500, 1000)['opacity']
+    assert abs(keyframe_value(right, 250) - 0.5625) < 1e-9
+
+
+def test_slice_multipoint_ease_preserves_mid_spans():
+    keys = [
+        Keyframe(t=0, v=0.0, ease='ease_out'),
+        Keyframe(t=400, v=0.5, ease='ease_in'),
+        Keyframe(t=1000, v=1.0, ease='hold'),
+        Keyframe(t=1600, v=0.2),
+    ]
+    for lo, hi in ((0, 400), (200, 800), (400, 1000), (700, 1400), (1000, 1600), (0, 1600)):
+        sliced = slice_keyframes({'opacity': keys}, lo, hi)['opacity']
+        for t in range(lo, hi + 1, 50):
+            assert abs(keyframe_value(sliced, t - lo) - keyframe_value(keys, t)) < 1e-6, (lo, hi, t)
+
+
+def test_split_op_preserves_ease_in_at_750():
+    p = new_project(1280, 720, 30)
+    p, res = apply_ops(p, [{"op": "add_media", "media": "m1", "src_out": 2000}], LOOK)
+    cid = res[0]["clip"]
+    p, _ = apply_ops(p, [{"op": "keyframes", "clip": cid, "prop": "opacity",
+                          "keys": [{"t": 0, "v": 0, "ease": "ease_in"}, {"t": 1000, "v": 1}]}], LOOK)
+    before = keyframe_value(p.find(cid)[1].keyframes["opacity"], 750)
+    assert abs(before - 0.5625) < 1e-9
+    p, _ = apply_ops(p, [{"op": "split", "at": 500}], LOOK)
+    left, right = sorted(p.main_track().clips, key=lambda c: c.start)
+    assert abs(keyframe_value(left.keyframes["opacity"], 375) - keyframe_value(
+        [Keyframe(t=0, v=0, ease='ease_in'), Keyframe(t=1000, v=1)], 375)) < 1e-6
+    assert abs(keyframe_value(right.keyframes["opacity"], 250) - 0.5625) < 1e-6
