@@ -444,3 +444,41 @@ def test_the_errors_keep_their_codes_and_statuses(client, prj):
     assert stale.status_code == 409 and stale.json()["code"] == "version_conflict"
     assert agent_call(client, "no_such_tool").status_code == 404
     assert client.post("/api/agent/call", json={"name": "project_list"}).status_code == 401
+
+
+@needs_ffmpeg
+def test_a_big_folder_import_is_undone_in_full_even_when_the_answer_was_cut(client, tmp_path, monkeypatch):
+    from PIL import Image
+
+    folder = tmp_path / "pics"
+    folder.mkdir()
+    for n in range(30):
+        Image.new("RGB", (16 + n, 16), (n * 8, 40, 90)).save(folder / f"p{n:02d}.png")
+    existing = media_store.import_path(client.svc, str(folder / "p00.png"))["id"]                    # one of them was already in the library
+    monkeypatch.setattr(agent_tools.cap_result, "__defaults__", (1500,))                              # the answer an agent gets is cut at 1.5 KB here
+    made = ok(agent_call(client, "media_import", {"folder": str(folder)}))
+    assert "truncated" in made and len(made["imported"]) < 30
+    assert client.svc.db.one("SELECT COUNT(*) c FROM media")["c"] == 30
+    done = ok(undo(client, "s1", confirm=True))
+    assert done["complete"] is True and done["undone"][0]["detail"]["removed_from_library"] == 29
+    assert [r["id"] for r in client.svc.db.query("SELECT id FROM media")] == [existing]
+
+
+@needs_ffmpeg
+def test_a_file_received_from_another_app_is_taken_back_with_its_project(client, media_dir):
+    made = ok(agent_call(client, "media_receive", {"path": str(media_dir / "vert.mp4"), "create_project": "Desde otra app"}))
+    pid = made["project"]["id"]
+    assert made["project"]["action"] == "created" and projects.doc(client.svc, pid)
+    mid = made["id"]
+    base = projects.create(client.svc, "Ya existía", preset="hd720")["id"]
+    before = dump(client, base)
+    ok(agent_call(client, "media_receive", {"path": str(media_dir / "pic.png"), "project": base}))
+    assert dump(client, base) != before
+    plan = ok(undo(client, "s1", dry_run=True))
+    assert plan["complete"] is True and len(plan["would_undo"]) == 2
+    done = ok(undo(client, "s1", confirm=True))
+    assert done["complete"] is True and len(done["undone"]) == 2
+    assert dump(client, base) == before
+    with pytest.raises(NotFound):
+        projects.doc(client.svc, pid)
+    assert media_store.lookup(client.svc, mid) is None and client.svc.db.one("SELECT COUNT(*) c FROM media")["c"] == 0
