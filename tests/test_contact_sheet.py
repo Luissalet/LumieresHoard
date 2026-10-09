@@ -233,7 +233,7 @@ def test_api_and_agent_catalog_are_usable_and_validate_times(client, media_dir):
     assert adaptive.json()["sampling_policy"]["strategy"] == "bounded_native_color_and_pixel_change"
     for field in ("url", "png_url", "receipt_url", "html_url"):
         assert client.get(body[field]).status_code == 200
-    agent = client.post("/api/agent/call", headers={"Authorization": f"Bearer {client.svc.token}"}, json={"name": "project_contact_sheet", "arguments": {"project": pid, "times": [500], "width": 160, "show": False}})
+    agent = client.post("/api/agent/call", headers={"Authorization": f"Bearer {client.svc.token}"}, json={"name": "project_contact_sheet", "arguments": {"project": pid, "times": [500], "width": 160, "show": False}, "reason": "Look at the montage"})
     assert agent.status_code == 200 and "_image" not in agent.json()
     assert client.post(f"/api/projects/{pid}/contact-sheet", json={"times": [-1]}).status_code == 400
     assert client.post(f"/api/projects/{pid}/contact-sheet", json={"times": [4000]}).status_code == 400

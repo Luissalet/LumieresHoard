@@ -1,62 +1,41 @@
-"""/api/agent/* — the bridge used by mcp_server.py (Bearer token from <DATA_DIR>/mcp-token)."""
+"""/api/agent/* — the bridge used by mcp_server.py (Bearer token from <DATA_DIR>/mcp-token, or an agent token from agent_tokens.json).
+
+The routes come from Hoard Link's ``make_agent_router``: a tool that changes something needs a ``reason``, every such call is kept in
+the agent journal (``<DATA_DIR>/agent_journal.jsonl``) and a whole agent session can be taken back with ``POST /api/agent/undo``
+(see agent_undo.py). The web interface does not pass through here: it runs the same tools through ``deps.tool`` and is exempt.
+"""
 
 from __future__ import annotations
 
-import secrets
-import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field, ValidationError
+from fastapi import Request
 
-from ..agent_tools import AGENT_INSTRUCTIONS, call_tool, tool_catalog
-from ..errors import Refused
-from ..hoard_link import family
+from ..agent_tools import AGENT_INSTRUCTIONS, TOOLS, call_tool, tool_catalog
+from ..errors import Conflict, LumiereError, Refused
+from ..hoard_link.agentkit import AppError, make_agent_router
 from .deps import services
 
-router = APIRouter(prefix="/api/agent")
 
-
-class CallBody(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    arguments: dict[str, Any] | None = None
-    caller: str | None = Field(default=None, max_length=80)
-
-
-@router.get("/tools")
-def tools():
-    return {"instructions": AGENT_INSTRUCTIONS, "tools": tool_catalog()}
-
-
-@router.post("/call")
-def call(request: Request, body: CallBody):
-    svc = services(request)
-    header = request.headers.get("authorization", "")
-    given = header[7:].strip() if header.startswith("Bearer ") else ""
-    if not given or not secrets.compare_digest(given, svc.token):
-        raise HTTPException(401, "Invalid MCP token.")
-    t0 = time.monotonic()
-    outcome = {"ok": False, "error": ""}
+def _call(name: str, arguments: dict[str, Any] | None, request: Request) -> Any:
     try:
-        result = call_tool(svc, body.name, body.arguments, caller=body.caller or "agent", cap=True)
-        outcome["ok"] = True
-        return result
-    except KeyError as error:
-        outcome["error"] = str(error.args[0])
-        raise HTTPException(404, str(error.args[0])) from error
-    except ValidationError as error:
-        issues = "; ".join(f"{'.'.join(str(p) for p in e['loc']) or 'input'}: {e['msg']}" for e in error.errors())
-        outcome["error"] = issues
-        raise HTTPException(400, issues) from error
+        return call_tool(services(request), name, arguments, cap=True)
     except Refused as error:
-        outcome["error"] = str(error)
-        raise HTTPException(403, str(error)) from error
-    except (ValueError, LookupError) as error:
-        outcome["error"] = str(error)
-        raise HTTPException(400 if isinstance(error, ValueError) else 404, str(error)) from error
-    except Exception as error:  # noqa: BLE001
-        outcome["error"] = f"{type(error).__name__}: {error}"
-        raise
-    finally:
-        family.record_call(body.name, outcome["ok"], int((time.monotonic() - t0) * 1000),
-                           caller=body.caller or "", error=outcome["error"])
+        raise AppError(error.code or "refused", str(error), status=403) from error
+    except Conflict as error:
+        raise AppError(error.code or "version_conflict", str(error), status=409) from error
+    except LumiereError as error:
+        raise AppError(error.code or "invalid", str(error), status=400) from error
+
+
+router = make_agent_router(
+    tools_fn=tool_catalog,
+    call_fn=_call,
+    token_fn=lambda request: services(request).token,
+    instructions=AGENT_INSTRUCTIONS,
+    app_name="lumiere",
+    reasons=True,                                          # an agent says why for every write; the web UI is not an agent and is exempt
+    data_dir=lambda request: services(request).config.data_dir,
+    tools=TOOLS,
+    ctx_fn=lambda request: services(request),
+)

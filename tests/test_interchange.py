@@ -107,13 +107,13 @@ def test_external_edit_takes_precedence_and_unsupported_nested_is_atomic(service
 def test_native_http_and_mcp_use_actual_file(client,media_dir,tmp_path):
     pid,_=montage(client.svc,media_dir)
     token={'Authorization':f'Bearer {client.svc.token}'}
-    export=client.post('/api/agent/call',headers=token,json={'name':'project_export_otio','arguments':{'project':pid}})
+    export=client.post('/api/agent/call',headers=token,json={'name':'project_export_otio','arguments':{'project':pid},'reason':'Export the montage for another editor'})
     assert export.status_code==200,export.text
     result=export.json()
     assert Path(result['path']).is_file()
     download=client.get(f'/api/projects/{pid}/otio')
     assert download.status_code==200 and download.content==Path(result['path']).read_bytes()
-    imported=client.post('/api/agent/call',headers=token,json={'name':'project_from_timeline','arguments':{'otio_path':result['path']}})
+    imported=client.post('/api/agent/call',headers=token,json={'name':'project_from_timeline','arguments':{'otio_path':result['path']},'reason':'Open the exported montage again'})
     assert imported.status_code==200,imported.text
     assert projects.doc(client.svc,imported.json()['id']).dump()==projects.doc(client.svc,pid).dump()
     assert 'otio_path' in agent_tools.ProjectFromTimelineArgs.model_json_schema()['properties']

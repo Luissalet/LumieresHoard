@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import analyze, commands, derive, family_events, multicam, speakers, timeline_import
+from . import agent_undo, analyze, commands, derive, family_events, multicam, speakers, timeline_import
 from . import broll as broll_mod
 from . import music as music_mod
 from . import subtitles as subtitles_mod
@@ -1116,6 +1117,19 @@ TOOLS: list[Tool] = [
     Tool("settings", "Read or change settings (speech model, language, GPU decoding, export folder). Ajustes.\n"
          "Keywords: settings, whisper model, config.", SettingsArgs, _ann(False, False, True), run_settings),
 ]
+
+
+
+def _accountable(tool: Tool) -> Tool:
+    """Attach the capture / track / undo hooks and the draft-safe flag (see agent_undo.py)."""
+    hooks = agent_undo.HOOKS.get(tool.name, {})
+    changes: dict[str, Any] = dict(hooks)
+    if tool.name in agent_undo.DRAFT_SAFE:
+        changes["annotations"] = {**tool.annotations, "draftSafeHint": True}
+    return dataclasses.replace(tool, **changes) if changes else tool
+
+
+TOOLS = [_accountable(t) for t in TOOLS]
 
 TOOLS_BY_NAME = {t.name: t for t in TOOLS}
 RESULT_CAP = 24_000

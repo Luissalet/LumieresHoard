@@ -116,7 +116,8 @@ def test_the_event_and_the_tool_reach_the_same_code(client, media_dir):
     bad = client.post("/api/family/events", json={"type": "lumiere.media.import", "data": {"path": "/no/such/file.mp4"}}, headers=auth)
     assert bad.status_code == 404
     # the tool (what the hub's proxy calls) and the route agree
-    via_tool = client.post("/api/agent/call", json={"name": "media_receive", "arguments": {"path": str(media_dir / "vert.mp4"), "project": r.json()["result"]["project"]["id"]}},
+    via_tool = client.post("/api/agent/call", json={"name": "media_receive", "arguments": {"path": str(media_dir / "vert.mp4"), "project": r.json()["result"]["project"]["id"]},
+                                 "reason": "Receive a file like the hub does"},
                            headers=auth)
     assert via_tool.status_code == 200 and via_tool.json()["project"]["action"] == "extended"
     contract = client.get("/api/family/contract").json()

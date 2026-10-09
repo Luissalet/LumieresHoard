@@ -24,6 +24,8 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent, Tool as MCPTool, ToolAnnotations
 
+from lumiere_hoard.hoard_link.bridge import agent_headers
+
 ROOT = Path(__file__).resolve().parent
 BASE_URL = os.environ.get("LUMIERE_URL", "http://127.0.0.1:5198").rstrip("/")
 TOKEN_FILE = Path(
@@ -78,13 +80,16 @@ class LumiereBridge(FastMCP):
                 response = await client.post(
                     f"{BASE_URL}/api/agent/call",
                     json={"name": name, "arguments": arguments or {}},
-                    headers={"Authorization": f"Bearer {_token()}"},
+                    # HOARD_AGENT_ID / HOARD_AGENT_SESSION say which agent and session this is: the app journals every change under them
+                    headers={"Authorization": f"Bearer {_token()}", **agent_headers()},
                 )
             body = response.json()
             if response.status_code == 401:
                 return [TextContent(type="text", text=json.dumps({"error": TOKEN_REFUSED.format(path=TOKEN_FILE)}, ensure_ascii=False))]
             if response.status_code >= 400:
-                return [TextContent(type="text", text=json.dumps({"error": body.get("error", f"Error {response.status_code}")}, ensure_ascii=False))]
+                # the app explains refusals with a code and a hint (reason_required, profile_forbidden, conflict...): pass them on
+                failure = {k: body[k] for k in ("error", "code", "hint") if body.get(k)} or {"error": f"Error {response.status_code}"}
+                return [TextContent(type="text", text=json.dumps(failure, ensure_ascii=False))]
             image = body.pop("_image", None) if isinstance(body, dict) else None
             out: list = [TextContent(type="text", text=json.dumps(body, ensure_ascii=False))]
             if isinstance(image, dict) and image.get("data"):

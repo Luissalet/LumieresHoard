@@ -199,7 +199,7 @@ def test_files_outside_the_allowed_folders_are_refused(tmp_path, folder):
 def test_the_tool_and_the_http_route(client, folder):
     xml = write_fixture(folder, "prospero_cut.xml")
     token = client.svc.token
-    r = client.post("/api/agent/call", json={"name": "project_from_timeline", "arguments": {"title": "Por HTTP", "fcpxml_path": str(xml)}},
+    r = client.post("/api/agent/call", json={"name": "project_from_timeline", "arguments": {"title": "Por HTTP", "fcpxml_path": str(xml)}, "reason": "Open the edit made elsewhere"},
                     headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -209,7 +209,7 @@ def test_the_tool_and_the_http_route(client, folder):
     assert "project_from_timeline" in names
     tool = {t.name: t for t in agent_tools.TOOLS}["project_from_timeline"]
     assert tool.annotations["readOnlyHint"] is False
-    two = client.post("/api/agent/call", json={"name": "project_from_timeline", "arguments": {"title": "x"}}, headers={"Authorization": f"Bearer {token}"})
+    two = client.post("/api/agent/call", json={"name": "project_from_timeline", "arguments": {"title": "x"}, "reason": "Open an edit with no file"}, headers={"Authorization": f"Bearer {token}"})
     assert two.status_code == 400 and "exactly one" in two.json()["error"]
 
 

@@ -59,7 +59,7 @@ def test_rest_and_mcp_share_receipts_and_unkeyed_edits_still_apply(client):
     p=client.post('/api/projects',json={'name':'Shared edit'}).json()
     ops=[{'op':'add_text','text':'Same edit','start':0,'length':3000}]
     first=client.post(f"/api/projects/{p['id']}/edit",json={'ops':ops,'request_id':'shared'}).json()
-    second=client.post('/api/agent/call',json={'name':'timeline_edit','arguments':{'project':p['id'],'ops':ops,'request_id':'shared'}},
+    second=client.post('/api/agent/call',json={'name':'timeline_edit','arguments':{'project':p['id'],'ops':ops,'request_id':'shared'},'reason':'Share the receipt with the web edit'},
                        headers={'Authorization':f'Bearer {client.svc.token}'})
     assert second.status_code==200 and second.json()['replayed']
     assert second.json()['results']==first['results']
