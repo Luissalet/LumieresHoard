@@ -110,34 +110,81 @@ def piecewise(points: list[tuple[float, float]], var: str = "t", digits: int = 4
     return "+".join(terms).replace("+-", "-")
 
 
+_EASE_STEPS = 6
+
+
+def _canonical_grid(span: float, v0: float, v1: float, ease: str) -> list[tuple[float, float]]:
+    """Full-domain 6-step (domain_ms, value) vertices for one eased segment."""
+    from lumiere_hoard.timeline import ease_value
+
+    span = float(span)
+    out: list[tuple[float, float]] = []
+    for j in range(0, _EASE_STEPS + 1):
+        u = j / float(_EASE_STEPS)
+        out.append((span * u, v0 + (v1 - v0) * ease_value(ease, u)))
+    return out
+
+
+def _polyline_at(pts: list[tuple[float, float]], x: float) -> float:
+    """Piecewise-linear value of ``pts`` (x ascending) at abscissa ``x``."""
+    if not pts:
+        return 0.0
+    if x <= pts[0][0]:
+        return pts[0][1]
+    for (xa, va), (xb, vb) in zip(pts, pts[1:]):
+        if x <= xb:
+            dt = xb - xa
+            if dt <= 1e-12:
+                return vb
+            return va + (vb - va) * ((x - xa) / dt)
+    return pts[-1][1]
+
+
+def _render_endpoint_v(k: Keyframe, prev: Keyframe | None) -> float:
+    """Endpoint value on the sampled render polyline (not necessarily analytical ``k.v``)."""
+    from lumiere_hoard.timeline import _segment_domain
+
+    if k.ease_span is not None and k.ease_into is not None and k.ease_v0 is not None and k.ease_v1 is not None:
+        grid = _canonical_grid(float(k.ease_span), float(k.ease_v0), float(k.ease_v1), k.ease or "linear")
+        return _polyline_at(grid, float(k.ease_into))
+    if prev is not None and prev.ease not in (None, "linear", "hold") and (
+        prev.ease_span is not None and prev.ease_into is not None
+        and prev.ease_v0 is not None and prev.ease_v1 is not None
+    ):
+        span, into0, v0, v1 = _segment_domain(prev, k)
+        grid = _canonical_grid(float(span), float(v0), float(v1), prev.ease)
+        return _polyline_at(grid, float(into0) + (k.t - prev.t))
+    return float(k.v)
+
+
 def _ease_points(keys: list[Keyframe]) -> list[tuple[float, float]]:
     """Keyframes as (seconds, value) points; eased segments get intermediate points, hold segments a step.
 
-    Samples use a fixed 6-step grid on the full ease domain, then keep only points that fall inside the
-    visible segment. After a mid-span split the polyline therefore matches the pre-split curve (same
-    vertices), instead of denser resampling that would change kfRender / ffmpeg piecewise values.
+    Samples use a fixed 6-step grid on the full ease domain, clipped to the visible segment. Endpoints
+    after a mid-span cut use that same polyline (not analytical ``k.v``), so arbitrary cuts keep the
+    pre-split render curve exactly.
     """
-    from lumiere_hoard.timeline import ease_value, _segment_domain
+    from lumiere_hoard.timeline import _segment_domain
 
     out: list[tuple[float, float]] = []
     keys = sorted(keys, key=lambda k: k.t)
     for i, k in enumerate(keys):
-        out.append((k.t / 1000, k.v))
+        prev = keys[i - 1] if i else None
+        out.append((k.t / 1000, _render_endpoint_v(k, prev)))
         if i + 1 >= len(keys):
             break
         n = keys[i + 1]
         if k.ease == "hold":
-            out.append(((n.t - 1) / 1000, k.v))
+            out.append(((n.t - 1) / 1000, _render_endpoint_v(k, prev)))
         elif k.ease != "linear":
             span, into, v0, v1 = _segment_domain(k, n)
-            steps = 6
             origin = k.t - into
-            for j in range(1, steps):
-                full_t = origin + span * (j / steps)
+            grid = _canonical_grid(float(span), float(v0), float(v1), k.ease)
+            for j in range(1, _EASE_STEPS):
+                full_t = origin + span * (j / float(_EASE_STEPS))
                 if full_t <= k.t or full_t >= n.t:
                     continue
-                u = j / float(steps)
-                out.append((full_t / 1000, v0 + (v1 - v0) * ease_value(k.ease, u)))
+                out.append((full_t / 1000, grid[j][1]))
     return out
 
 

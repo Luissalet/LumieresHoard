@@ -36,28 +36,72 @@ function segmentDomain(a, b) {
   return { span: Math.max(1, b.t - a.t), into: 0, v0: a.v, v1: b.v };
 }
 
+const EASE_STEPS = 6;
+
+function canonicalGrid(span, v0, v1, ease) {
+  const out = [];
+  for (let j = 0; j <= EASE_STEPS; j++) {
+    const u = j / EASE_STEPS;
+    out.push([span * u, v0 + (v1 - v0) * easeFn(ease, u)]);
+  }
+  return out;
+}
+
+function polylineAt(pts, x) {
+  if (!pts.length) return 0;
+  if (x <= pts[0][0]) return pts[0][1];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [xa, va] = pts[i];
+    const [xb, vb] = pts[i + 1];
+    if (x <= xb) {
+      const dt = xb - xa;
+      return dt <= 1e-12 ? vb : va + (vb - va) * ((x - xa) / dt);
+    }
+  }
+  return pts[pts.length - 1][1];
+}
+
+function renderEndpointV(k, prev) {
+  if (k.ease_span != null && k.ease_into != null && k.ease_v0 != null && k.ease_v1 != null) {
+    return polylineAt(canonicalGrid(k.ease_span, k.ease_v0, k.ease_v1, k.ease || "linear"), k.ease_into);
+  }
+  if (
+    prev &&
+    prev.ease &&
+    prev.ease !== "linear" &&
+    prev.ease !== "hold" &&
+    prev.ease_span != null &&
+    prev.ease_into != null &&
+    prev.ease_v0 != null &&
+    prev.ease_v1 != null
+  ) {
+    const { span, into, v0, v1 } = segmentDomain(prev, k);
+    return polylineAt(canonicalGrid(span, v0, v1, prev.ease), into + (k.t - prev.t));
+  }
+  return k.v;
+}
+
 function easePoints(keys) {
   const sorted = [...keys].sort((a, b) => a.t - b.t);
   const out = [];
   for (let i = 0; i < sorted.length; i++) {
     const k = sorted[i];
-    out.push([k.t / 1000, k.v]);
+    const prev = i ? sorted[i - 1] : null;
+    out.push([k.t / 1000, renderEndpointV(k, prev)]);
     if (i + 1 >= sorted.length) break;
     const n = sorted[i + 1];
     if (k.ease === "hold") {
-      out.push([(n.t - 1) / 1000, k.v]);
+      out.push([(n.t - 1) / 1000, renderEndpointV(k, prev)]);
     } else if (k.ease && k.ease !== "linear") {
       // Canonical 6-step grid on the full ease domain, clipped to the visible
-      // segment. Denser resampling after a mid-span split would change the
-      // piecewise polyline even when the analytical ease is unchanged.
+      // segment; endpoints lie on that polyline so arbitrary cuts stay exact.
       const { span, into, v0, v1 } = segmentDomain(k, n);
-      const steps = 6;
       const origin = k.t - into;
-      for (let j = 1; j < steps; j++) {
-        const fullT = origin + span * (j / steps);
+      const grid = canonicalGrid(span, v0, v1, k.ease);
+      for (let j = 1; j < EASE_STEPS; j++) {
+        const fullT = origin + span * (j / EASE_STEPS);
         if (fullT <= k.t || fullT >= n.t) continue;
-        const u = j / steps;
-        out.push([fullT / 1000, v0 + (v1 - v0) * easeFn(k.ease, u)]);
+        out.push([fullT / 1000, grid[j][1]]);
       }
     }
   }
