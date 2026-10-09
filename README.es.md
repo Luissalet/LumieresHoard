@@ -97,6 +97,29 @@ Las herramientas cubren la biblioteca (`media_import`, `media_analyze`, `transcr
 
 `project_contact_sheet(project, mode="overview"|"boundaries", count=12, width=320, times?)` devuelve una imagen con hasta 16 fotogramas y sus tiempos. El modo general reparte las muestras; el de cortes muestra ambos lados de los comienzos de clips de la pista principal. Se puede indicar una lista de tiempos en milisegundos. Usa el mismo renderizador que el montaje final y rechaza una revisión si el proyecto cambia mientras la genera. La imagen ayuda a revisar ritmo y cortes; no comprueba por sí sola la continuidad del movimiento.
 
+### Sesiones de agente, motivos y deshacer
+
+Cada cambio que un asistente hace por el puente MCP (o con `POST /api/agent/call`) deja rastro. La interfaz web no es un agente y queda
+fuera de todo esto. Referencia completa: [agentes con responsabilidad](docs/ACCOUNTABLE_AGENTS.es.md).
+
+- **Quién.** El puente envía el agente y la sesión que lee de `HOARD_AGENT_ID` / `HOARD_AGENT_SESSION` (cabeceras `X-Agent-Id` / `X-Agent-Session`).
+  Un token con ámbito fija el nombre del agente digan lo que digan las cabeceras.
+- **Por qué.** Toda herramienta que no sea de solo lectura necesita un `reason` de 3 a 300 caracteres (si falta, `400 reason_required` con una
+  pista). Las de lectura no lo necesitan.
+- **Qué.** Cada cambio es una línea de `data/agent_journal.jsonl` (herramienta, agente, sesión, motivo, resumen enmascarado de los argumentos,
+  objetos tocados, hora, éxito o error), que se lee con `GET /api/agent/journal?session=&agent=&limit=`.
+- **Deshacer una sesión entera.** `POST /api/agent/undo {"session": "...", "dry_run": true}` dice qué se desharía; con
+  `{"confirm": true, "reason": "..."}` lo hace, del cambio más reciente al más antiguo. Un proyecto vuelve al montaje que tenía antes de la sesión,
+  guardado como un paso nuevo del historial (el Deshacer y el Rehacer del editor siguen funcionando); vuelven proyectos, entradas de la
+  biblioteca, etiquetas, transcripciones, hablantes, líneas traducidas, planes y ajustes que la sesión creó o cambió. Informa de lo que no pudo
+  deshacer (`media_delete`, `project_delete`, renders, exportaciones, `media_analyze`, `clip_stabilize`, las herramientas creativas, resultados de
+  trabajos en segundo plano) y no toca nunca otra sesión: si otra sesión, o la persona en el editor, cambió después el mismo proyecto, ese cambio
+  se declara conflicto y se deja como está.
+- **Perfiles.** `python -m lumiere_hoard.hoard_link.tokens mint --app-data-dir data --agent drafter --profile drafts` muestra un token (una sola vez;
+  `data/agent_tokens.json` solo guarda hashes). Perfiles: `read_only`, `drafts` (además, las herramientas que crean o editan borradores sin borrar,
+  exportar ni publicar: sin `render_start`, `project_delete`, `media_delete`, `settings`, `plan_apply` ni exportaciones) y `all`. Una llamada
+  bloqueada responde `403 profile_forbidden`.
+
 ## Familia
 
 - **Traer un montaje de otra app.** `project_from_timeline {title, fcpxml_path | edl_path | plan, fps?, media_dirs?}` crea un proyecto desde un XML FCP7 (`xmeml`) o un EDL CMX 3600 tal como los exporta el estudio de vídeo (clips de imagen con sus recortes, una canción en su pista, las líneas cantadas como marcadores), o desde un plan `{clips: [{path, in_s, out_s, track, start_s?}], markers: [{t, text}]}`. Todo entra como un solo paso de deshacer; los medios se leen donde están (dentro de las carpetas permitidas), el lienzo sale del XML (un EDL no lo trae: la forma de la primera imagen, `fps` o 24) y un clip cuyo archivo no aparece se salta y se lista en `skipped` mientras llega el resto. Responde `{ok, project_id, url, clips, markers, skipped, duration_ms}`.

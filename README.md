@@ -96,6 +96,28 @@ The tools cover the library (`media_import`, `media_analyze`, `transcript_get`, 
 
 `project_contact_sheet(project, mode="overview"|"boundaries"|"adaptive", count=12, width=320, times?)` returns one image with up to 16 frames and their times. Overview spreads samples across the timeline; boundaries shows both sides of clip starts in the main track. Adaptive prioritizes visual changes in a bounded scan while retaining timeline endpoints. An explicit list of times in milliseconds is also accepted. It uses the final timeline renderer and refuses a review if the project changes while sampling. The image helps review rhythm and cuts; it does not itself verify motion continuity.
 
+### Agent sessions, reasons and undo
+
+Every change an assistant makes through the MCP bridge (or `POST /api/agent/call`) is accountable. The web interface is not an agent and is
+exempt from all of this. Full reference: [accountable agents](docs/ACCOUNTABLE_AGENTS.md).
+
+- **Who.** The bridge sends the agent and session it reads from `HOARD_AGENT_ID` / `HOARD_AGENT_SESSION` (headers `X-Agent-Id` / `X-Agent-Session`).
+  A scoped token fixes the agent name whatever the headers say.
+- **Why.** Every tool that is not read-only needs a `reason` of 3 to 300 characters (`400 reason_required` with a hint otherwise). Reading
+  tools need none.
+- **What.** Each change is a line of `data/agent_journal.jsonl` (tool, agent, session, reason, a masked summary of the arguments, the objects
+  it touched, time, ok or error), read with `GET /api/agent/journal?session=&agent=&limit=`.
+- **Undo a whole session.** `POST /api/agent/undo {"session": "...", "dry_run": true}` says what would be taken back; with
+  `{"confirm": true, "reason": "..."}` it does it, newest change first. A project goes back to the timeline it had before the session, saved
+  as a new history step (the editor's Undo and Redo still work); projects, library entries, labels, transcripts, speakers, translated
+  cues, plans and settings that the session created or changed come back. It reports what it could not undo (`media_delete`, `project_delete`,
+  renders, exports, `media_analyze`, `clip_stabilize`, the creative tools, results of background jobs) and never touches another session:
+  if another session, or the person in the editor, changed the same project later, that change is reported as a conflict and left as it is.
+- **Profiles.** `python -m lumiere_hoard.hoard_link.tokens mint --app-data-dir data --agent drafter --profile drafts` prints a token (shown once;
+  `data/agent_tokens.json` keeps only hashes). Profiles: `read_only`, `drafts` (also the tools that create or edit drafts and never delete,
+  export or publish: no `render_start`, `project_delete`, `media_delete`, `settings`, `plan_apply`, exports) and `all`. A blocked call answers
+  `403 profile_forbidden`.
+
 ## Family
 
 - **Bring an edit from another app.** `project_from_timeline {title, fcpxml_path | edl_path | plan, fps?, media_dirs?}` makes a project from an FCP7 XML (`xmeml`) or a CMX 3600 EDL exactly as the video studio exports them (picture clips with their trims, a song on its own track, the sung lines as markers), or from a plan `{clips: [{path, in_s, out_s, track, start_s?}], markers: [{t, text}]}`. Everything lands as one undo step; media are read where they are (inside the allowed folders), the canvas comes from the XML (an EDL carries none: the shape of the first picture, `fps` or 24), and a clip whose file cannot be found is skipped and listed under `skipped` while the rest arrives. The answer is `{ok, project_id, url, clips, markers, skipped, duration_ms}`.
@@ -188,8 +210,8 @@ project revision. A retry after Undo returns the receipt without redoing the edi
 Calls without a key retain the normal behavior of applying each requested edit.
 
 
-## Shared services (HoardLink 0.8.1)
+## Shared services (HoardLink 0.8.2)
 
-The editor shares request guards, port discovery, tool argument/error handling and notification routing. Its styled ASS subtitles retain speaker colours and timing; image outputs opt out of text caps.
+The editor shares request guards, port discovery, tool argument/error handling, the agent router (reasons, journal, undo, token profiles) and notification routing. Its styled ASS subtitles retain speaker colours and timing; image outputs opt out of text caps.
 
 The vendored copy is maintained by HoardLink’s sync script. Windows validation and the family service contract are documented in HoardLink’s `docs/commons/windows-validation.md` and `docs/commons/services.md`.
