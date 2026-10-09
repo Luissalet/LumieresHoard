@@ -20,7 +20,8 @@ def test_portable_discovery_config_and_project_path_guard(tmp_path, monkeypatch)
     photo.write_bytes(b"fixture")
     monkeypatch.setenv("LUMIERE_CRAFT_BUNDLES", str(photo.parent.parent))
     engines = CreativeEngines(tmp_path / "data")
-    assert engines.executable("effectcraft") == photo.resolve()
+    if os.name == "nt":  # the portable bundles are Windows builds; elsewhere only the explicit config counts
+        assert engines.executable("effectcraft") == photo.resolve()
     config = tmp_path / "custom-filmcraft.exe"
     config.write_bytes(b"configured")
     engines.config_path.write_text(json.dumps({"filmcraft": str(config)}), encoding="utf-8")

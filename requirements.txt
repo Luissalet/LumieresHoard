@@ -12,5 +12,7 @@ faster-whisper==1.2.1
 # face detection for reframing (falls back to motion and detail without it)
 opencv-python-headless==4.13.0.92
 pillow==12.2.0
+# timeline interchange (OTIO, FCP XML, EDL)
+opentimelineio==0.18.1
 pytest==9.1.1
 pytest-asyncio==1.4.0
