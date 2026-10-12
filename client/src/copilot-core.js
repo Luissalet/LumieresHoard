@@ -87,6 +87,9 @@ export async function buildContext({ hash, api, ask }) {
     selected = collected.selected;
   } catch { /* omit the editor part */ }
 
+  // Always say which objects are open (possibly none): an empty list overrides the launcher's guesses from the URL,
+  // which would otherwise report an id that does not exist.
+  out.active_objects = [];
   if (route.page === "p" && route.id) {
     try {
       const view = await api.project(route.id);

@@ -73,24 +73,24 @@ test("project route: project, active project and selected clips come from the cl
 test("a new/invalid/unresolvable project id never calls the API with 'new' and never throws", async () => {
   const calls = [];
   const api = apiOf((id) => { calls.push(id); throw Object.assign(new Error("not found"), { status: 404 }); });
-  assert.deepEqual(await buildContext({ hash: "#/p/new", api, ask: noForms }), {});
+  assert.deepEqual(await buildContext({ hash: "#/p/new", api, ask: noForms }), { active_objects: [] });
   assert.deepEqual(calls, []);
-  assert.deepEqual(await buildContext({ hash: "#/p/prj_gone", api, ask: noForms }), {});
+  assert.deepEqual(await buildContext({ hash: "#/p/prj_gone", api, ask: noForms }), { active_objects: [] });
   assert.deepEqual(calls, ["prj_gone"]);
-  assert.deepEqual(await buildContext({ hash: "#/p/x", api: apiOf(() => null), ask: noForms }), {});
+  assert.deepEqual(await buildContext({ hash: "#/p/x", api: apiOf(() => null), ask: noForms }), { active_objects: [] });
 });
 
 test("create forms are reported on any route, including with no object", async () => {
   const ctx = await buildContext({ hash: "#/", api: apiOf(() => { throw new Error("unused"); }), ask: ({ provide }) => {
     provide(formSnapshot("project-draft", { initial: { name: "" }, current: { name: "Reel" } }));
   } });
-  assert.deepEqual(ctx, { editor: { kind: "project-draft", dirty: true, fields: { name: "Reel" } } });
+  assert.deepEqual(ctx, { active_objects: [], editor: { kind: "project-draft", dirty: true, fields: { name: "Reel" } } });
 });
 
 test("a failing form or a rejecting API leaves context() resolved", async () => {
   const ctx = await buildContext({ hash: "#/p/prj_1", api: { project: () => Promise.reject(new Error("down")) }, ask: () => { throw new Error("form"); } });
-  assert.deepEqual(ctx, {});
-  assert.deepEqual(await buildContext({ hash: undefined, api: {}, ask: noForms }), {});
+  assert.deepEqual(ctx, { active_objects: [] });
+  assert.deepEqual(await buildContext({ hash: undefined, api: {}, ask: noForms }), { active_objects: [] });
 });
 
 test("selectedClipObjects ignores ids that are not in the document", () => {
@@ -108,9 +108,9 @@ test("window.hoardCopilot: context() never rejects and onTurnEnd fires the refre
   const hc = globalThis.window.hoardCopilot;
   assert.equal(typeof hc.context, "function");
   target.addEventListener("hoard:copilot-context-request", (e) => e.detail.provide({ kind: "project-draft", dirty: true, fields: { name: "N" } }));
-  assert.deepEqual(await hc.context(), { editor: { kind: "project-draft", dirty: true, fields: { name: "N" } } });
+  assert.deepEqual(await hc.context(), { active_objects: [], editor: { kind: "project-draft", dirty: true, fields: { name: "N" } } });
   globalThis.window.location.hash = "#/p/prj_9";            // backend unreachable: api rejects, context still resolves
-  assert.deepEqual(await hc.context(), { editor: { kind: "project-draft", dirty: true, fields: { name: "N" } } });
+  assert.deepEqual(await hc.context(), { active_objects: [], editor: { kind: "project-draft", dirty: true, fields: { name: "N" } } });
   target.addEventListener("lumiere:copilot-updated", () => hits.push(1));
   hc.onTurnEnd();
   assert.equal(hits.length, 1);
