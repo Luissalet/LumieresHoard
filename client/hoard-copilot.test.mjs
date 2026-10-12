@@ -108,9 +108,9 @@ test("window.hoardCopilot: context() never rejects and onTurnEnd fires the refre
   const hc = globalThis.window.hoardCopilot;
   assert.equal(typeof hc.context, "function");
   target.addEventListener("hoard:copilot-context-request", (e) => e.detail.provide({ kind: "project-draft", dirty: true, fields: { name: "N" } }));
-  assert.deepEqual(await hc.context(), { active_objects: [], editor: { kind: "project-draft", dirty: true, fields: { name: "N" } } });
+  assert.deepEqual(await hc.context(), { active_objects: [], view: { editor: { kind: "project-draft", dirty: true, fields: { name: "N" } } } });
   globalThis.window.location.hash = "#/p/prj_9";            // backend unreachable: api rejects, context still resolves
-  assert.deepEqual(await hc.context(), { active_objects: [], editor: { kind: "project-draft", dirty: true, fields: { name: "N" } } });
+  assert.deepEqual(await hc.context(), { active_objects: [], view: { editor: { kind: "project-draft", dirty: true, fields: { name: "N" } } } });
   target.addEventListener("lumiere:copilot-updated", () => hits.push(1));
   hc.onTurnEnd();
   assert.equal(hits.length, 1);
