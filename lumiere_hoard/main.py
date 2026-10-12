@@ -18,6 +18,7 @@ from .config import Config
 from .errors import Conflict, LumiereError, NotFound, Refused
 from .guard import install_guard
 from .hoard_link import family
+from .hoard_link.copilot import install_copilot
 from .services import Services
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -89,6 +90,10 @@ def create_app(config: Config | None = None, services: Services | None = None) -
 
     for router in ROUTERS:
         app.include_router(router)
+
+    # The Faustus panel on every page: relay, launcher and the launcher injected into the HTML. The conversation,
+    # the model and the tools live in Faustus; the page adds its context through window.hoardCopilot.
+    install_copilot(app, APP_ID, str(config.data_dir), app_name="Lumiere's Hoard")
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str):
