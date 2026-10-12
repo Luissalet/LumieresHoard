@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import { Field, Icon, Spinner, Toggle } from "../components/ui.jsx";
 import { setGlPreview, useGlPreview, webglAvailable } from "../editor/previewPrefs.js";
+import { useCopilotForm, useCopilotRefresh } from "../copilot-hooks.js";
+import { changedFields } from "../copilot-core.js";
+import { mergeSettingsDraft, settingsFields } from "../settings-draft.js";
 
-const KEYS = ["whisper_model", "whisper_device", "transcript_language", "hwdec", "export_folder", "auto_transcribe", "model", "default_export", "face_detector", "notify.via"];
 
 function Stat({ label, value, tone }) {
   return (
@@ -21,24 +23,52 @@ export default function Settings() {
   const [draft, setDraft] = useState({});
   const [status, setStatus] = useState(null);
   const [saving, setSaving] = useState(false);
+  const state = useRef({ settings, draft });
+  state.current = { settings, draft };
+  const readGeneration = useRef(0);
   const glOn = useGlPreview();
   const glAvailable = webglAvailable();
 
-  useEffect(() => {
-    api.settings().then((s) => { setSettings(s); setDraft(Object.fromEntries(KEYS.map((k) => [k, s[k] ?? ""]))); }).catch(fail);
-    api.status().then(setStatus).catch(fail);
-  }, [fail]);
+  const reload = async () => {
+    const generation = ++readGeneration.current;
+    try {
+      const next = await api.settings();
+      if (generation !== readGeneration.current) return;
+      const latest = state.current;
+      const merged = mergeSettingsDraft(settingsFields(latest.settings), latest.draft, next);
+      state.current = { settings: next, draft: merged };
+      setSettings(next);
+      setDraft(merged);
+    } catch (e) { fail(e); }
+  };
 
-  const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
-  const dirty = settings && KEYS.some((k) => (settings[k] ?? "") !== draft[k]);
+  useEffect(() => {
+    reload();
+    api.status().then(setStatus).catch(fail);
+    return () => { ++readGeneration.current; };
+  }, [fail]);
+  useCopilotRefresh(reload);
+  useCopilotForm("settings-form", { initial: settingsFields(settings), current: draft });
+
+  const set = (k, v) => {
+    const next = { ...state.current.draft, [k]: v };
+    state.current = { ...state.current, draft: next };
+    setDraft(next);
+  };
+  const dirty = settings && Object.keys(changedFields(settingsFields(settings), draft)).length > 0;
 
   const save = async () => {
+    const submitted = { ...state.current.draft };
+    const patch = changedFields(settingsFields(state.current.settings), submitted);
+    ++readGeneration.current;
     setSaving(true);
     try {
-      const patch = Object.fromEntries(KEYS.filter((k) => (settings[k] ?? "") !== draft[k]).map((k) => [k, draft[k]]));
       const next = await api.settingsUpdate(patch);
+      ++readGeneration.current;
+      const merged = mergeSettingsDraft(submitted, state.current.draft, next);
+      state.current = { settings: next, draft: merged };
       setSettings(next);
-      setDraft(Object.fromEntries(KEYS.map((k) => [k, next[k] ?? ""])));
+      setDraft(merged);
       notify(t("settings_saved"), "ok");
       api.status().then(setStatus).catch(() => {});
     } catch (e) {

@@ -122,8 +122,10 @@ exempt from all of this. Full reference: [accountable agents](docs/ACCOUNTABLE_A
 
 A «Faustus» button opens the family's shared assistant panel without leaving the app. Faustus keeps the conversations
 (also listed in Faustus Studio), runs the agent with the globally selected model and uses this app's own tools. Each turn
-carries the open project and the clips selected in the timeline; unsaved edits of the new-project dialog, the project name and the export dialog. After a turn the lists and the open view refresh in place, without discarding what you were typing. The
+carries the open project and selected timeline clips; pending new-project, name, export, settings and edit-plan fields. Current editor and tool controls are also included in full, captured before reading the project. After a turn the lists and open view refresh in place. Settings Save sends only changed fields and retains text entered while a request is pending. The
 panel comes from Hoard Link (`install_spa`) and talks to Faustus through this app's relay, so no token reaches the browser.
+
+The launcher uses the shared circular Faustus mark and keeps the same chat and draft inside dialogs. See [the context contract and checks](docs/FAUSTUS-COPILOT.md).
 
 ## Family
 

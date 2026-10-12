@@ -124,9 +124,11 @@ fuera de todo esto. Referencia completa: [agentes con responsabilidad](docs/ACCO
 
 Un botón «Faustus» abre el panel de asistente común de la familia sin salir de la app. Faustus guarda las conversaciones
 (también en Faustus Studio), ejecuta el agente con el modelo elegido globalmente y usa las herramientas de esta app. Cada
-turno lleva el proyecto abierto y los clips seleccionados en la línea de tiempo; lo que esté sin guardar en el diálogo de proyecto nuevo, el nombre del proyecto y el diálogo de exportación. Al terminar un turno, las listas y la vista abierta se refrescan sin perder lo que estuvieras escribiendo.
+turno lleva el proyecto abierto y los clips seleccionados en la línea de tiempo; los borradores del proyecto nuevo, nombre, exportación, ajustes y planes de edición. También incluye los valores actuales de los controles visibles del editor y sus herramientas, completos y capturados antes de leer el proyecto. Al terminar un turno, las listas y la vista abierta se refrescan sin perder lo que estuvieras escribiendo. En Ajustes, Guardar envía sólo las diferencias y conserva el texto introducido durante una petición pendiente.
 El panel lo sirve Hoard Link (`install_spa`) y habla con Faustus a través del relay de la app, así que ningún token llega
 al navegador.
+
+El botón es el icono circular común de Faustus. Puede usarse dentro de diálogos, conservando el mismo chat y su borrador. [Contrato y comprobaciones](docs/FAUSTUS-COPILOT.md).
 
 ## Familia
 

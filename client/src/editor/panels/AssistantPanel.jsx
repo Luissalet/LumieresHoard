@@ -4,6 +4,7 @@ import { useApp } from "../../App.jsx";
 import { Bar, Collapsible, Icon, Spinner, Toggle } from "../../components/ui.jsx";
 import { useEd } from "../EditorContext.js";
 import { PanelHead } from "./Shared.jsx";
+import { useCopilotForm, useCopilotRefresh } from "../../copilot-hooks.js";
 
 const EXAMPLES = ["ex_silences", "ex_vertical", "ex_fillers", "ex_trim5", "ex_beat"];
 
@@ -60,11 +61,16 @@ export default function AssistantPanel() {
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(null);
   const [result, setResult] = useState(null);
+  useCopilotForm("edit-plan-draft", {
+    initial: { instruction: "", use_model: false, steps: plan?.steps || [] },
+    current: { instruction: text, use_model: useModel, steps },
+  });
 
   const loadHistory = useCallback(async () => {
     try { setHistory((await api.plans(ed.projectId)).plans); } catch { /* the list is optional */ }
   }, [ed.projectId]);
   useEffect(() => { loadHistory(); }, [loadHistory]);
+  useCopilotRefresh(loadHistory);
 
   const open = (p) => { setPlan(p); setSteps(p.steps); setResult(null); };
 
