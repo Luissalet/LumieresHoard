@@ -15,6 +15,8 @@ import TextView from "../editor/TextView.jsx";
 import Timeline from "../editor/Timeline.jsx";
 import { clipEnd, projectDuration, trackRows } from "../editor/time.js";
 import { useMediaInfo, useProject } from "../editor/useProject.js";
+import { CONTEXT_REQUEST } from "../copilot-core.js";
+import { useCopilotForm, useCopilotRefresh } from "../copilot-hooks.js";
 import AssistantPanel from "../editor/panels/AssistantPanel.jsx";
 import CaptionsPanel from "../editor/panels/CaptionsPanel.jsx";
 import EffectsPanel from "../editor/panels/EffectsPanel.jsx";
@@ -39,7 +41,13 @@ function TopBar({ ed, onExport, onContactSheet, onJobs, onHelp }) {
   const { t, presets, jobs } = useApp();
   const { view, doc } = ed;
   const [name, setName] = useState(view.name);
-  useEffect(() => { setName(view.name); }, [view.name]);
+  const lastServerName = useRef(view.name);
+  // A rename made elsewhere (e.g. by the agent) refreshes the field, unless the user has an unsaved edit in it.
+  useEffect(() => {
+    setName((cur) => (cur === lastServerName.current ? view.name : cur));
+    lastServerName.current = view.name;
+  }, [view.name]);
+  useCopilotForm("project-form", { objectId: view.id, initial: { name: view.name }, current: { name: name.trim() } });
   const commit = () => { if (name.trim() && name.trim() !== view.name) ed.rename(name.trim()); else setName(view.name); };
   const current = presets ? Object.entries(presets.canvas_presets).find(([, p]) => p.width === doc.canvas.width && p.height === doc.canvas.height && p.fps === doc.canvas.fps)?.[0] || "" : "";
   const issues = (view.issues || []).filter((i) => i.level === "error");
@@ -126,6 +134,7 @@ function EditorInner({ proj }) {
     try { setTranscript(await api.transcript(projectId)); } catch { /* shown as empty */ }
   }, [projectId]);
   useEffect(() => { if (needTranscript) reloadTranscript(); }, [needTranscript, view.rev, reloadTranscript]);
+  useCopilotRefresh(() => { if (needTranscript) reloadTranscript(); });
 
   // analyses and proxies finishing change what the editor can show
   useEffect(() => jobs.onDone((job) => {
@@ -141,6 +150,13 @@ function EditorInner({ proj }) {
   ed.actions = useActions(ed, { notify, fail, t, jobs });
   const edRef = useRef(ed);
   edRef.current = ed;
+
+  // tell the copilot which clips are selected (it resolves them against the project it reads)
+  useEffect(() => {
+    const answer = (event) => event.detail?.provideSelection?.(edRef.current.selection.ids);
+    window.addEventListener(CONTEXT_REQUEST, answer);
+    return () => window.removeEventListener(CONTEXT_REQUEST, answer);
+  }, []);
 
   // ------------------------------------------------------------ keyboard
   useEffect(() => {

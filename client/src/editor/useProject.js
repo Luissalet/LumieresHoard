@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
+import { useCopilotRefresh } from "../copilot-hooks.js";
 
 const NESTED = ["transform", "crop", "style", "mask"];
 
@@ -57,6 +58,7 @@ export function useProject(projectId, { fail, notify, jobs, t }) {
   }, [projectId, applyView, fail]);
 
   useEffect(() => { reload(); }, [reload]);
+  useCopilotRefresh(reload);  // an agent turn may have edited the project: reload in place, no remount
 
   const edit = useCallback((ops, label, { quiet } = {}) => {
     const run = async () => {

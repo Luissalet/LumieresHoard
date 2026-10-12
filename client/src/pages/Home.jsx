@@ -8,7 +8,9 @@ import CompositionsSection from "../components/CompositionsSection.jsx";
 import { DropUpload, MediaThumb, useMediaLibrary, useUploadPicker } from "../components/Media.jsx";
 import { SaveTemplateDialog, TemplatesSection } from "../components/Templates.jsx";
 import { fmtBytes, fmtDate, fmtMs } from "../editor/time.js";
+import { useCopilotForm, useCopilotRefresh } from "../copilot-hooks.js";
 
+const NEW_PROJECT_DEFAULTS = { name: "", preset: "youtube", media: [] };
 const PRESET_ORDER = ["youtube", "reels", "square", "portrait_4_5", "youtube_60", "hd720", "cinema", "youtube_4k", "shorts", "tiktok"];
 
 export function PresetShape({ w, h }) {
@@ -25,6 +27,7 @@ function NewProject({ onClose }) {
   const [picked, setPicked] = useState([]);
   const [busy, setBusy] = useState(false);
   const list = presets ? PRESET_ORDER.filter((k) => presets.canvas_presets[k]) : [];
+  useCopilotForm("project-draft", { initial: NEW_PROJECT_DEFAULTS, current: { name: name.trim(), preset, media: picked } });
 
   const create = async () => {
     setBusy(true);
@@ -171,6 +174,7 @@ export default function Home() {
     try { setProjects((await api.projects()).projects.filter((p) => !p.is_template)); } catch (e) { fail(e); }
   }, [fail]);
   useEffect(() => { load(); }, [load]);
+  useCopilotRefresh(load);
 
   return (
     <div className="page">

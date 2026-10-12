@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import { Bar, Field, Icon, Modal, Seg, Spinner, Toggle } from "../components/ui.jsx";
 import { useEd } from "./EditorContext.js";
+import { useCopilotForm, useCopilotRefresh } from "../copilot-hooks.js";
 import { fmtBytes, fmtDate, fmtMs } from "./time.js";
 
 function Result({ r, title }) {
@@ -66,9 +67,14 @@ export default function ExportDialog({ onClose }) {
   const loadPrev = useCallback(async () => {
     try { setPrevious((await api.renders(ed.projectId)).renders); } catch { /* optional */ }
   }, [ed.projectId]);
+  useCopilotRefresh(loadPrev);
+  // what the dialog opened with: the copilot reports only what the user has changed since
+  const initial = useRef({ preset: "final", filename: ed.view.name, folder: "", lufs: "default", useRange: marks.in !== null || marks.out !== null,
+    srt: false, copy: false, multi: false, canvases: ["16:9", "9:16"], reframe: "auto", trLang: "", trDual: false });
+  useCopilotForm("export-draft", { initial: initial.current, current: { preset, filename: filename.trim(), folder: folder.trim(), lufs, useRange, srt, copy, multi, canvases, reframe, trLang, trDual } });
   useEffect(() => {
     loadPrev();
-    api.settings().then((s) => s.default_export && setPreset(s.default_export)).catch(() => {});
+    api.settings().then((s) => { if (s.default_export) { initial.current.preset = s.default_export; setPreset(s.default_export); } }).catch(() => {});
     api.subtitles(ed.projectId).then((s) => setTrs(s.translations || [])).catch(() => {});
   }, [loadPrev, ed.projectId]);
 

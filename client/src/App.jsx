@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { api } from "./api.js";
 import { initialLang, makeT, saveLang } from "./i18n.js";
 import { Icon, Logo } from "./components/ui.jsx";
+import { useCopilotRefresh } from "./copilot-hooks.js";
 import Home from "./pages/Home.jsx";
 import Settings from "./pages/Settings.jsx";
 import Editor from "./pages/Editor.jsx";
@@ -78,6 +79,8 @@ function useJobs(notify, t) {
       prev.current = new Map([...prev.current, ...jobs.map((j) => [j.id, j])]);
     } catch { /* next poll will do */ }
   }, []);
+
+  useCopilotRefresh(poke);  // the agent may have started a render or an analysis
 
   // Follow one job to its end (own polling, so jobs shorter than the global interval are not missed).
   const watch = useCallback((jobId, onProgress) => new Promise((resolve) => {

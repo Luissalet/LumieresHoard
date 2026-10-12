@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import { Icon, Spinner } from "./ui.jsx";
 import { fmtMs } from "../editor/time.js";
+import { useCopilotRefresh } from "../copilot-hooks.js";
 
 // The media library list, refreshed when background jobs finish and while proxies are still being made.
 export function useMediaLibrary() {
@@ -16,6 +17,7 @@ export function useMediaLibrary() {
     }
   }, [fail]);
   useEffect(() => { refresh(); }, [refresh, jobs.doneTick]);
+  useCopilotRefresh(refresh);
   const pending = media?.some((m) => m.proxy === "pending");
   useEffect(() => {
     if (!pending) return undefined;
