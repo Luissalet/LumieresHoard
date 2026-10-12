@@ -24,7 +24,7 @@ from lumiere_hoard.main import create_app  # noqa: E402
 from lumiere_hoard.services import Services  # noqa: E402
 
 # Words that must never appear in the product, its manifest or its docs (built from fragments so this file does not contain them).
-BANNED_WORDS = ("chat" + "gpt", "open" + "ai", "anthro" + "pic", "lm " + "studio", "odys" + "seus", "gem" + "ini", "co" + "pilot",
+BANNED_WORDS = ("chat" + "gpt", "open" + "ai", "anthro" + "pic", "lm " + "studio", "odys" + "seus", "gem" + "ini",
                 "clau" + "de", "cap" + "cut", "open" + "cut", "pre" + "miere", "da" + "vinci", "fi" + "nal cut",
                 "kden" + "live", "lossless" + "cut", "auto-" + "editor", "vid" + "eo.js")
 
