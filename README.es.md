@@ -120,6 +120,14 @@ fuera de todo esto. Referencia completa: [agentes con responsabilidad](docs/ACCO
   exportar ni publicar: sin `render_start`, `project_delete`, `media_delete`, `settings`, `plan_apply` ni exportaciones) y `all`. Una llamada
   bloqueada responde `403 profile_forbidden`.
 
+## Panel de Faustus
+
+Un botón «Faustus» abre el panel de asistente común de la familia sin salir de la app. Faustus guarda las conversaciones
+(también en Faustus Studio), ejecuta el agente con el modelo elegido globalmente y usa las herramientas de esta app. Cada
+turno lleva el proyecto abierto y los clips seleccionados en la línea de tiempo; lo que esté sin guardar en el diálogo de proyecto nuevo, el nombre del proyecto y el diálogo de exportación. Al terminar un turno, las listas y la vista abierta se refrescan sin perder lo que estuvieras escribiendo.
+El panel lo sirve Hoard Link (`install_spa`) y habla con Faustus a través del relay de la app, así que ningún token llega
+al navegador.
+
 ## Familia
 
 - **Traer un montaje de otra app.** `project_from_timeline {title, fcpxml_path | edl_path | plan, fps?, media_dirs?}` crea un proyecto desde un XML FCP7 (`xmeml`) o un EDL CMX 3600 tal como los exporta el estudio de vídeo (clips de imagen con sus recortes, una canción en su pista, las líneas cantadas como marcadores), o desde un plan `{clips: [{path, in_s, out_s, track, start_s?}], markers: [{t, text}]}`. Todo entra como un solo paso de deshacer; los medios se leen donde están (dentro de las carpetas permitidas), el lienzo sale del XML (un EDL no lo trae: la forma de la primera imagen, `fps` o 24) y un clip cuyo archivo no aparece se salta y se lista en `skipped` mientras llega el resto. Responde `{ok, project_id, url, clips, markers, skipped, duration_ms}`.

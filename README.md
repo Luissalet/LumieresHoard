@@ -118,6 +118,13 @@ exempt from all of this. Full reference: [accountable agents](docs/ACCOUNTABLE_A
   export or publish: no `render_start`, `project_delete`, `media_delete`, `settings`, `plan_apply`, exports) and `all`. A blocked call answers
   `403 profile_forbidden`.
 
+## Faustus panel
+
+A «Faustus» button opens the family's shared assistant panel without leaving the app. Faustus keeps the conversations
+(also listed in Faustus Studio), runs the agent with the globally selected model and uses this app's own tools. Each turn
+carries the open project and the clips selected in the timeline; unsaved edits of the new-project dialog, the project name and the export dialog. After a turn the lists and the open view refresh in place, without discarding what you were typing. The
+panel comes from Hoard Link (`install_spa`) and talks to Faustus through this app's relay, so no token reaches the browser.
+
 ## Family
 
 - **Bring an edit from another app.** `project_from_timeline {title, fcpxml_path | edl_path | plan, fps?, media_dirs?}` makes a project from an FCP7 XML (`xmeml`) or a CMX 3600 EDL exactly as the video studio exports them (picture clips with their trims, a song on its own track, the sung lines as markers), or from a plan `{clips: [{path, in_s, out_s, track, start_s?}], markers: [{t, text}]}`. Everything lands as one undo step; media are read where they are (inside the allowed folders), the canvas comes from the XML (an EDL carries none: the shape of the first picture, `fps` or 24), and a clip whose file cannot be found is skipped and listed under `skipped` while the rest arrives. The answer is `{ok, project_id, url, clips, markers, skipped, duration_ms}`.
