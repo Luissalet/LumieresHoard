@@ -86,7 +86,7 @@ conserva los extremos del montaje. También admite tiempos explícitos en
 milisegundos. Rechaza cambios de fuente o timeline durante la captura.
 [API, muestreo y límites verificados](docs/CONTACT-SHEETS.es.md).
 
-`mcp_server.py` es un puente MCP por stdio con 56 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
+`mcp_server.py` es un puente MCP por stdio con 62 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -223,3 +223,7 @@ y el historial. Un cambio diferente necesita otra clave; reutilizarla con conten
 distinto devuelve un conflicto. `rev` es la revisión del resultado original y
 `current_rev` informa de la revisión actual. Reintentar tras Deshacer devuelve el
 recibo sin rehacer la edición. Sin clave se conserva la aplicación normal de cada cambio.
+
+## Taller de animacion HTML
+
+En Proyectos puedes crear y editar composiciones HTML, revisar PNG en un tiempo exacto y exportar videos H.264 sin audio para la biblioteca y la timeline. Las revisiones y la restauracion conservan la fuente editable. Las seis herramientas MCP `html_motion_*` exponen el mismo flujo; el modelo global puede revisar imagenes reales antes de corregir la fuente. Instala el paquete opcional `motion` para renderizar con el navegador local. [Contrato, instalacion y limites verificados](docs/HTML_MOTION.md).

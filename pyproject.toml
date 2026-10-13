@@ -25,6 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 speech = ["faster-whisper>=1.0"]
 faces = ["opencv-python-headless>=4.9"]
+motion = ["playwright>=1.63,<2"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]

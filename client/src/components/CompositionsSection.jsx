@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useApp } from "../App.jsx";
 import { Spinner } from "./ui.jsx";
+import HtmlMotionSection from "./HtmlMotionSection.jsx";
+import "./html-motion.css";
 
 const words = {
   en: {
@@ -39,7 +41,7 @@ async function api(path, options = {}) {
   return data;
 }
 
-export default function CompositionsSection({ mediaId = null, projectId = null }) {
+export default function CompositionsSection({ mediaId = null, projectId = null, onReceived }) {
   const { lang = "en", fail } = useApp();
   const t = words[String(lang).toLowerCase().startsWith("es") ? "es" : "en"];
   const [status, setStatus] = useState(null);
@@ -98,7 +100,7 @@ export default function CompositionsSection({ mediaId = null, projectId = null }
   const statusLabel = (name) => ready(name) ? `${engines[name].release} · ${engines[name].expected_tools}` : t.unavailable;
 
   return (
-    <section className="creative-engines" aria-labelledby="creative-engines-title" style={{ display: "grid", gap: 16, margin: "20px 0" }}>
+    <section className="creative-engines" aria-labelledby="creative-engines-title" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16, margin: "20px 0" }}>
       <header style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <h2 id="creative-engines-title" style={{ margin: 0 }}>{t.title}</h2>
         {projectId && <span className="muted" style={{ fontSize: 12 }}>{t.linked}: <code>{projectId}</code></span>}
@@ -110,7 +112,7 @@ export default function CompositionsSection({ mediaId = null, projectId = null }
         <button type="button" className="btn" disabled={!ready("filmcraft")} onClick={() => showTools("filmcraft")}>{t.tools}</button>
       </div>
 
-      <form onSubmit={createTitle} style={{ display: "grid", gridTemplateColumns: "minmax(200px, 1fr) 130px auto", alignItems: "end", gap: 10 }}>
+      <form onSubmit={createTitle} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", alignItems: "end", gap: 10 }}>
         <label className="field-label" style={{ display: "grid", gap: 5 }}>
           <span>{t.titleText}</span>
           <input className="field" value={title} maxLength={300} required onChange={(e) => setTitle(e.target.value)} />
@@ -136,6 +138,7 @@ export default function CompositionsSection({ mediaId = null, projectId = null }
         <summary>{catalogue.engine} · {catalogue.count} live MCP tools</summary>
         <ul>{catalogue.tools.map((tool) => <li key={tool.name}><code>{tool.name}</code> — {tool.description}</li>)}</ul>
       </details>}
+      <HtmlMotionSection projectId={projectId} onReceived={onReceived} />
       {result && (
         <div className="creative-result" style={{ display: "grid", gap: 8, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
           {result.preview_url && <img src={result.preview_url} alt={t.preview} style={{ maxWidth: "100%", maxHeight: 260, objectFit: "contain", justifySelf: "start" }} />}

@@ -974,7 +974,54 @@ def run_creative_film(svc: Services,a: CreativeFilmArgs):
                                               height=a.height or info['height'],fps=a.fps or info['fps'],project_id=a.project_id)
 
 
+from .html_motion import HtmlMotion
+from .html_motion_args import (HtmlMotionSaveArgs, HtmlMotionRefArgs, HtmlMotionGetArgs,
+                               HtmlMotionFrameArgs, HtmlMotionRestoreArgs)
+
+
+def run_html_motion_list(svc: Services, a: Empty):
+    return HtmlMotion(svc.config.data_dir).list()
+
+
+def run_html_motion_save(svc: Services, a: HtmlMotionSaveArgs):
+    if a.project_id:
+        project_store.doc(svc, a.project_id)
+    return HtmlMotion(svc.config.data_dir).save(**a.model_dump())
+
+
+def run_html_motion_get(svc: Services, a: HtmlMotionGetArgs):
+    store = HtmlMotion(svc.config.data_dir)
+    manifest = store.get(a.composition, a.revision)
+    source = store.source(manifest)
+    end = min(len(source), a.offset + a.limit)
+    return {**manifest, "html": source[a.offset:end], "source_chars": len(source),
+            "offset": a.offset, "next_offset": end if end < len(source) else None}
+
+
+def run_html_motion_frame(svc: Services, a: HtmlMotionFrameArgs):
+    data, result = HtmlMotion(svc.config.data_dir).frame(a.composition, a.at, a.revision)
+    manifest = HtmlMotion(svc.config.data_dir).get(a.composition, a.revision)
+    result["url"] = manifest["frame_url"] + f"?at={a.at}"
+    if a.show:
+        result["_image"] = {"mime": "image/png", "data": base64.b64encode(data).decode("ascii")}
+    return result
+
+
+def run_html_motion_render(svc: Services, a: HtmlMotionRefArgs):
+    return HtmlMotion(svc.config.data_dir).queue_render(svc, a.composition, a.revision)
+
+
+def run_html_motion_restore(svc: Services, a: HtmlMotionRestoreArgs):
+    return HtmlMotion(svc.config.data_dir).restore(**a.model_dump())
+
+
 TOOLS: list[Tool] = [
+    Tool("html_motion_save", "Create or edit an HTML composition with exact-time window.seek(t). Crear y editar animacion HTML.\nReturns an editable revision and source hash. Keywords: motion graphics, canvas, SVG, HTML video, seek.", HtmlMotionSaveArgs, _ann(False, False, False), run_html_motion_save),
+    Tool("html_motion_list", "List saved HTML motion compositions and browser runtime. Listar animaciones HTML.\nKeywords: compositions, motion graphics, browser renderer.", Empty, _ann(True), run_html_motion_list),
+    Tool("html_motion_get", "Read an HTML composition and its editable source by character pages. Leer fuente HTML.\nUse next_offset for the complete source. Keywords: source, revision, composition, motion graphics.", HtmlMotionGetArgs, _ann(True), run_html_motion_get),
+    Tool("html_motion_frame", "Render an exact-time PNG from an HTML composition. Revisar fotograma HTML.\nTime is seconds; returns an MCP image, source revision and frame hash. Keywords: snapshot, visual critique, storyboard, seek.", HtmlMotionFrameArgs, _ann(True), run_html_motion_frame),
+    Tool("html_motion_render", "Queue an HTML composition as verified silent H264 MP4. Exportar animacion HTML a video.\nFollow job_status; use media_receive(path=result.render_path) to add the video to a timeline. Keywords: render, export, MP4, motion graphics.", HtmlMotionRefArgs, _ann(False, False, True), run_html_motion_render),
+    Tool("html_motion_restore", "Restore a saved HTML composition revision as a new revision. Recuperar una animacion anterior.\nLater versions remain available. Keywords: undo, restore, revisions, HTML motion.", HtmlMotionRestoreArgs, _ann(False, False, False), run_html_motion_restore),
     Tool('creative_render_title_video','Render an editable EffectCraft title to verified H264 video. Renderizar cartela animada.\nReturns actual video path, metadata and media_receive_url. Keywords: animation, render title, mp4, motion graphics.',CreativeRenderArgs,_ann(False,False,True),run_creative_render),
     Tool('creative_tools','Discover full EffectCraft or FilmCraft MCP schemas. Herramientas nativas.\nKeywords: motion graphics, layers, compositing, filmcraft, effectcraft.',CreativeToolsArgs,_ann(True),run_creative_tools),
     Tool('creative_call','Run native MCP calls on a saved creative project. Ejecutar herramientas nativas.\nEach batch reopens/saves; in-memory selection and undo do not persist between batches.\nKeywords: effects, animation, layers, native tools.',CreativeCallArgs,_ann(False,True,False),run_creative_call),

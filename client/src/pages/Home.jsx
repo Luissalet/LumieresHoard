@@ -222,7 +222,7 @@ export default function Home() {
             {(media || []).filter(item => item.kind === "video").map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </Field>
-        <CompositionsSection mediaId={creativeMediaId || null} />
+        <CompositionsSection mediaId={creativeMediaId || null} onReceived={load} />
       </div>
       {creating ? <NewProject onClose={() => setCreating(false)} /> : null}
       {importingTimeline ? <TimelineImportDialog onClose={() => { setImportingTimeline(false); load(); }} /> : null}

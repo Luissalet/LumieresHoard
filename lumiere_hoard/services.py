@@ -99,6 +99,8 @@ class Services:
         self.jobs.register("plan_apply", lambda ctx: plan_mod.apply_job(self, ctx))
         self.jobs.register("sequence", lambda ctx: sequences.prepare_job(self, ctx))
         self.jobs.register("translate_subtitles", lambda ctx: subtitles_mod.translate_job(self, ctx))
+        from .html_motion import run_render_job
+        self.jobs.register("html_motion", lambda ctx: run_render_job(self, ctx))
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> None:

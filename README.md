@@ -85,7 +85,7 @@ visible changes in a bounded scan while keeping the timeline endpoints. Explicit
 millisecond samples are also supported. Source and timeline changes during
 capture reject the sheet. [API, sampling and verified limits](docs/CONTACT-SHEETS.md).
 
-`mcp_server.py` is a stdio MCP bridge with 56 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
+`mcp_server.py` is a stdio MCP bridge with 62 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -224,3 +224,7 @@ Calls without a key retain the normal behavior of applying each requested edit.
 The editor shares request guards, port discovery, tool argument/error handling, the agent router (reasons, journal, undo, token profiles) and notification routing. Its styled ASS subtitles retain speaker colours and timing; image outputs opt out of text caps.
 
 The vendored copy is maintained by HoardLink’s sync script. Windows validation and the family service contract are documented in HoardLink’s `docs/commons/windows-validation.md` and `docs/commons/services.md`.
+
+## HTML motion workshop
+
+Create and edit complete HTML compositions on Projects, review exact-time PNGs and export silent H.264 videos into the normal library and timeline. Saved source revisions and restoration keep the composition editable. The six `html_motion_*` MCP tools expose the same workflow; the global model can inspect actual frame images before revising the source. Install the optional `motion` package for local browser rendering. [Contract, setup and verified limits](docs/HTML_MOTION.md).

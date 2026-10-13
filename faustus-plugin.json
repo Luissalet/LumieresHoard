@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "lumiere",
   "name": "Lumiere's Hoard",
-  "purpose": "A local video editor: media library with proxies, a multitrack timeline (cuts, ripple edits, speed and speed curves, nested sequences, shape masks, transitions, titles, picture-in-picture, keyframes, effects, multicam synced by sound), text-based editing on word-level transcripts with speaker separation, automatic tools (silence and filler-word removal, scene cuts, vertical reframing that follows faces, captions, cuts on the beat, highlights of long videos read by the local model, background music picking, b-roll suggestions, loudness matching, stabilization), project templates with slots, edit plans written from plain language, translated subtitles, several formats in one export and frame-exact ffmpeg renders with GPU encoding, for people and for assistants over MCP.",
+  "purpose": "A local video editor: media library with proxies, a multitrack timeline (cuts, ripple edits, speed and speed curves, nested sequences, shape masks, transitions, titles, picture-in-picture, keyframes, effects, multicam synced by sound), text-based editing on word-level transcripts with speaker separation, automatic tools (silence and filler-word removal, scene cuts, vertical reframing that follows faces, captions, cuts on the beat, highlights of long videos read by the local model, background music picking, b-roll suggestions, loudness matching, stabilization), project templates with slots, edit plans written from plain language, translated subtitles, several formats in one export and frame-exact ffmpeg renders with GPU encoding, for people and for assistants over MCP. Editable HTML motion compositions with exact-time PNG review, source revisions and silent H.264 export into the ordinary timeline.",
   "capabilities": [
     "video-editing",
     "multitrack-timeline",
@@ -64,7 +64,11 @@
     "fcp7-xml-import",
     "edl-import",
     "family-job-events",
-    "hub-notifications"
+    "hub-notifications",
+    "html-motion-compositions",
+    "exact-time-html-frames",
+    "editable-motion-revisions",
+    "html-to-video"
   ],
   "placeholders": [
     "LUMIERE_DIR",
