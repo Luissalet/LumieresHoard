@@ -71,7 +71,7 @@ ctx.textAlign='center';ctx.font=(H*.055)+'px Georgia';ctx.fillStyle='#b6c9e7';ct
 """,
     'elastic': """
 ctx.fillStyle='#f2c860';ctx.fillRect(0,0,W,H);ctx.fillStyle='#363b30';ctx.textAlign='center';
-const letters=Array.from(TEXT),n=letters.length,unit=W*.8/Math.max(1,n),size=Math.min(H*.2,unit*1.6);
+const letters=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(TEXT),part=>part.segment),n=letters.length,unit=W*.8/Math.max(1,n),size=Math.min(H*.2,unit*1.6);
 ctx.font='bold '+size+'px Georgia';
 for(let i=0;i<n;i++){
  const delay=.2*i/Math.max(1,n-1),age=Math.max(0,p-delay),entered=1-Math.exp(-age*16);

@@ -35,6 +35,24 @@ def test_text_is_literal_even_with_script_closing_markup():
     assert config['text'] == literal
 
 
+@BROWSER
+def test_elastic_keeps_accent_and_joined_emoji_as_drawn_graphemes(tmp_path):
+    store = HtmlMotion(tmp_path)
+    text = 'e\u0301\U0001f469\u200d\U0001f4bb'
+    args = save_args(HtmlStarterArgs(profile='elastic', text=text, width=640, height=360))
+    item = store.save(**args.model_dump())
+    with store.page(item) as (page, errors):
+        drawn = page.evaluate('''() => {
+            const drawn=[],proto=CanvasRenderingContext2D.prototype,old=proto.fillText;
+            proto.fillText=function(text,...rest){drawn.push(text);return old.call(this,text,...rest);};
+            try {window.seek(3);return drawn;}finally {proto.fillText=old;}
+        }''')
+        assert not errors
+        assert drawn == ['e\u0301', '\U0001f469\u200d\U0001f4bb']
+    frames = store.storyboard(item['id'], [3, 1, 3])['frames']
+    assert frames[0]['sha256'] == frames[2]['sha256']
+
+
 @pytest.mark.parametrize('changes', [{'profile': 'unknown'}, {'duration': float('inf')}, {'fps': float('nan')}, {'width': 0}])
 def test_invalid_source_configuration(changes):
     with pytest.raises(ValidationError):
