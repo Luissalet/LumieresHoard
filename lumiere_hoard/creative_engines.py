@@ -331,11 +331,14 @@ class CreativeEngines:
         start = time.perf_counter()
         with _LOCK:
             result = asyncio.run(self._request(engine, folder, calls, open_saved=True))
-        failed = any(x["is_error"] for x in result)
-        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
-        manifest["last_tools"] = [c["tool"] for c in calls]
-        manifest["last_error"] = next((x["content"][0].get("text", "engine error") for x in result if x["is_error"] and x["content"]), None)
-        self._save_manifest(manifest)
+            failed = any(x["is_error"] for x in result)
+            # An export may have published artifacts after the initial lookup.
+            # Merge only this call's metadata and keep publication atomic.
+            manifest = self.get(creative_id)
+            manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+            manifest["last_tools"] = [c["tool"] for c in calls]
+            manifest["last_error"] = next((x["content"][0].get("text", "engine error") for x in result if x["is_error"] and x["content"]), None)
+            self._save_manifest(manifest)
         self._audit({"creative_id": creative_id, "engine": engine, "tools": manifest["last_tools"],
                      "ok": not failed, "duration_ms": round((time.perf_counter() - start) * 1000, 1),
                      "ts": manifest["updated_at"]})

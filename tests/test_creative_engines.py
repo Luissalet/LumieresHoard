@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,59 @@ def test_export_snapshot_keeps_concurrent_edit_and_reports_older_artifacts(monke
     assert rendered['render_source_matches'] is False and rendered['preview_source_matches'] is False
     assert engines.get(title['id'])['last_tools']==['concurrent_edit']
     assert rendered['render_frame_count']==10
+
+
+@pytest.mark.skipif(not os.environ.get("LUMIERE_CREATIVE_TEST_DATA"), reason="opt-in real incorporated engines")
+def test_overlapping_call_keeps_completed_export_and_saves_under_lock(monkeypatch):
+    import lumiere_hoard.creative_engines as module
+    engines = _configured()
+    title = engines.create_title_card(text="Concurrent publication", width=160, height=90, fps=12, duration=1)
+    ready, resume = threading.Event(), threading.Event()
+    original_guard, original_save = engines._guard_paths, engines._save_manifest
+    result = {}
+
+    def guard(engine, calls, folder):
+        original_guard(engine, calls, folder)
+        if threading.current_thread().name == "native-edit":
+            ready.set()
+            assert resume.wait(30)
+
+    def save(manifest):
+        if threading.current_thread().name == "native-edit":
+            acquired = []
+            def try_lock():
+                locked = module._LOCK.acquire(blocking=False)
+                acquired.append(locked)
+                if locked:
+                    module._LOCK.release()
+            probe = threading.Thread(target=try_lock)
+            probe.start(); probe.join(5)
+            assert acquired == [False], "call publication must hold the shared lock"
+        return original_save(manifest)
+
+    monkeypatch.setattr(engines, "_guard_paths", guard)
+    monkeypatch.setattr(engines, "_save_manifest", save)
+    def edit():
+        try:
+            result["call"] = engines.call(title["id"], [{"tool": "set_property", "arguments": {
+                "layer": title["text_layer_id"], "path": "transform/position", "value": [50, 40]}}])
+        except BaseException as error:
+            result["error"] = error
+    worker = threading.Thread(target=edit, name="native-edit")
+    worker.start()
+    try:
+        assert ready.wait(30)
+        rendered = engines.render_title_video(title["id"])
+    finally:
+        resume.set(); worker.join(30)
+    assert not worker.is_alive() and "error" not in result
+    assert result["call"]["ok"]
+    current = engines.get(title["id"])
+    for key in ("render_path", "render_state", "render_source_sha256", "preview_path", "preview_source_sha256"):
+        assert current[key] == rendered[key]
+    assert current["render_frame_count"] == 12 and Path(current["render_path"]).is_file()
+    assert current["last_tools"] == ["set_property"]
+    assert current["render_source_matches"] is False and current["preview_source_matches"] is False
 
 
 @pytest.mark.skipif(not os.environ.get("LUMIERE_CREATIVE_TEST_DATA"), reason="opt-in real executable integration")
