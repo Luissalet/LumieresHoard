@@ -1,12 +1,9 @@
-"""Local EffectCraft/FilmCraft MCP processes and persisted editable projects.
-
-The apps remain the editing engines. This adapter owns only portable discovery,
-isolated app data, project folders, artifact metadata and safe file boundaries.
-"""
+"""Incorporated motion and editing engines, owned project files and native artifacts."""
 from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import re
@@ -19,10 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from types import SimpleNamespace
 
-ENGINES = ("effectcraft", "filmcraft")
+ENGINES = ("motion", "edit")
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _LOCK = threading.RLock()
 
@@ -49,6 +45,57 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+class NativeRecord(SimpleNamespace):
+    def model_dump(self, **_):
+        return vars(self)
+
+
+class NativeParameters(SimpleNamespace):
+    pass
+
+
+class NativeWorker:
+    """Private JSON-line protocol to an engine compiled from this product's source."""
+    def __init__(self, parameters, stderr):
+        self.parameters = parameters
+        self.stderr = stderr
+
+    async def __aenter__(self):
+        p = self.parameters
+        self.process = await asyncio.create_subprocess_exec(p.command,cwd=p.cwd,env=p.env,
+            stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=self.stderr,
+            limit=16*1024*1024,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        return self
+
+    async def __aexit__(self, *_):
+        self.process.stdin.close()
+        try:
+            await asyncio.wait_for(self.process.wait(),3)
+        except asyncio.TimeoutError:
+            self.process.kill()
+            await self.process.wait()
+
+    async def initialize(self):
+        return None
+
+    async def request(self, body):
+        self.process.stdin.write((json.dumps(body,ensure_ascii=False)+"\n").encode("utf-8"))
+        await self.process.stdin.drain()
+        line = await self.process.stdout.readline()
+        if not line:
+            raise CreativeEngineError("The incorporated engine exited before answering")
+        return json.loads(line)
+
+    async def list_tools(self):
+        answer = await self.request({"op":"catalog"})
+        return NativeRecord(tools=[NativeRecord(**tool) for tool in answer["tools"]])
+
+    async def call_tool(self, name, arguments):
+        answer = await self.request({"op":"call","call":name,"args":arguments})
+        return NativeRecord(isError=answer.get("isError",False),content=[NativeRecord(**block) for block in answer.get("content",[])])
+
+
 class CreativeEngines:
     def __init__(self, data_dir: Path, port: int = 5198):
         self.data_dir = Path(data_dir).resolve()
@@ -61,50 +108,17 @@ class CreativeEngines:
         for path in (self.projects_dir, self.runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
 
-    def _config(self) -> dict[str, str]:
-        if not self.config_path.exists():
-            return {}
-        try:
-            data = json.loads(self.config_path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise CreativeEngineError(f"Cannot read {self.config_path}: {exc}") from None
-        if not isinstance(data, dict) or set(data) - set(ENGINES) or any(not isinstance(v, str) for v in data.values()):
-            raise CreativeEngineError(f"{self.config_path} must map only {', '.join(ENGINES)} to executable paths")
-        return data
-
     def executable(self, engine: str) -> Path | None:
         self._validate_engine(engine)
-        config = self._config()
-        raw = config.get(engine) or os.environ.get(f"LUMIERE_{engine.upper()}_CLI")
-        if raw:
-            path = Path(raw).expanduser()
-            return path.resolve() if path.is_file() else None
-        name = f"{engine}-cli.exe" if os.name == "nt" else f"{engine}-cli"
-        found = shutil.which(name)
-        if found:
-            return Path(found).resolve()
-        roots = [self.data_dir / "creative-apps", self.data_dir / "craft-apps"]
-        roots.extend(Path(p).expanduser() for p in os.environ.get("LUMIERE_CRAFT_BUNDLES", "").split(os.pathsep) if p.strip())
-        for root in roots:
-            direct = root / name
-            if direct.is_file():
-                return direct.resolve()
-            if root.is_dir():
-                matches = sorted(root.glob(f"{engine}-*-windows-x64-portable/{name}"))
-                if not matches:
-                    matches = sorted(root.glob(f"*/{name}"))
-                if matches:
-                    return matches[0].resolve()
-        return None
+        name = {"motion":"lumiere-compositor", "edit":"lumiere-editor"}[engine]
+        path = Path(__file__).resolve().parents[1]/"native"/"bin"/(name+(".exe" if os.name == "nt" else ""))
+        return path if path.is_file() else None
 
     def status(self) -> dict[str, Any]:
-        return {"engines": {
-            engine: {"available": bool(self.executable(engine)),
-                     "executable": str(self.executable(engine)) if self.executable(engine) else None,
-                     "release": {"effectcraft": "0.3.1", "filmcraft": "0.2.1"}[engine],
-                     "expected_tools": {"effectcraft": 21, "filmcraft": 17}[engine]}
-            for engine in ENGINES
-        }, "projects_dir": str(self.projects_dir)}
+        return {"engines":{engine:{"available":bool(self.executable(engine)),"incorporated":True,
+                                    "executable":str(self.executable(engine)) if self.executable(engine) else None,
+                                    "release":"1.0.0","expected_tools":{"motion":21,"edit":9}[engine]}
+                           for engine in ENGINES}, "projects_dir":str(self.projects_dir)}
 
     @staticmethod
     def _validate_engine(engine: str) -> None:
@@ -127,9 +141,44 @@ class CreativeEngines:
         if not path.is_file():
             raise CreativeEngineError(f"No creative project {creative_id}.")
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            with _LOCK:
+                return self._urls(self._migrate_legacy(json.loads(path.read_text(encoding="utf-8"))))
         except (OSError, json.JSONDecodeError) as exc:
             raise CreativeEngineError(f"Cannot read creative project manifest: {exc}") from None
+
+    def _urls(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        cid=manifest["id"]
+        native=Path(manifest.get("native_path") or "")
+        digest=hashlib.sha256(native.read_bytes()).hexdigest() if native.is_file() else None
+        matches={f"{kind}_source_matches":digest==manifest[f"{kind}_source_sha256"]
+                 for kind in ("preview","render") if manifest.get(f"{kind}_source_sha256")}
+        return {**manifest,**matches,"project_url":f"/api/creative/{cid}/project",
+                "preview_url":f"/api/creative/{cid}/preview?file={Path(manifest['preview_path']).name}" if manifest.get("preview_path") else None,
+                "render_url":f"/api/creative/{cid}/render" if manifest.get("render_path") else None,
+                "media_receive_url":f"http://127.0.0.1:{self.port}/api/creative/{cid}/render" if manifest.get("render_path") else None}
+
+    def list(self, engine: str | None = None, project_id: str | None = None) -> dict[str, Any]:
+        if engine is not None:
+            self._validate_engine(engine)
+        items,errors=[],[]
+        for path in self.projects_dir.glob("*/manifest.json"):
+            try:
+                manifest=json.loads(path.read_text(encoding="utf-8"))
+                cid=manifest["id"]
+                if self._manifest_path(cid)!=path:
+                    raise CreativeEngineError("The manifest does not match its stored project")
+                kind={"effectcraft":"motion","filmcraft":"edit"}.get(manifest.get("engine"),manifest.get("engine"))
+                self._validate_engine(kind)
+                if (engine and kind!=engine) or (project_id and manifest.get("project_id")!=project_id):
+                    continue
+                items.append({"id":cid,"engine":kind,"name":manifest.get("title") or Path(manifest.get("source_copy") or cid).name,
+                              "project_id":manifest.get("project_id"),"state":manifest.get("state"),
+                              "updated_at":manifest.get("updated_at") or manifest.get("created_at"),
+                              "historical_import":kind!=manifest.get("engine")})
+            except (OSError,ValueError,KeyError,TypeError) as exc:
+                errors.append({"project":path.parent.name,"error":str(exc)})
+        items.sort(key=lambda item:item["updated_at"] or "",reverse=True)
+        return {"items":items,"count":len(items),"errors":errors}
 
     def _save_manifest(self, manifest: dict[str, Any]) -> None:
         path = self._manifest_path(manifest["id"])
@@ -138,23 +187,39 @@ class CreativeEngines:
         tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(path)
 
+    def _migrate_legacy(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        legacy = {"effectcraft":"motion", "filmcraft":"edit"}
+        old_engine = manifest.get("engine")
+        if old_engine not in legacy:
+            return manifest
+        folder = self._project_dir(manifest["id"])
+        original = Path(manifest["native_path"]).resolve()
+        if not _inside(original,folder) or not original.is_file():
+            raise CreativeEngineError("Legacy editable project is missing")
+        engine = legacy[old_engine]
+        destination = folder/(manifest["id"]+({"motion":".lumotion","edit":".lumedit"}[engine]))
+        source = original.read_bytes()
+        if not destination.exists():
+            data = json.loads(source.decode("utf-8"))
+            if engine == "edit":
+                if data.get("format") == "filmcraft.project":
+                    data["format"] = "lumiere-edit.project"
+                data["generator"] = "Lumiere Edit 1.0.0 (imported project)"
+            destination.write_text(json.dumps(data,ensure_ascii=False),encoding="utf-8")
+        manifest.update(engine=engine,native_path=str(destination),legacy_project_path=str(original))
+        self._save_manifest(manifest)
+        return manifest
+
     def _runtime(self, engine: str, project_dir: Path) -> tuple[Path, list[str], dict[str, str]]:
         exe = self.executable(engine)
         if exe is None:
-            raise CreativeEngineError(f"{engine} CLI unavailable; configure {self.config_path} or LUMIERE_{engine.upper()}_CLI")
+            raise CreativeEngineError("Build the incorporated Lumiere engines with native/build.py")
         env = dict(os.environ)
-        local = self.runtime_dir / engine
         for key in ("APPDATA", "LOCALAPPDATA"):
-            value = local / key.lower()
-            value.mkdir(parents=True, exist_ok=True)
+            value = self.runtime_dir/engine/key.lower()
+            value.mkdir(parents=True,exist_ok=True)
             env[key] = str(value)
-        if engine == "effectcraft":
-            args = ["--empty", "mcp"]
-        else:
-            film_data = local / "data"
-            film_data.mkdir(parents=True, exist_ok=True)
-            args = ["--data-dir", str(film_data), "mcp"]
-        return exe, args, env
+        return exe, [], env
 
     def _guard_paths(self, engine: str, calls: list[dict[str, Any]], folder: Path) -> None:
         def visit(value: Any, key: str = "") -> None:
@@ -177,57 +242,58 @@ class CreativeEngines:
 
         for call in calls:
             visit(call.get("arguments", {}))
-            if engine == "filmcraft" and call.get("tool") == "media_import":
+            if engine == "edit" and call.get("tool") == "media_import":
                 text = str(call.get("arguments", {}).get("text", ""))
                 for raw in text.splitlines():
                     item = Path(raw.strip().strip('"')).expanduser()
                     if raw.strip() and (not item.is_absolute() or not _inside(item, folder)):
-                        raise CreativeEngineError("FilmCraft media_import only accepts copies inside this creative project folder")
+                        raise CreativeEngineError("Lumiere Edit media_import only accepts copies inside this creative project folder")
 
-    async def _request(self, engine: str, project_dir: Path, calls: list[dict[str, Any]], *, open_saved: bool = False) -> list[dict[str, Any]]:
+    async def _request(self, engine: str, project_dir: Path, calls: list[dict[str, Any]], *, open_saved: bool = False, save_after: bool = True, native_path: Path | None = None) -> list[dict[str, Any]]:
         exe, args, env = self._runtime(engine, project_dir)
-        native = {"effectcraft": project_dir / f"{project_dir.name}.ecproj", "filmcraft": project_dir / f"{project_dir.name}.fcproj"}[engine]
+        native = native_path or {"motion": project_dir / f"{project_dir.name}.lumotion", "edit": project_dir / f"{project_dir.name}.lumedit"}[engine]
+        if not _inside(native,project_dir):
+            raise CreativeEngineError("Native project must remain inside its project folder")
         log_path = project_dir / "engine-stderr.log"
         output: list[dict[str, Any]] = []
         with log_path.open("a", encoding="utf-8") as stderr:
-            params = StdioServerParameters(command=str(exe), args=args, env=env, cwd=str(project_dir), encoding="utf-8")
-            async with stdio_client(params, errlog=stderr) as (reader, writer):
-                async with ClientSession(reader, writer) as session:
-                    await asyncio.wait_for(session.initialize(), 45)
-                    if calls and calls[0].get("tool") == "__list_tools__":
-                        result = await asyncio.wait_for(session.list_tools(), 45)
-                        return [{"tools": [_jsonable(x) for x in result.tools]}]
-                    if open_saved:
-                        if not native.is_file():
-                            raise CreativeEngineError(f"Native project file is missing: {native.name}")
-                        if engine == "effectcraft":
-                            opened = await asyncio.wait_for(session.call_tool("open_project", {"path": str(native)}), 120)
-                            output.append({"tool": "open_project", "is_error": bool(opened.isError), "content": [_jsonable(c) for c in opened.content]})
+            params = NativeParameters(command=str(exe), args=args, env=env, cwd=str(project_dir), encoding="utf-8")
+            async with NativeWorker(params, stderr) as session:
+                await asyncio.wait_for(session.initialize(), 45)
+                if calls and calls[0].get("tool") == "__list_tools__":
+                    result = await asyncio.wait_for(session.list_tools(), 45)
+                    return [{"tools": [_jsonable(x) for x in result.tools]}]
+                if open_saved:
+                    if not native.is_file():
+                        raise CreativeEngineError(f"Native project file is missing: {native.name}")
+                    if engine == "motion":
+                        opened = await asyncio.wait_for(session.call_tool("open_project", {"path": str(native)}), 120)
+                        output.append({"tool": "open_project", "is_error": bool(opened.isError), "content": [_jsonable(c) for c in opened.content]})
+                    else:
+                        opened = await asyncio.wait_for(session.call_tool("command_run", {"id": "file.open", "params": {"path": str(native)}}), 120)
+                        output.append({"tool": "command_run:file.open", "is_error": bool(opened.isError), "content": [_jsonable(c) for c in opened.content]})
+                    if opened.isError:
+                        return output
+                for i, call in enumerate(calls, 1):
+                    result = await asyncio.wait_for(session.call_tool(call["tool"], call.get("arguments", {})), 180)
+                    blocks: list[dict[str, Any]] = []
+                    for content in result.content:
+                        if getattr(content, "type", None) == "image" and getattr(content, "data", None):
+                            preview = project_dir / f"call-{i:02d}.png"
+                            preview.write_bytes(base64.b64decode(content.data))
+                            blocks.append({"type": "image", "path": str(preview), "mimeType": content.mimeType})
                         else:
-                            opened = await asyncio.wait_for(session.call_tool("command_run", {"id": "file.open", "params": {"path": str(native)}}), 120)
-                            output.append({"tool": "command_run:file.open", "is_error": bool(opened.isError), "content": [_jsonable(c) for c in opened.content]})
-                        if opened.isError:
-                            return output
-                    for i, call in enumerate(calls, 1):
-                        result = await asyncio.wait_for(session.call_tool(call["tool"], call.get("arguments", {})), 180)
-                        blocks: list[dict[str, Any]] = []
-                        for content in result.content:
-                            if getattr(content, "type", None) == "image" and getattr(content, "data", None):
-                                preview = project_dir / f"call-{i:02d}.png"
-                                preview.write_bytes(base64.b64decode(content.data))
-                                blocks.append({"type": "image", "path": str(preview), "mimeType": content.mimeType})
-                            else:
-                                blocks.append(_jsonable(content))
-                        output.append({"tool": call["tool"], "is_error": bool(result.isError), "content": blocks})
-                        if result.isError:
-                            return output
-                    if open_saved:
-                        if engine == "effectcraft":
-                            saved = await asyncio.wait_for(session.call_tool("save_project", {"path": str(native)}), 180)
-                            output.append({"tool": "save_project", "is_error": bool(saved.isError), "content": [_jsonable(c) for c in saved.content]})
-                        else:
-                            saved = await asyncio.wait_for(session.call_tool("command_run", {"id": "file.saveAs", "params": {"path": str(native)}}), 180)
-                            output.append({"tool": "command_run:file.saveAs", "is_error": bool(saved.isError), "content": [_jsonable(c) for c in saved.content]})
+                            blocks.append(_jsonable(content))
+                    output.append({"tool": call["tool"], "is_error": bool(result.isError), "content": blocks})
+                    if result.isError:
+                        return output
+                if open_saved and save_after:
+                    if engine == "motion":
+                        saved = await asyncio.wait_for(session.call_tool("save_project", {"path": str(native)}), 180)
+                        output.append({"tool": "save_project", "is_error": bool(saved.isError), "content": [_jsonable(c) for c in saved.content]})
+                    else:
+                        saved = await asyncio.wait_for(session.call_tool("command_run", {"id": "file.saveAs", "params": {"path": str(native)}}), 180)
+                        output.append({"tool": "command_run:file.saveAs", "is_error": bool(saved.isError), "content": [_jsonable(c) for c in saved.content]})
         return output
 
     def tools(self, engine: str) -> dict[str, Any]:
@@ -247,7 +313,7 @@ class CreativeEngines:
                 raise CreativeEngineError("each call must have a public native tool name")
             if not isinstance(call.get("arguments", {}), dict):
                 raise CreativeEngineError("native tool arguments must be an object")
-        if engine == "effectcraft" and any(c["tool"] == "run_script" for c in calls):
+        if engine == "motion" and any(c["tool"] == "run_script" for c in calls):
             # The upstream host confines script file access to the project folder.
             pass
 
@@ -286,7 +352,7 @@ class CreativeEngines:
         folder.mkdir(parents=True, exist_ok=False)
         return {"id": creative_id, "engine": engine, "project_id": project_id,
                 "created_at": datetime.now(timezone.utc).isoformat(), "project_dir": str(folder),
-                "native_path": str(folder / f"{creative_id}.{ 'ecproj' if engine == 'effectcraft' else 'fcproj'}"),
+                "native_path": str(folder / f"{creative_id}.{ 'lumotion' if engine == 'motion' else 'lumedit'}"),
                 "preview_path": str(folder / "preview.png"), "render_path": None,
                 "state": "creating", "last_tools": [], "last_error": None}
 
@@ -298,10 +364,7 @@ class CreativeEngines:
         self._save_manifest(manifest)
         self._audit({"creative_id": manifest["id"], "engine": manifest["engine"], "tools": manifest["last_tools"],
                      "ok": True, "ts": manifest["created_at"]})
-        return {**manifest, "project_url": f"/api/creative/{manifest['id']}/project",
-                "preview_url": f"/api/creative/{manifest['id']}/preview",
-                "render_url": f"/api/creative/{manifest['id']}/render" if render_path else None,
-                "media_receive_url": f"http://127.0.0.1:{self.port}/api/creative/{manifest['id']}/render" if render_path else None}
+        return self._urls(manifest)
 
     def create_title_card(self, *, text: str, width: int = 1280, height: int = 720, fps: float = 24,
                           duration: float = 3, project_id: str | None = None) -> dict[str, Any]:
@@ -309,9 +372,9 @@ class CreativeEngines:
             raise CreativeEngineError("text must contain 1 to 300 characters")
         if not 16 <= width <= 8192 or not 16 <= height <= 8192 or not 1 <= fps <= 120 or not 0.5 <= duration <= 30:
             raise CreativeEngineError("canvas must be 16–8192 px, frame rate 1–120, and duration 0.5–30 s")
-        manifest = self._begin("effectcraft", project_id)
+        manifest = self._begin("motion", project_id)
         folder = self._project_dir(manifest["id"])
-        p = folder / f"{manifest['id']}.ecproj"
+        p = folder / f"{manifest['id']}.lumotion"
         preview = folder / "preview.png"
         calls = [
             {"tool": "execute_command", "arguments": {"command": "comp.new", "params": {"name": text[:60], "width": width, "height": height, "frameRate": fps, "duration": duration, "background": "#17212b"}}},
@@ -319,144 +382,133 @@ class CreativeEngines:
         ]
         start = time.perf_counter()
         with _LOCK:
-            exe, args, env = self._runtime("effectcraft", folder)
+            exe, args, env = self._runtime("motion", folder)
             with (folder / "engine-stderr.log").open("a", encoding="utf-8") as stderr:
-                params = StdioServerParameters(command=str(exe), args=args, env=env, cwd=str(folder), encoding="utf-8")
+                params = NativeParameters(command=str(exe), args=args, env=env, cwd=str(folder), encoding="utf-8")
                 async def workflow():
-                    async with stdio_client(params, errlog=stderr) as (reader, writer):
-                        async with ClientSession(reader, writer) as session:
-                            await asyncio.wait_for(session.initialize(), 45)
-                            raw: list[dict[str, Any]] = []
-                            for call in calls:
-                                result = await asyncio.wait_for(session.call_tool(call["tool"], call["arguments"]), 180)
-                                raw.append({"tool": call["tool"], "is_error": bool(result.isError), "content": [_jsonable(c) for c in result.content]})
-                                if result.isError:
-                                    return raw, [], None
-                            try:
-                                layer_id = json.loads(raw[1]["content"][0]["text"]).get("layer")
-                            except (IndexError, KeyError, TypeError, json.JSONDecodeError):
+                    async with NativeWorker(params, stderr) as session:
+                        await asyncio.wait_for(session.initialize(), 45)
+                        raw: list[dict[str, Any]] = []
+                        for call in calls:
+                            result = await asyncio.wait_for(session.call_tool(call["tool"], call["arguments"]), 180)
+                            raw.append({"tool": call["tool"], "is_error": bool(result.isError), "content": [_jsonable(c) for c in result.content]})
+                            if result.isError:
                                 return raw, [], None
-                            if layer_id is None:
-                                return raw + [{"tool": "layer.newText", "is_error": True, "content": [{"type": "text", "text": "EffectCraft did not return the created title layer id"}]}], [], None
-                            extra = [
-                                {"tool": "add_keyframe", "arguments": {"layer": layer_id, "path": "transform/opacity", "keys": [
-                                    {"time": 0, "value": 0}, {"time": 0.35, "value": 100},
-                                    {"time": max(0.4, duration - 0.35), "value": 100}, {"time": duration, "value": 0}], "interpolation": "linear"}},
-                                {"tool": "save_project", "arguments": {"path": str(p)}},
-                                {"tool": "render_frame", "arguments": {"time": min(0.75, duration / 2), "path": str(preview), "inline": False, "max_side": max(width, height)}},
-                                {"tool": "get_property", "arguments": {"layer": layer_id, "path": "transform/opacity"}},
-                            ]
-                            tail: list[dict[str, Any]] = []
-                            for call in extra:
-                                result = await asyncio.wait_for(session.call_tool(call["tool"], call["arguments"]), 180)
-                                tail.append({"tool": call["tool"], "is_error": bool(result.isError), "content": [_jsonable(c) for c in result.content]})
-                                if result.isError:
-                                    break
-                            return raw, tail, layer_id
+                        try:
+                            layer_id = json.loads(raw[1]["content"][0]["text"]).get("layer")
+                        except (IndexError, KeyError, TypeError, json.JSONDecodeError):
+                            return raw, [], None
+                        if layer_id is None:
+                            return raw + [{"tool": "layer.newText", "is_error": True, "content": [{"type": "text", "text": "Lumiere Motion did not return the created title layer id"}]}], [], None
+                        extra = [
+                            {"tool": "add_keyframe", "arguments": {"layer": layer_id, "path": "transform/opacity", "keys": [
+                                {"time": 0, "value": 0}, {"time": 0.35, "value": 100},
+                                {"time": max(0.4, duration - 0.35), "value": 100}, {"time": duration, "value": 0}], "interpolation": "linear"}},
+                            {"tool": "save_project", "arguments": {"path": str(p)}},
+                            {"tool": "render_frame", "arguments": {"time": min(0.75, duration / 2), "path": str(preview), "inline": False, "max_side": max(width, height)}},
+                            {"tool": "get_property", "arguments": {"layer": layer_id, "path": "transform/opacity"}},
+                        ]
+                        tail: list[dict[str, Any]] = []
+                        for call in extra:
+                            result = await asyncio.wait_for(session.call_tool(call["tool"], call["arguments"]), 180)
+                            tail.append({"tool": call["tool"], "is_error": bool(result.isError), "content": [_jsonable(c) for c in result.content]})
+                            if result.isError:
+                                break
+                        return raw, tail, layer_id
                 raw, tail, text_layer_id = asyncio.run(workflow())
             if any(x["is_error"] for x in raw):
                 manifest["state"] = "failed"
-                manifest["last_error"] = "EffectCraft could not create the title composition"
+                manifest["last_error"] = "Lumiere Motion could not create the title composition"
                 self._save_manifest(manifest)
-                self._audit({"creative_id": manifest["id"], "engine": "effectcraft", "ok": False,
+                self._audit({"creative_id": manifest["id"], "engine": "motion", "ok": False,
                              "duration_ms": round((time.perf_counter() - start) * 1000, 1), "ts": manifest["created_at"]})
                 raise CreativeEngineError(manifest["last_error"])
         final_calls = raw + tail
         if any(x["is_error"] for x in tail) or not p.is_file() or not preview.is_file():
             manifest["state"] = "failed"
-            manifest["last_error"] = "EffectCraft failed to save the editable title project or render its preview"
+            manifest["last_error"] = "Lumiere Motion failed to save the editable title project or render its preview"
             self._save_manifest(manifest)
             raise CreativeEngineError(manifest["last_error"])
         manifest.update({"native_path": str(p), "preview_path": str(preview), "title": text, "width": width,
                          "height": height, "fps": fps, "duration_seconds": duration, "text_layer_id": text_layer_id,
-                         "render_path": None, "editable": True})
+                         "render_path": None, "editable": True,
+                         "preview_source_sha256":hashlib.sha256(p.read_bytes()).hexdigest()})
         result = self._finish(manifest, final_calls)
         result["calls"] = final_calls
         result["elapsed_ms"] = round((time.perf_counter() - start) * 1000, 1)
         return result
 
     def render_title_video(self, creative_id: str) -> dict[str, Any]:
-        """Render the saved active EffectCraft composition with its native H.264 encoder."""
+        """Render the saved active Lumiere Motion composition with its native H.264 encoder."""
         manifest = self.get(creative_id)
         started = time.perf_counter()
 
         def fail(message: str) -> CreativeEngineError:
-            manifest["render_state"] = "failed"
-            manifest["last_error"] = message
-            manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
-            self._save_manifest(manifest)
-            self._audit({"creative_id": creative_id, "engine": "effectcraft", "tool": "render", "ok": False,
-                         "duration_ms": round((time.perf_counter() - started) * 1000, 1), "ts": manifest["updated_at"]})
+            with _LOCK:
+                current=self.get(creative_id)
+                current["render_state"] = "failed"
+                current["last_error"] = message
+                current["updated_at"] = datetime.now(timezone.utc).isoformat()
+                self._save_manifest(current)
+            self._audit({"creative_id": creative_id, "engine": "motion", "tool": "render", "ok": False,
+                         "duration_ms": round((time.perf_counter() - started) * 1000, 1), "ts": current["updated_at"]})
             return CreativeEngineError(message)
 
-        if manifest.get("engine") != "effectcraft":
-            raise CreativeEngineError("animated title rendering requires an EffectCraft project")
+        if manifest.get("engine") != "motion":
+            raise CreativeEngineError("animated title rendering requires an Lumiere Motion project")
         folder = self._project_dir(creative_id)
         native = Path(manifest.get("native_path", "")).resolve()
-        if not _inside(native, folder) or native.suffix.lower() != ".ecproj" or not native.is_file():
-            raise fail("EffectCraft project file is missing or outside its creative project folder")
+        if not _inside(native, folder) or native.suffix.lower() != ".lumotion" or not native.is_file():
+            raise fail("Lumiere Motion project file is missing or outside its creative project folder")
         ffprobe = os.environ.get("LUMIERE_FFPROBE") or shutil.which("ffprobe")
         if not ffprobe or not Path(ffprobe).is_file():
             raise fail("ffprobe is required to verify the native MP4 frame rate and duration; configure LUMIERE_FFPROBE")
 
         try:
-            exe, _, env = self._runtime("effectcraft", folder)
+            exe, _, env = self._runtime("motion", folder)
         except CreativeEngineError as exc:
             raise fail(str(exc)) from None
         for key in ("APPDATA", "LOCALAPPDATA"):
-            target = self.runtime_dir / "effectcraft" / key.lower()
+            target = self.runtime_dir / "motion" / key.lower()
             target.mkdir(parents=True, exist_ok=True)
             env[key] = str(target)
 
-        # Read the active composition so that the verification matches the saved
-        # project even if a native MCP edit changed its duration or frame rate.
-        info_cmd = [str(exe), "info", "--project", str(native), "--json"]
-        try:
-            info = subprocess.run(info_cmd, cwd=str(folder), env=env, capture_output=True, text=True,
-                                  timeout=60, check=False)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise fail(f"EffectCraft project inspection failed: {exc}") from None
-        info_text = info.stdout.strip()
-        log_path = folder / "render-cli.log"
-        with log_path.open("a", encoding="utf-8") as log:
-            log.write(json.dumps({"command": info_cmd, "returncode": info.returncode,
-                                  "stdout": info.stdout, "stderr": info.stderr}, ensure_ascii=False) + "\n")
-        if info.returncode != 0:
-            raise fail(f"EffectCraft could not inspect the saved project: {(info.stderr or info_text)[-1200:]}")
-        try:
-            project_info = json.loads(info_text)
-            comp = project_info["activeComp"]
-            expected_fps = float(comp["frameRate"])
-            expected_duration = float(comp["duration"])
-            expected_width = int(comp["width"])
-            expected_height = int(comp["height"])
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            raise fail("EffectCraft info did not report the active composition's dimensions, fps and duration") from None
-        if expected_fps <= 0 or expected_duration <= 0 or expected_width <= 0 or expected_height <= 0:
-            raise fail("EffectCraft reported invalid active composition settings")
-
-        render = folder / f"render-{uuid.uuid4().hex[:8]}.mp4"
-        render_cmd = [str(exe), "render", "--project", str(native), "--out", str(render),
-                      "--format", "h264", "--quality", "best", "--audio", "off", "--json"]
-        # Native rendering writes frames directly into the MP4. No frame sequence
-        # is retained in Python memory or on disk.
-        timeout = max(120, min(1800, int(expected_duration * expected_fps * 5)))
-        manifest["render_state"] = "rendering"
-        manifest["last_error"] = None
-        self._save_manifest(manifest)
+        source_bytes=native.read_bytes()
+        source_sha=hashlib.sha256(source_bytes).hexdigest()
+        snapshot=folder/f"render-source-{uuid.uuid4().hex[:8]}.lumotion"
+        snapshot.write_bytes(source_bytes)
+        inspect = asyncio.run(self._request("motion",folder,[{"tool":"get_comp","arguments":{}},
+            {"tool":"execute_command","arguments":{"command":"renderQueue.list","params":{}}}],open_saved=True,save_after=False,native_path=snapshot))
+        if any(call["is_error"] for call in inspect):
+            raise fail("Could not inspect the saved composition")
+        comp = json.loads(next(call for call in inspect if call["tool"]=="get_comp")["content"][0]["text"])
+        expected_fps = float(comp["frameRate"])
+        expected_duration = float(comp["duration"])
+        expected_width = int(comp["width"])
+        expected_height = int(comp["height"])
+        queue = json.loads(next(call for call in inspect if call["tool"]=="execute_command")["content"][0]["text"])
+        disable = [{"tool":"execute_command","arguments":{"command":"renderQueue.setRender","params":{
+                    "index":index+1,"render":False}}} for index,_ in enumerate(queue.get("items",[]))]
+        render = folder/f"render-{uuid.uuid4().hex[:8]}.mp4"
+        preview=render.with_suffix(".png")
+        timeout = max(120,int(expected_duration*expected_fps*5))
+        log_path = folder/"render-engine.log"
+        render_cmd = ["incorporated-motion","renderQueue.add","renderQueue.render"]
+        with _LOCK:
+            current=self.get(creative_id)
+            current["render_state"] = "rendering"
+            self._save_manifest(current)
         phase = "native H.264 render"
         try:
-            try:
-                result = subprocess.run(render_cmd, cwd=str(folder), env=env, capture_output=True, text=True,
-                                        timeout=timeout, check=False)
-            except OSError as exc:
-                raise CreativeEngineError(f"Could not start EffectCraft H.264 render: {exc}") from None
-            with log_path.open("a", encoding="utf-8") as log:
-                log.write(json.dumps({"command": render_cmd, "returncode": result.returncode,
-                                      "stdout": result.stdout, "stderr": result.stderr}, ensure_ascii=False) + "\n")
-            if result.returncode != 0 or not render.is_file() or render.stat().st_size < 512:
-                detail = (result.stderr or result.stdout or f"exit code {result.returncode}")[-1600:]
-                raise CreativeEngineError(f"EffectCraft H.264 render failed: {detail}")
+            result = asyncio.run(self._request("motion",folder,disable+[
+                {"tool":"execute_command","arguments":{"command":"renderQueue.add","params":{
+                    "output":str(render),"format":"h264","quality":"best","audio":"off","timeSpan":"comp"}}},
+                {"tool":"execute_command","arguments":{"command":"renderQueue.render","params":{"wait":True}}},
+                {"tool":"render_frame","arguments":{"time":expected_duration/2,"path":str(preview),"inline":False,
+                    "max_side":max(expected_width,expected_height)}},
+            ],open_saved=True,save_after=False,native_path=snapshot))
+            if any(call["is_error"] for call in result) or not render.is_file() or render.stat().st_size<512:
+                raise CreativeEngineError("Incorporated motion rendering failed: "+json.dumps(result,ensure_ascii=False)[-1600:])
 
             phase = "MP4 verification"
             try:
@@ -491,25 +543,26 @@ class CreativeEngines:
             detail = f"during {phase} after {exc.timeout or timeout}s"
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(json.dumps({"command": render_cmd, "error": "timeout", "detail": detail}) + "\n")
-            raise fail(f"EffectCraft {detail}") from None
+            raise fail(f"Lumiere Motion {detail}") from None
         except CreativeEngineError as exc:
             if manifest.get("last_error") != str(exc):
                 raise fail(str(exc)) from None
             raise
 
         now = datetime.now(timezone.utc).isoformat()
-        manifest.update({"render_state": "complete", "render_path": str(render), "render_codec": "h264",
+        with _LOCK:
+            manifest=self.get(creative_id)
+            manifest.update({"render_state": "complete", "render_path": str(render), "render_codec": "h264",
                          "render_width": expected_width, "render_height": expected_height,
                          "render_fps": actual_fps, "render_duration_seconds": actual_duration,
                          "render_frame_count": frame_count, "render_verified_by": str(ffprobe),
-                         "rendered_at": now, "last_error": None, "updated_at": now})
-        self._save_manifest(manifest)
-        self._audit({"creative_id": creative_id, "engine": "effectcraft", "tool": "render", "ok": True,
+                         "rendered_at": now, "updated_at": now,
+                         "render_source_sha256":source_sha,"render_source_path":str(snapshot),
+                         "preview_path":str(preview),"preview_source_sha256":source_sha})
+            self._save_manifest(manifest)
+        self._audit({"creative_id": creative_id, "engine": "motion", "tool": "render", "ok": True,
                      "duration_ms": round((time.perf_counter() - started) * 1000, 1), "ts": now})
-        return {**manifest, "project_url": f"/api/creative/{creative_id}/project",
-                "preview_url": f"/api/creative/{creative_id}/preview",
-                "render_url": f"/api/creative/{creative_id}/render",
-                "media_receive_url": f"http://127.0.0.1:{self.port}/api/creative/{creative_id}/render"}
+        return self._urls(manifest)
 
     @staticmethod
     def _parse_rate(value: str) -> float:
@@ -525,7 +578,7 @@ class CreativeEngines:
             raise CreativeEngineError("source media is missing")
         if not 16 <= width <= 8192 or not 16 <= height <= 8192 or not 1 <= fps <= 120:
             raise CreativeEngineError("sequence canvas must be 16–8192 px at 1–120 fps")
-        manifest = self._begin("filmcraft", project_id)
+        manifest = self._begin("edit", project_id)
         folder = self._project_dir(manifest["id"])
         media_dir = folder / "media"
         media_dir.mkdir(parents=True, exist_ok=True)
@@ -536,7 +589,7 @@ class CreativeEngines:
         shutil.copy2(source, source_copy)
         if source.resolve() == source_copy.resolve():
             raise CreativeEngineError("source copy must be separate from the original")
-        proj = folder / f"{manifest['id']}.fcproj"
+        proj = folder / f"{manifest['id']}.lumedit"
         render = folder / "render.mp4"
         preview = folder / "preview.png"
         calls = [
@@ -544,59 +597,61 @@ class CreativeEngines:
         ]
         start = time.perf_counter()
         with _LOCK:
-            exe, args, env = self._runtime("filmcraft", folder)
+            exe, args, env = self._runtime("edit", folder)
             with (folder / "engine-stderr.log").open("a", encoding="utf-8") as stderr:
-                params = StdioServerParameters(command=str(exe), args=args, env=env, cwd=str(folder), encoding="utf-8")
+                params = NativeParameters(command=str(exe), args=args, env=env, cwd=str(folder), encoding="utf-8")
                 async def workflow():
-                    async with stdio_client(params, errlog=stderr) as (reader, writer):
-                        async with ClientSession(reader, writer) as session:
-                            await asyncio.wait_for(session.initialize(), 45)
-                            out: list[dict[str, Any]] = []
-                            imported = await asyncio.wait_for(session.call_tool("media_import", calls[0]["arguments"]), 180)
-                            out.append({"tool": "media_import", "is_error": bool(imported.isError), "content": [_jsonable(c) for c in imported.content]})
-                            if imported.isError:
-                                return out
-                            try:
-                                imported_json = json.loads(imported.content[0].text)
-                                item_id = imported_json["items"][0]
-                            except (IndexError, KeyError, TypeError, json.JSONDecodeError):
-                                return out + [{"tool": "media_import", "is_error": True, "content": [{"type": "text", "text": "FilmCraft import did not return a media item id"}]}]
-                            commands = [
-                                ("file.newSequence", {"name": f"Lumiere composition {manifest['id'][:8]}", "fromItem": item_id,
-                                                       "width": width, "height": height, "fps": fps}),
-                                ("file.saveAs", {"path": str(proj)}),
-                                ("file.exportMedia", {"path": str(render), "format": "h264", "width": width, "height": height,
-                                                      "fps": fps, "wait": True}),
-                            ]
-                            for command, parameters in commands:
-                                result = await asyncio.wait_for(session.call_tool("command_run", {"id": command, "params": parameters}), 300)
-                                out.append({"tool": f"command_run:{command}", "is_error": bool(result.isError), "content": [_jsonable(c) for c in result.content]})
-                                if result.isError:
-                                    return out
-                            sequence = await asyncio.wait_for(session.call_tool("sequence_inspect", {}), 60)
-                            out.append({"tool": "sequence_inspect", "is_error": bool(sequence.isError), "content": [_jsonable(c) for c in sequence.content]})
-                            frame = await asyncio.wait_for(session.call_tool("render_frame", {"seconds": 0, "max_side": max(width, height)}), 120)
-                            frame_blocks = []
-                            for content in frame.content:
-                                if getattr(content, "type", None) == "image" and getattr(content, "data", None):
-                                    preview.write_bytes(base64.b64decode(content.data))
-                                    frame_blocks.append({"type": "image", "path": str(preview), "mimeType": content.mimeType})
-                                else:
-                                    frame_blocks.append(_jsonable(content))
-                            out.append({"tool": "render_frame", "is_error": bool(frame.isError), "content": frame_blocks})
+                    async with NativeWorker(params, stderr) as session:
+                        await asyncio.wait_for(session.initialize(), 45)
+                        out: list[dict[str, Any]] = []
+                        imported = await asyncio.wait_for(session.call_tool("media_import", calls[0]["arguments"]), 180)
+                        out.append({"tool": "media_import", "is_error": bool(imported.isError), "content": [_jsonable(c) for c in imported.content]})
+                        if imported.isError:
                             return out
+                        try:
+                            imported_json = json.loads(imported.content[0].text)
+                            item_id = imported_json["items"][0]
+                        except (IndexError, KeyError, TypeError, json.JSONDecodeError):
+                            return out + [{"tool": "media_import", "is_error": True, "content": [{"type": "text", "text": "Lumiere Edit import did not return a media item id"}]}]
+                        commands = [
+                            ("file.newSequence", {"name": f"Lumiere composition {manifest['id'][:8]}", "fromItem": item_id,
+                                                   "width": width, "height": height, "fps": fps}),
+                            ("file.saveAs", {"path": str(proj)}),
+                            ("file.exportMedia", {"path": str(render), "format": "h264", "width": width, "height": height,
+                                                  "fps": fps, "wait": True}),
+                        ]
+                        for command, parameters in commands:
+                            result = await asyncio.wait_for(session.call_tool("command_run", {"id": command, "params": parameters}), 300)
+                            out.append({"tool": f"command_run:{command}", "is_error": bool(result.isError), "content": [_jsonable(c) for c in result.content]})
+                            if result.isError:
+                                return out
+                        sequence = await asyncio.wait_for(session.call_tool("sequence_inspect", {}), 60)
+                        out.append({"tool": "sequence_inspect", "is_error": bool(sequence.isError), "content": [_jsonable(c) for c in sequence.content]})
+                        frame = await asyncio.wait_for(session.call_tool("render_frame", {"seconds": 0, "max_side": max(width, height)}), 120)
+                        frame_blocks = []
+                        for content in frame.content:
+                            if getattr(content, "type", None) == "image" and getattr(content, "data", None):
+                                preview.write_bytes(base64.b64decode(content.data))
+                                frame_blocks.append({"type": "image", "path": str(preview), "mimeType": content.mimeType})
+                            else:
+                                frame_blocks.append(_jsonable(content))
+                        out.append({"tool": "render_frame", "is_error": bool(frame.isError), "content": frame_blocks})
+                        return out
                 final_calls = asyncio.run(workflow())
         if any(x["is_error"] for x in final_calls) or not proj.is_file() or not render.is_file():
             manifest["state"] = "failed"
-            manifest["last_error"] = "FilmCraft failed to import, sequence, save, or export the copied source"
+            manifest["last_error"] = "Lumiere Edit failed to import, sequence, save, or export the copied source"
             manifest["source_copy"] = str(source_copy)
             self._save_manifest(manifest)
-            self._audit({"creative_id": manifest["id"], "engine": "filmcraft", "tools": [x["tool"] for x in final_calls],
+            self._audit({"creative_id": manifest["id"], "engine": "edit", "tools": [x["tool"] for x in final_calls],
                          "ok": False, "duration_ms": round((time.perf_counter() - start) * 1000, 1), "ts": manifest["created_at"]})
             raise CreativeEngineError(manifest["last_error"])
         manifest.update({"native_path": str(proj), "preview_path": str(preview) if preview.exists() else None,
                          "render_path": str(render), "source_copy": str(source_copy), "source_media_id": source_media_id,
-                         "width": width, "height": height, "fps": fps, "editable": True})
+                         "title": source.name,
+                         "width": width, "height": height, "fps": fps, "editable": True,
+                         "render_source_sha256":hashlib.sha256(proj.read_bytes()).hexdigest(),
+                         "preview_source_sha256":hashlib.sha256(proj.read_bytes()).hexdigest()})
         result = self._finish(manifest, final_calls, render_path=str(render))
         result["calls"] = final_calls
         result["elapsed_ms"] = round((time.perf_counter() - start) * 1000, 1)

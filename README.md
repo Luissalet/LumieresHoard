@@ -85,7 +85,7 @@ visible changes in a bounded scan while keeping the timeline endpoints. Explicit
 millisecond samples are also supported. Source and timeline changes during
 capture reject the sheet. [API, sampling and verified limits](docs/CONTACT-SHEETS.md).
 
-`mcp_server.py` is a stdio MCP bridge with 62 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
+`mcp_server.py` is a stdio MCP bridge with 64 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -203,11 +203,12 @@ project is created. This is not a claim of full editor interchange parity.
 
 ## Durable timeline edits over MCP
 
-The Projects page also contains the EffectCraft/FilmCraft creative workshop:
-editable title compositions with opacity keyframes and previews, plus saved
-FilmCraft sequences and actual H264 exports from copied library media. Native
-catalogues and batch dispatch are available over MCP. See
-[creative engines](docs/CREATIVE_ENGINES.md) for setup and exact batch semantics.
+The Projects page includes Lumiere's incorporated motion compositor and editing engine:
+editable title compositions with opacity keyframes and previews, saved sequences and
+actual H264 exports from copied library media. Their source, codecs and project formats
+live in this repository and can evolve independently. Native catalogues and batch controls
+are exposed over the ordinary API/MCP; no other application's executable is configured.
+See [creative engines](docs/CREATIVE_ENGINES.md) for building and exact batch semantics.
 
 Pass an optional `request_id` to `timeline_edit` or `POST /api/projects/{id}/edit`.
 Retry the same key with identical `ops`, `label` and `base_rev` after an interrupted

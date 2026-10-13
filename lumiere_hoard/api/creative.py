@@ -1,4 +1,4 @@
-"""Local EffectCraft and FilmCraft workflows and their generated artifacts."""
+"""Local Lumiere Motion and Lumiere Edit workflows and their generated artifacts."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,6 +14,14 @@ from ..errors import LumiereError, NotFound
 from .deps import services
 
 router = APIRouter(prefix="/api/creative", tags=["creative engines"])
+
+
+@router.get("")
+def list_projects(request: Request, engine: str | None = None, project_id: str | None = None):
+    try:
+        return _engine(request).list(engine,project_id)
+    except CreativeEngineError as exc:
+        raise LumiereError(str(exc),code="creative_engine") from None
 
 
 class TitleCardBody(BaseModel):
@@ -92,7 +100,7 @@ def film_sequence(request: Request, body: FilmSequenceBody):
     _link_project(request, body.project_id)
     media = media_store.get(svc, body.media_id)
     if media["kind"] != "video" or not media["has_video"]:
-        raise LumiereError("FilmCraft sequence import requires a video with a video stream.", code="bad_media_kind")
+        raise LumiereError("Lumiere Edit sequence import requires a video with a video stream.", code="bad_media_kind")
     width = body.width or int(media.get("width") or 1920)
     height = body.height or int(media.get("height") or 1080)
     fps = body.fps or float(media.get("fps") or 24)
@@ -137,7 +145,7 @@ def preview(request: Request, creative_id: str):
 @router.get("/{creative_id}/project")
 def native_project(request: Request, creative_id: str):
     _engine(request).get(creative_id)
-    path = _artifact(request, creative_id, "native_path", {".ecproj", ".fcproj"})
+    path = _artifact(request, creative_id, "native_path", {".lumotion", ".lumedit"})
     return FileResponse(path, filename=path.name, headers={"Cache-Control": "no-store"})
 
 

@@ -86,7 +86,7 @@ conserva los extremos del montaje. También admite tiempos explícitos en
 milisegundos. Rechaza cambios de fuente o timeline durante la captura.
 [API, muestreo y límites verificados](docs/CONTACT-SHEETS.es.md).
 
-`mcp_server.py` es un puente MCP por stdio con 62 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
+`mcp_server.py` es un puente MCP por stdio con 64 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -208,12 +208,12 @@ paridad completa de intercambio con otros editores.
 
 ## Ediciones duraderas del montaje por MCP
 
-Proyectos también incluye el taller EffectCraft/FilmCraft: composiciones de
-rótulos editables con keyframes de opacidad y vistas previas, además de secuencias
-FilmCraft y exportaciones H264 reales a partir de copias de medios. El catálogo
-y despacho por lotes están disponibles por MCP. Consulta
-[motores creativos](docs/CREATIVE_ENGINES.es.md) para configurar los motores y
-conocer la semántica exacta de cada lote.
+Proyectos incluye los motores de composición y edición incorporados a Lumiere:
+cartelas editables con keyframes y vistas previas, secuencias guardadas y exportaciones
+H264 reales a partir de copias de medios. El código, los códecs y los formatos propios
+viven en este repositorio y evolucionan con el producto. Las acciones están en la API
+y MCP normales; no se configura el ejecutable de otra aplicación. Consulta
+[motores creativos](docs/CREATIVE_ENGINES.es.md) para compilarlos y conocer los lotes.
 
 Pasa `request_id` opcional a `timeline_edit` o `POST /api/projects/{id}/edit`.
 Repite la misma clave con `ops`, `label` y `base_rev` idénticos tras una respuesta

@@ -68,7 +68,11 @@
     "html-motion-compositions",
     "exact-time-html-frames",
     "editable-motion-revisions",
-    "html-to-video"
+    "html-to-video",
+    "incorporated-compositor",
+    "incorporated-editing-engine",
+    "saved-native-compositions",
+    "native-source-snapshots"
   ],
   "placeholders": [
     "LUMIERE_DIR",

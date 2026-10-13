@@ -14,25 +14,59 @@ from PIL import ImageChops
 from lumiere_hoard.creative_engines import CreativeEngineError, CreativeEngines
 
 
-def test_portable_discovery_config_and_project_path_guard(tmp_path, monkeypatch):
-    photo = tmp_path / "portable" / "effectcraft-0.3.1-windows-x64-portable" / "effectcraft-cli.exe"
-    photo.parent.mkdir(parents=True)
-    photo.write_bytes(b"fixture")
-    monkeypatch.setenv("LUMIERE_CRAFT_BUNDLES", str(photo.parent.parent))
-    engines = CreativeEngines(tmp_path / "data")
-    if os.name == "nt":  # the portable bundles are Windows builds; elsewhere only the explicit config counts
-        assert engines.executable("effectcraft") == photo.resolve()
-    config = tmp_path / "custom-filmcraft.exe"
-    config.write_bytes(b"configured")
-    engines.config_path.write_text(json.dumps({"filmcraft": str(config)}), encoding="utf-8")
-    assert engines.executable("filmcraft") == config.resolve()
-    project_id = "a" * 32
-    folder = engines._project_dir(project_id)
-    engines._guard_paths("effectcraft", [{"arguments": {"path": str(folder / "render.png")}}], folder)
-    with pytest.raises(CreativeEngineError, match="inside this creative project folder"):
-        engines._guard_paths("filmcraft", [{"arguments": {"path": str(tmp_path / "original.mp4")}}], folder)
-    with pytest.raises(CreativeEngineError, match="media_import"):
-        engines._guard_paths("filmcraft", [{"tool": "media_import", "arguments": {"text": str(tmp_path / "original.mp4")}}], folder)
+def test_incorporated_discovery_ignores_external_configuration(tmp_path, monkeypatch):
+    import lumiere_hoard.creative_engines as module
+    product=tmp_path/"product"
+    monkeypatch.setattr(module,"__file__",str(product/"lumiere_hoard/creative_engines.py"))
+    binary=product/"native/bin"/("lumiere-compositor.exe" if os.name=="nt" else "lumiere-compositor")
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"owned engine fixture")
+    external=tmp_path/"external.exe";external.write_bytes(b"external")
+    monkeypatch.setenv("LUMIERE_EFFECTCRAFT_CLI",str(external))
+    monkeypatch.setenv("LUMIERE_FILMCRAFT_CLI",str(external))
+    engines=CreativeEngines(tmp_path/"data")
+    engines.config_path.write_text(json.dumps({"effectcraft":str(external),"filmcraft":str(external)}),encoding="utf-8")
+    assert engines.executable("motion")==binary
+    assert engines.executable("edit") is None
+    assert engines.status()["engines"]["motion"]["incorporated"]
+    with pytest.raises(CreativeEngineError):
+        engines.executable("effectcraft")
+    folder=engines._project_dir("a"*32)
+    engines._guard_paths("motion",[{"arguments":{"path":str(folder/"frame.png")}}],folder)
+    with pytest.raises(CreativeEngineError,match="inside this creative project folder"):
+        engines._guard_paths("edit",[{"arguments":{"path":str(external)}}],folder)
+
+
+def test_saved_catalogue_keeps_historical_files_and_reports_partial_errors(tmp_path):
+    engines=CreativeEngines(tmp_path/"data")
+    cid="a"*32
+    folder=engines._project_dir(cid);folder.mkdir()
+    original=folder/(cid+".ecproj");original.write_text('{"original":"unchanged"}',encoding="utf-8")
+    manifest={"id":cid,"engine":"effectcraft","native_path":str(original),"title":"Stored title",
+              "project_id":"prj_12345678","state":"complete","created_at":"2026-10-13T08:00:00Z"}
+    engines._save_manifest(manifest)
+    broken=engines.projects_dir/("b"*32);broken.mkdir();(broken/"manifest.json").write_text("bad",encoding="utf-8")
+    before=original.read_bytes()
+    listed=engines.list("motion","prj_12345678")
+    assert listed["count"]==1 and listed["items"][0]["historical_import"]
+    assert len(listed["errors"])==1 and original.read_bytes()==before
+    assert not original.with_suffix(".lumotion").exists()
+    assert engines.list("edit")["count"]==0
+
+
+def test_catalogue_and_get_are_available_through_native_api_and_agent(client):
+    svc=client.app.state.services
+    engines=CreativeEngines(svc.config.data_dir)
+    cid="c"*32
+    folder=engines._project_dir(cid);folder.mkdir()
+    native=folder/(cid+".lumotion");native.write_text('{}',encoding="utf-8")
+    engines._save_manifest({"id":cid,"engine":"motion","native_path":str(native),"title":"Persisted example",
+                           "state":"complete","created_at":"2026-10-13T08:00:00Z","preview_path":None,"render_path":None})
+    assert client.get('/api/creative').json()['items'][0]['id']==cid
+    assert client.get(f'/api/creative/{cid}').json()['project_url'].endswith(f'/{cid}/project')
+    from lumiere_hoard.agent_tools import CreativeListArgs, CreativeRenderArgs, run_creative_list, run_creative_get
+    assert run_creative_list(svc,CreativeListArgs())['count']==1
+    assert run_creative_get(svc,CreativeRenderArgs(creative_id=cid))['title']=='Persisted example'
 
 
 def _configured() -> CreativeEngines:
@@ -40,13 +74,72 @@ def _configured() -> CreativeEngines:
     if not data:
         pytest.skip("set LUMIERE_CREATIVE_TEST_DATA to an isolated directory for real engine tests")
     engines = CreativeEngines(Path(data))
-    if not engines.executable("effectcraft") or not engines.executable("filmcraft"):
-        pytest.skip("configure both portable EffectCraft and FilmCraft CLIs for real engine tests")
+    if not engines.executable("motion") or not engines.executable("edit"):
+        pytest.skip("build both incorporated native engines for real engine tests")
     return engines
 
 
+@pytest.mark.skipif(not os.environ.get("LUMIERE_CREATIVE_TEST_DATA"), reason="opt-in real incorporated engines")
+def test_historical_projects_open_as_own_copies_with_original_bytes_preserved(tmp_path):
+    engines = _configured()
+    title = engines.create_title_card(text="Preserved legacy project",width=320,height=180,fps=10,duration=1)
+    folder=Path(title["project_dir"])
+    original=folder/(title["id"]+".ecproj")
+    original.write_bytes(Path(title["native_path"]).read_bytes())
+    digest=hashlib.sha256(original.read_bytes()).hexdigest()
+    Path(title["native_path"]).unlink()
+    title.update(engine="effectcraft",native_path=str(original))
+    engines._save_manifest(title)
+    migrated=engines.get(title["id"])
+    assert migrated["engine"]=="motion" and Path(migrated["native_path"]).suffix==".lumotion"
+    assert migrated["id"]==title["id"] and hashlib.sha256(original.read_bytes()).hexdigest()==digest
+    answer=engines.call(title["id"],[{"tool":"get_comp","arguments":{}}])
+    assert answer["ok"] and hashlib.sha256(original.read_bytes()).hexdigest()==digest
+
+
+@pytest.mark.skipif(not os.environ.get("LUMIERE_CREATIVE_TEST_DATA"), reason="opt-in real incorporated engines")
+def test_motion_export_keeps_native_source_and_other_queue_jobs_unchanged():
+    engines = _configured()
+    title = engines.create_title_card(text="Queue and source",width=320,height=180,fps=10,duration=1)
+    source=Path(title["native_path"])
+    before=hashlib.sha256(source.read_bytes()).hexdigest()
+    first=engines.render_title_video(title["id"])
+    assert first["render_frame_count"]==10 and hashlib.sha256(source.read_bytes()).hexdigest()==before
+    second=engines.render_title_video(title["id"])
+    assert second["render_frame_count"]==10 and hashlib.sha256(source.read_bytes()).hexdigest()==before
+
+
+@pytest.mark.skipif(not os.environ.get("LUMIERE_CREATIVE_TEST_DATA"), reason="opt-in real incorporated engines")
+def test_export_snapshot_keeps_concurrent_edit_and_reports_older_artifacts(monkeypatch):
+    engines = _configured()
+    title=engines.create_title_card(text="Snapshot source",width=320,height=180,fps=10,duration=1)
+    source=Path(title["native_path"])
+    before=source.read_bytes()
+    original_request=engines._request
+    changed=False
+    async def edit_after_snapshot(engine,folder,calls,**kwargs):
+        nonlocal changed
+        result=await original_request(engine,folder,calls,**kwargs)
+        if not changed and kwargs.get('native_path') and calls[0]['tool']=='get_comp':
+            changed=True
+            edited=await original_request(engine,folder,[{'tool':'set_property','arguments':{
+                'layer':title['text_layer_id'],'path':'transform/position','value':[40,60]}}],open_saved=True)
+            assert not any(call['is_error'] for call in edited)
+            current=engines.get(title['id']);current['last_tools']=['concurrent_edit']
+            engines._save_manifest(current)
+        return result
+    monkeypatch.setattr(engines,'_request',edit_after_snapshot)
+    rendered=engines.render_title_video(title['id'])
+    assert changed and source.read_bytes()!=before
+    assert Path(rendered['render_source_path']).read_bytes()==before
+    assert rendered['render_source_sha256']==hashlib.sha256(before).hexdigest()
+    assert rendered['render_source_matches'] is False and rendered['preview_source_matches'] is False
+    assert engines.get(title['id'])['last_tools']==['concurrent_edit']
+    assert rendered['render_frame_count']==10
+
+
 @pytest.mark.skipif(not os.environ.get("LUMIERE_CREATIVE_TEST_DATA"), reason="opt-in real executable integration")
-def test_effectcraft_title_card_is_editable_keyframed_and_rendered():
+def test_motion_title_card_is_editable_keyframed_and_rendered():
     engines = _configured()
     result = engines.create_title_card(text="Lumiere title", width=320, height=180, fps=24, duration=1.5)
     project = Path(result["native_path"])
@@ -61,7 +154,7 @@ def test_effectcraft_title_card_is_editable_keyframed_and_rendered():
     assert len(prop.get("keys", [])) == 4 and prop.get("animated") is True
     saved = engines.get(result["id"])
     assert saved["state"] == "complete" and saved["editable"]
-    catalogue = engines.tools("effectcraft")
+    catalogue = engines.tools("motion")
     assert catalogue["count"] == 21
     proxy = engines.call(result["id"], [{"tool": "get_project", "arguments": {}}, {"tool": "get_comp", "arguments": {}}])
     assert proxy["ok"] and [call["tool"] for call in proxy["calls"] if call["tool"] not in {"open_project", "save_project"}] == ["get_project", "get_comp"]
@@ -86,7 +179,7 @@ def test_effectcraft_title_card_is_editable_keyframed_and_rendered():
 
 
 @pytest.mark.skipif(not os.environ.get("LUMIERE_CREATIVE_TEST_DATA"), reason="opt-in real executable integration")
-def test_filmcraft_imports_copy_saves_project_and_exports_video(tmp_path):
+def test_edit_imports_copy_saves_project_and_exports_video(tmp_path):
     engines = _configured()
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
@@ -111,14 +204,31 @@ def test_filmcraft_imports_copy_saves_project_and_exports_video(tmp_path):
     sequence = next(c for c in result["calls"] if c["tool"] == "sequence_inspect")
     timeline = json.loads(sequence["content"][0]["text"])
     assert any(track.get("items") for track in timeline.get("video", []))
-    catalogue = engines.tools("filmcraft")
-    assert catalogue["count"] == 17
+    catalogue = engines.tools("edit")
+    assert catalogue["count"] == 9
     proxy = engines.call(result["id"], [{"tool": "project_inspect", "arguments": {}}, {"tool": "sequence_inspect", "arguments": {}}])
     assert proxy["ok"] and any(call["tool"] == "command_run:file.open" for call in proxy["calls"])
+    # Preserve an older imported editing project as a historical source, while
+    # all subsequent operations run against the own format and engine.
+    historical=project.with_suffix(".fcproj")
+    old=json.loads(project.read_text(encoding="utf-8"))
+    old["format"]="filmcraft.project"
+    historical.write_text(json.dumps(old),encoding="utf-8")
+    legacy_sha=hashlib.sha256(historical.read_bytes()).hexdigest()
+    project.unlink()
+    manifest=engines.get(result["id"])
+    manifest.update(engine="filmcraft",native_path=str(historical))
+    engines._save_manifest(manifest)
+    migrated=engines.get(result["id"])
+    assert migrated["engine"]=="edit" and Path(migrated["native_path"]).suffix==".lumedit"
+    assert json.loads(Path(migrated["native_path"]).read_text(encoding="utf-8"))["format"]=="lumiere-edit.project"
+    assert engines.call(result["id"],[{"tool":"sequence_inspect","arguments":{}}])["ok"]
+    assert hashlib.sha256(historical.read_bytes()).hexdigest()==legacy_sha
+    assert hashlib.sha256(source.read_bytes()).hexdigest()==original
 
 
 @pytest.mark.skipif(not os.environ.get("LUMIERE_CREATIVE_TEST_DATA"), reason="opt-in real executable integration")
-def test_effectcraft_render_video_api_returns_downloadable_native_h264(client):
+def test_motion_render_video_api_returns_downloadable_native_h264(client):
     created = client.post("/api/creative/title-card", json={"text": "API animated title", "width": 160,
                                                              "height": 90, "fps": 12, "duration": 1})
     assert created.status_code == 200, created.text

@@ -915,7 +915,12 @@ def run_settings(svc: Services, a: SettingsArgs) -> dict:
 
 
 class CreativeToolsArgs(BaseModel):
-    engine: Literal['effectcraft','filmcraft']
+    engine: Literal['motion','edit']
+
+
+class CreativeListArgs(BaseModel):
+    engine: Optional[Literal['motion','edit']] = None
+    project_id: Optional[str] = None
 
 
 class CreativeCallArgs(BaseModel):
@@ -953,8 +958,27 @@ def run_creative_tools(svc: Services,a: CreativeToolsArgs):
     return _creative(svc).tools(a.engine)
 
 
+def run_creative_list(svc: Services,a: CreativeListArgs):
+    return _creative(svc).list(a.engine,a.project_id)
+
+
+def run_creative_get(svc: Services,a: CreativeRenderArgs):
+    return _creative(svc).get(a.creative_id)
+
+
 def run_creative_call(svc: Services,a: CreativeCallArgs):
-    return _creative(svc).call(a.creative_id,a.calls)
+    import base64
+    engines=_creative(svc)
+    result=engines.call(a.creative_id,a.calls)
+    folder=engines._project_dir(a.creative_id)
+    for call in reversed(result.get('calls',[])):
+        for block in reversed(call.get('content',[])):
+            if block.get('type')=='image' and block.get('path'):
+                path=Path(block['path']).resolve()
+                if path.is_relative_to(folder) and path.is_file():
+                    result['_image']={'mime':'image/png','data':base64.b64encode(path.read_bytes()).decode('ascii')}
+                    return result
+    return result
 
 
 def run_creative_render(svc: Services,a: CreativeRenderArgs):
@@ -969,7 +993,7 @@ def run_creative_title(svc: Services,a: CreativeTitleArgs):
 def run_creative_film(svc: Services,a: CreativeFilmArgs):
     if a.project_id:project_store.doc(svc,a.project_id)
     info=media_store.get(svc,a.media_id)
-    if info['kind']!='video' or not info['has_video']:raise LumiereError('FilmCraft needs a video source.')
+    if info['kind']!='video' or not info['has_video']:raise LumiereError('Lumiere Edit needs a video source.')
     return _creative(svc).create_film_sequence(Path(info['path']),source_media_id=a.media_id,width=a.width or info['width'],
                                               height=a.height or info['height'],fps=a.fps or info['fps'],project_id=a.project_id)
 
@@ -1022,11 +1046,13 @@ TOOLS: list[Tool] = [
     Tool("html_motion_frame", "Render an exact-time PNG from an HTML composition. Revisar fotograma HTML.\nTime is seconds; returns an MCP image, source revision and frame hash. Keywords: snapshot, visual critique, storyboard, seek.", HtmlMotionFrameArgs, _ann(True), run_html_motion_frame),
     Tool("html_motion_render", "Queue an HTML composition as verified silent H264 MP4. Exportar animacion HTML a video.\nFollow job_status; use media_receive(path=result.render_path) to add the video to a timeline. Keywords: render, export, MP4, motion graphics.", HtmlMotionRefArgs, _ann(False, False, True), run_html_motion_render),
     Tool("html_motion_restore", "Restore a saved HTML composition revision as a new revision. Recuperar una animacion anterior.\nLater versions remain available. Keywords: undo, restore, revisions, HTML motion.", HtmlMotionRestoreArgs, _ann(False, False, False), run_html_motion_restore),
-    Tool('creative_render_title_video','Render an editable EffectCraft title to verified H264 video. Renderizar cartela animada.\nReturns actual video path, metadata and media_receive_url. Keywords: animation, render title, mp4, motion graphics.',CreativeRenderArgs,_ann(False,False,True),run_creative_render),
-    Tool('creative_tools','Discover full EffectCraft or FilmCraft MCP schemas. Herramientas nativas.\nKeywords: motion graphics, layers, compositing, filmcraft, effectcraft.',CreativeToolsArgs,_ann(True),run_creative_tools),
+    Tool('creative_render_title_video','Render an editable Lumiere Motion title to verified H264 video. Renderizar cartela animada.\nReturns actual video path, metadata and media_receive_url. Keywords: animation, render title, mp4, motion graphics.',CreativeRenderArgs,_ann(False,False,True),run_creative_render),
+    Tool('creative_tools','Discover Lumiere motion or editing operations. Herramientas nativas.\nKeywords: motion graphics, layers, compositing, editing, effects.',CreativeToolsArgs,_ann(True),run_creative_tools),
+    Tool('creative_list','List saved editable creative projects. Listar composiciones guardadas.\nFilter by own engine or linked timeline. Keywords: composition, saved, project library, motion, edit.',CreativeListArgs,_ann(True),run_creative_list),
+    Tool('creative_get','Read a saved creative project and its artifacts. Abrir composicion guardada.\nHistorical source files stay intact; edits use the own-format copy. Keywords: project, preview, video, native source.',CreativeRenderArgs,_ann(True),run_creative_get),
     Tool('creative_call','Run native MCP calls on a saved creative project. Ejecutar herramientas nativas.\nEach batch reopens/saves; in-memory selection and undo do not persist between batches.\nKeywords: effects, animation, layers, native tools.',CreativeCallArgs,_ann(False,True,False),run_creative_call),
-    Tool('creative_title_card','Create an editable EffectCraft title with keyframes and PNG preview. Cartela editable.\nNo encoded video render is implied. Keywords: title, keyframes, text animation.',CreativeTitleArgs,_ann(False,True,False),run_creative_title),
-    Tool('creative_film_sequence','Create a FilmCraft sequence from a video copy and export H264 MP4. Secuencia nativa.\nThe original source is preserved. Keywords: native video editor, sequence, video export.',CreativeFilmArgs,_ann(False,True,False),run_creative_film),
+    Tool('creative_title_card','Create an editable Lumiere Motion title with keyframes and PNG preview. Cartela editable.\nNo encoded video render is implied. Keywords: title, keyframes, text animation.',CreativeTitleArgs,_ann(False,True,False),run_creative_title),
+    Tool('creative_film_sequence','Create a Lumiere Edit sequence from a video copy and export H264 MP4. Secuencia nativa.\nThe original source is preserved. Keywords: native video editor, sequence, video export.',CreativeFilmArgs,_ann(False,True,False),run_creative_film),
     Tool("lumiere_status", "Video editor status: ffmpeg, GPU encoder, speech model, jobs. Estado del editor de vídeo.\n"
          "Sinónimos: estado, capacidades, qué puede hacer.\nKeywords: status, video editor, editor de vídeo.", Empty, _ann(True), run_status),
     Tool("media_import", "Import a video, audio or image file (or a folder) by path; nothing is copied. Importar vídeo.\n"
