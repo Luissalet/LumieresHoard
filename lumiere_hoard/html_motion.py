@@ -8,10 +8,12 @@ import importlib.util
 import json
 import math
 import os
+import queue
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -22,6 +24,88 @@ from .ffmpeg import Cancelled
 _LOCK = threading.RLock()
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+class HtmlFrameWorker:
+    """An owned browser process: cancellation can interrupt even a stuck seek."""
+    def __init__(self, manifest: dict, ctx=None):
+        from .ffmpeg import RunHandle
+        self.ctx = ctx
+        self.handle = ctx.handle() if ctx else RunHandle()
+        self.responses = queue.Queue()
+        self.process = None
+        try:
+            self.timeout = float(os.environ.get("LUMIERE_HTML_FRAME_TIMEOUT_S", "60"))
+            if not math.isfinite(self.timeout) or self.timeout <= 0:
+                raise ValueError()
+        except ValueError:
+            raise LumiereError("LUMIERE_HTML_FRAME_TIMEOUT_S must be positive and finite.", code="html_motion_runtime") from None
+        self.manifest = manifest
+
+    def __enter__(self):
+        self.process = subprocess.Popen([sys.executable, "-m", "lumiere_hoard.html_motion_worker"],
+                                        cwd=Path(__file__).resolve().parent.parent,
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                        text=True, encoding="utf-8", creationflags=_NO_WINDOW)
+        self.handle.attach(self.process)
+        def read():
+            try:
+                for line in self.process.stdout:
+                    self.responses.put(line)
+            finally:
+                self.responses.put(None)
+        threading.Thread(target=read, name="lumiere-html-frames", daemon=True).start()
+        try:
+            self.process.stdin.write(json.dumps(self.manifest) + "\n")
+            self.process.stdin.flush()
+            self._receive()
+            return self
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+
+    def _receive(self):
+        deadline = time.monotonic() + self.timeout
+        while True:
+            if self.ctx:
+                self.ctx.check()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LumiereError("HTML frame did not finish within the configured frame timeout.", code="html_motion_timeout")
+            try:
+                line = self.responses.get(timeout=min(.2, remaining))
+            except queue.Empty:
+                continue
+            if line is None:
+                if self.ctx:
+                    self.ctx.check()
+                raise LumiereError("HTML browser worker exited before returning a frame.", code="html_motion_browser")
+            data = json.loads(line)
+            if "error" in data:
+                raise LumiereError(data["error"], code=data.get("code", "html_motion_browser"))
+            return data
+
+    def frame(self, at: float) -> bytes:
+        if self.ctx:
+            self.ctx.check()
+        try:
+            self.process.stdin.write(json.dumps({"at": at}) + "\n")
+            self.process.stdin.flush()
+        except OSError:
+            if self.ctx:
+                self.ctx.check()
+            raise LumiereError("HTML browser worker stopped.", code="html_motion_browser") from None
+        import base64
+        return base64.b64decode(self._receive()["png"])
+
+    def __exit__(self, *_):
+        if self.process is not None:
+            if self.process.poll() is None:
+                self.handle.cancel()
+            self.process.wait(timeout=10)
+            for pipe in (self.process.stdin, self.process.stdout):
+                if pipe is not None:
+                    pipe.close()
 
 
 def browser_executable() -> str | None:
@@ -149,8 +233,8 @@ class HtmlMotion:
         manifest = self.get(composition, revision)
         if not math.isfinite(at) or at < 0 or at > manifest["duration"]:
             raise LumiereError("Frame time must be within the composition, in seconds.", code="html_motion_time")
-        with self.page(manifest) as (page, errors):
-            data = self.capture(page, errors, at)
+        with HtmlFrameWorker(manifest) as worker:
+            data = worker.frame(at)
         return data, {"id": composition, "revision": manifest["revision"], "at_s": at,
                       "source_sha256": manifest["source_sha256"], "frame_sha256": hashlib.sha256(data).hexdigest()}
 
@@ -173,7 +257,7 @@ class HtmlMotion:
         handle = ctx.handle()
         process = None
         try:
-            with self.page(manifest) as (page, errors), stderr_path.open("wb") as stderr:
+            with HtmlFrameWorker(manifest, ctx) as worker, stderr_path.open("wb") as stderr:
                 ctx.check()
                 process = subprocess.Popen([svc.tools().ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "image2pipe",
                                             "-framerate", str(fps), "-i", "pipe:0", "-an", "-c:v", "libx264", "-preset", "medium",
@@ -182,7 +266,7 @@ class HtmlMotion:
                 handle.attach(process)
                 for frame in range(count):
                     ctx.check()
-                    process.stdin.write(self.capture(page, errors, float(Fraction(frame, 1) / fps)))
+                    process.stdin.write(worker.frame(float(Fraction(frame, 1) / fps)))
                     ctx.progress((frame + 1) / count * .95, f"{frame + 1}/{count} frames")
                 process.stdin.close()
                 if process.wait(timeout=120) != 0:

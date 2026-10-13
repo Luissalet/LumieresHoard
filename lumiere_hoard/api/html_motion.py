@@ -74,11 +74,12 @@ def video(request: Request, composition: str, revision: int, job: str):
 
 class ReceiveBody(BaseModel):
     project: str = ""
+    revision: int | None = None
 
 
 @router.post("/{composition}/receive")
 def receive(request: Request, composition: str, body: ReceiveBody):
-    manifest = _store(request).get(composition)
+    manifest = _store(request).get(composition, body.revision)
     if not manifest.get("render_path"):
         raise NotFound("Render the current HTML revision before adding it to the library.")
     return family_events.receive_media(services(request), path=manifest["render_path"], name=manifest["name"],

@@ -16,6 +16,8 @@ Frames are sampled at `n / fps`, for `n = 0 ... ceil(duration * fps) - 1`. Thus 
 
 ## Source revisions and reuse
 
+Each rendering browser runs in an owned child process. Cancelling a job interrupts a pending or non-terminating `seek` and releases the render lane. `LUMIERE_HTML_FRAME_TIMEOUT_S` sets the timeout for browser readiness and each frame (60 seconds by default); a timed-out worker is stopped and its partial export is removed. This does not reduce the composition duration or frame count. The workshop sends the displayed revision when receiving a video, and MCP frame URLs are bound to the revision that produced the PNG.
+
 Each save creates a new revision under `data/creative/html/<composition>/<revision>/`, with the source, settings and SHA-256. Updates require the revision the caller read, so concurrent saves cannot overwrite a newer edit. Restore copies an earlier source and settings into a new revision and keeps all later versions. Change sources through the save API; the stored revision files are snapshots.
 
 A render queues a specific revision. A later save does not change that render's input, and its completed export does not replace the newer revision's current output. Export paths include the job id; earlier completed outputs remain readable through their own URLs. A failed or cancelled export removes only its partial output. The source download keeps the complete HTML; MCP reads source text in character pages with `next_offset`.

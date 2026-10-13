@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 from io import BytesIO
 from pathlib import Path
+import time
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -138,3 +139,83 @@ def test_second_canvas_source_and_png_route(tmp_path):
         assert job["state"] == "done", job["error"]
         assert job["result"]["frames"] == 6 and job["result"]["render_duration"] == 1.2
         assert client.get(job["result"]["render_url"]).status_code == 200
+
+
+@BROWSER
+def test_cancel_unresolved_seek_releases_render_lane(tmp_path):
+    svc = Services(make_config(tmp_path), link=FakeLink(available=False), emit_fn=lambda *args: None)
+    svc.db.set_setting("notify.via", "off")
+    store = HtmlMotion(svc.config.data_dir)
+    blocked = store.save(html="<script>window.seek=async()=>await new Promise(()=>{});</script>", width=320, height=180, fps=10, duration=1)
+    good = save(store)
+    svc.start()
+    try:
+        first = store.queue_render(svc, blocked["id"])
+        deadline = time.monotonic() + 15
+        ctx = None
+        while time.monotonic() < deadline:
+            ctx = svc.jobs._running.get(first["job"])
+            if ctx and ctx.handles and ctx.handles[0].proc is not None:
+                break
+            time.sleep(.05)
+        assert ctx and ctx.handles[0].proc is not None, "browser seek did not start"
+        second = store.queue_render(svc, good["id"])
+        started = time.monotonic()
+        svc.jobs.cancel(first["job"])
+        assert svc.jobs.wait(first["job"], 4)["state"] == "canceled"
+        assert time.monotonic() - started < 4
+        result = svc.jobs.wait(second["job"], 15)
+        assert result["state"] == "done", result["error"]
+    finally:
+        svc.stop()
+
+
+@BROWSER
+def test_frame_worker_timeout_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setenv("LUMIERE_HTML_FRAME_TIMEOUT_S", "3")
+    store = HtmlMotion(tmp_path)
+    manifest = store.save(html="<script>window.seek=async()=>await new Promise(()=>{});</script>", width=160, height=90)
+    started = time.monotonic()
+    with pytest.raises(LumiereError) as error:
+        store.frame(manifest["id"], .2)
+    assert error.value.code == "html_motion_timeout"
+    assert time.monotonic() - started < 8
+
+
+@BROWSER
+def test_mcp_frame_url_remains_bound_to_captured_revision(tmp_path, monkeypatch):
+    from lumiere_hoard.agent_tools import run_html_motion_frame
+    from lumiere_hoard.html_motion_args import HtmlMotionFrameArgs
+    svc = Services(make_config(tmp_path), link=FakeLink(available=False), emit_fn=lambda *args: None)
+    store = HtmlMotion(svc.config.data_dir)
+    first = save(store)
+    original = HtmlMotion.frame
+    def concurrent_edit(self, *args, **kwargs):
+        data, receipt = original(self, *args, **kwargs)
+        self.save(composition=first["id"], expected_revision=1, html=SOURCE+"<!-- concurrent -->")
+        return data, receipt
+    monkeypatch.setattr(HtmlMotion, "frame", concurrent_edit)
+    result = run_html_motion_frame(svc, HtmlMotionFrameArgs(composition=first["id"], at=.2, show=False))
+    assert result["revision"] == 1 and "/revisions/1/frame" in result["url"]
+    assert store.get(first["id"])["revision"] == 2
+    svc.stop()
+
+
+@BROWSER
+def test_receive_imports_the_revision_visible_to_the_user(tmp_path):
+    svc = Services(make_config(tmp_path), link=FakeLink(available=False), emit_fn=lambda *args: None, inline_jobs=True)
+    svc.db.set_setting("notify.via", "off")
+    app = create_app(svc.config, services=svc)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        store = HtmlMotion(svc.config.data_dir)
+        first = save(store)
+        j1 = store.queue_render(svc, first["id"])
+        r1 = svc.jobs.get(j1["job"])["result"]
+        second = store.save(composition=first["id"], expected_revision=1, html=SOURCE.replace("#e00000", "#00e000"), width=320, height=180, duration=1, fps=10)
+        j2 = store.queue_render(svc, second["id"])
+        r2 = svc.jobs.get(j2["job"])["result"]
+        assert r1["render_path"] != r2["render_path"]
+        received = client.post(f"/api/html-motion/{first['id']}/receive", json={"revision": 1})
+        assert received.status_code == 200, received.text
+        assert svc.db.one("SELECT id FROM media WHERE path = ?", (r1["render_path"],)) is not None
+        assert svc.db.one("SELECT id FROM media WHERE path = ?", (r2["render_path"],)) is None

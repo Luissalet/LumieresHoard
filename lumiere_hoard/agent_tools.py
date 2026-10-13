@@ -1000,7 +1000,7 @@ def run_html_motion_get(svc: Services, a: HtmlMotionGetArgs):
 
 def run_html_motion_frame(svc: Services, a: HtmlMotionFrameArgs):
     data, result = HtmlMotion(svc.config.data_dir).frame(a.composition, a.at, a.revision)
-    manifest = HtmlMotion(svc.config.data_dir).get(a.composition, a.revision)
+    manifest = HtmlMotion(svc.config.data_dir).get(a.composition, result["revision"])
     result["url"] = manifest["frame_url"] + f"?at={a.at}"
     if a.show:
         result["_image"] = {"mime": "image/png", "data": base64.b64encode(data).decode("ascii")}

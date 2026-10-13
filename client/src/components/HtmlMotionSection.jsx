@@ -105,7 +105,7 @@ export default function HtmlMotionSection({ projectId = null, onReceived }) {
     setJob(await appApi.job(next.job));
   });
   const receive = () => operate(async () => {
-    await request(`/api/html-motion/${saved.id}/receive`, { method: "POST", body: JSON.stringify({ project: projectId || "" }) });
+    await request(`/api/html-motion/${saved.id}/receive`, { method: "POST", body: JSON.stringify({ project: projectId || "", revision: saved.revision }) });
     setReceived(true); onReceived?.();
   });
   const restore = () => operate(async () => {
