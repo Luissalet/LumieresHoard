@@ -86,7 +86,7 @@ conserva los extremos del montaje. También admite tiempos explícitos en
 milisegundos. Rechaza cambios de fuente o timeline durante la captura.
 [API, muestreo y límites verificados](docs/CONTACT-SHEETS.es.md).
 
-`mcp_server.py` es un puente MCP por stdio con 65 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
+`mcp_server.py` es un puente MCP por stdio con 67 herramientas. Nunca abre la base de datos: cada llamada va a la app en marcha con el token de `data/mcp-token`, y arranca la app si no responde nadie.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -231,3 +231,5 @@ En Proyectos puedes crear y editar composiciones HTML, revisar PNG en un tiempo 
 ## Revisión visual de varios momentos
 
 `html_motion_storyboard` captura varios tiempos exactos de una revisión HTML fijada y una sesión del renderer. Devuelve una hoja PNG real para el asistente y enlaces a los fotogramas originales, con huellas de fuente e imágenes. El taller ofrece la misma revisión y descargas antes de exportar. La fuente sigue editable y se conservan las revisiones concurrentes. [Contrato y límites](docs/HTML_MOTION.md).
+
+Cuatro escenas de partida propias por html_motion_starters y html_motion_starter_create: título cinético, paisaje en capas, osciladores artísticos y letras elásticas. Crean una composición separada y editable en el taller habitual; texto literal, tamaño y duración, Canvas inline y seek calculado desde el tiempo, sin assets ni runtime externo. Se revisan, editan y exportan con las herramientas existentes. docs/HTML_STARTERS.md; 67 MCP,9 HTML.

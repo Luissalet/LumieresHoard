@@ -85,7 +85,7 @@ visible changes in a bounded scan while keeping the timeline endpoints. Explicit
 millisecond samples are also supported. Source and timeline changes during
 capture reject the sheet. [API, sampling and verified limits](docs/CONTACT-SHEETS.md).
 
-`mcp_server.py` is a stdio MCP bridge with 65 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
+`mcp_server.py` is a stdio MCP bridge with 67 tools. It never opens the database: every call goes to the running app with the token in `data/mcp-token`, and it starts the app when nothing answers.
 
 ```json
 {"command": "<repo>/venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"],
@@ -233,3 +233,5 @@ Create and edit complete HTML compositions on Projects, review exact-time PNGs a
 ## Multi-frame visual review
 
 `html_motion_storyboard` captures several exact times from one pinned HTML revision and browser session. It returns a real PNG contact sheet for the assistant and immutable full-size frame links, with source/frame hashes. The workshop exposes the same review and downloads before exporting. The source stays editable and concurrent edits keep their own revision. [Contract and limits](docs/HTML_MOTION.md).
+
+Four own scene starters are available through html_motion_starters and html_motion_starter_create: kinetic title, layered landscape, artistic oscillators and elastic letters. Each creates a separate, fully editable composition in the ordinary workshop. Literal text/dimensions/timing, inline Canvas, time-based seek, no external assets/runtime. Existing revision/frame/storyboard/render operations apply. See docs/HTML_STARTERS.md; 67 MCP tools,9 HTML tools.

@@ -1007,6 +1007,17 @@ def run_html_motion_list(svc: Services, a: Empty):
     return HtmlMotion(svc.config.data_dir).list()
 
 
+from .html_starters import HtmlStarterArgs, catalogue as starters_catalogue, save_args as starter_source
+
+
+def run_html_motion_starters(svc: Services, a: Empty):
+    return starters_catalogue()
+
+
+def run_html_motion_starter_create(svc: Services, a: HtmlStarterArgs):
+    return run_html_motion_save(svc, starter_source(a))
+
+
 def run_html_motion_save(svc: Services, a: HtmlMotionSaveArgs):
     if a.project_id:
         project_store.doc(svc, a.project_id)
@@ -1049,6 +1060,8 @@ def run_html_motion_restore(svc: Services, a: HtmlMotionRestoreArgs):
 
 
 TOOLS: list[Tool] = [
+    Tool("html_motion_starters", "List own editable motion starters. Escenas de partida.\nFour distinct sources: kinetic title, layered landscape, artistic oscillators and elastic lettering. Use html_motion_starter_create, then edit the ordinary HTML source and review moments. Keywords: motion, plantilla, parallax, letras, spring.", Empty, _ann(True), run_html_motion_starters),
+    Tool("html_motion_starter_create", "Create a new composition from an own motion starter. Crear escena editable.\nLiteral text, duration and dimensions; every frame is a pure function of time. Creates a separate composition, leaving earlier sources intact. Use existing frame/storyboard/render/get/save tools and the ordinary workshop. No external assets or runtime. Keywords: escena, title, parallax, oscillators, elastic lettering.", HtmlStarterArgs, _ann(False, False, False), run_html_motion_starter_create),
     Tool("html_motion_save", "Create or edit an HTML composition with exact-time window.seek(t). Crear y editar animacion HTML.\nReturns an editable revision and source hash. Keywords: motion graphics, canvas, SVG, HTML video, seek.", HtmlMotionSaveArgs, _ann(False, False, False), run_html_motion_save),
     Tool("html_motion_list", "List saved HTML motion compositions and browser runtime. Listar animaciones HTML.\nKeywords: compositions, motion graphics, browser renderer.", Empty, _ann(True), run_html_motion_list),
     Tool("html_motion_get", "Read an HTML composition and its editable source by character pages. Leer fuente HTML.\nUse next_offset for the complete source. Keywords: source, revision, composition, motion graphics.", HtmlMotionGetArgs, _ann(True), run_html_motion_get),

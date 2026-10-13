@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from .. import family_events, projects
 from ..errors import NotFound
 from ..html_motion import HtmlMotion
+from ..html_starters import HtmlStarterArgs, catalogue as starters_catalogue, save_args as starter_source
 from ..html_motion_args import HtmlMotionSaveArgs, HtmlMotionRestoreArgs, HtmlMotionStoryboardArgs
 from .deps import services
 
@@ -26,6 +27,16 @@ def save(request: Request, body: HtmlMotionSaveArgs):
     if body.project_id:
         projects.doc(services(request), body.project_id)
     return _store(request).save(**body.model_dump())
+
+
+@router.get("/starters")
+def starters():
+    return starters_catalogue()
+
+
+@router.post("/starters")
+def create_starter(request: Request, body: HtmlStarterArgs):
+    return save(request, starter_source(body))
 
 
 @router.get("/{composition}")
