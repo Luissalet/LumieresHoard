@@ -238,6 +238,82 @@ class HtmlMotion:
         return data, {"id": composition, "revision": manifest["revision"], "at_s": at,
                       "source_sha256": manifest["source_sha256"], "frame_sha256": hashlib.sha256(data).hexdigest()}
 
+    def storyboard(self, composition: str, times: list[float] | None = None, revision: int | None = None) -> dict:
+        """Capture one pinned revision/session and publish a real image review sheet."""
+        from io import BytesIO
+        from PIL import Image, ImageDraw, ImageFont
+        manifest = self.get(composition, revision)
+        moments = list(times) if times is not None else [manifest['duration']*i/3 for i in range(4)]
+        if not moments or any(not math.isfinite(t) or t < 0 or t > manifest['duration'] for t in moments):
+            raise LumiereError('Storyboard times must be within the composition, in seconds.', code='html_motion_time')
+        originals, previews = [], []
+        with HtmlFrameWorker(manifest) as worker:
+            for at in moments:
+                data = worker.frame(at)
+                originals.append(data)
+                with Image.open(BytesIO(data)) as image:
+                    preview = image.convert('RGB')
+                    preview.thumbnail((512, 288), Image.Resampling.LANCZOS)
+                    previews.append(preview)
+        cell_width = max(192, max(image.width for image in previews))
+        cell_height = max(image.height for image in previews) + 32
+        columns = min(2, len(previews))
+        sheet = Image.new('RGB', (cell_width*columns, cell_height*math.ceil(len(previews)/columns)), '#17191e')
+        draw = ImageDraw.Draw(sheet)
+        try:
+            font = ImageFont.load_default(size=16)
+        except TypeError:  # Pillow 10.0 keeps its original bitmap default.
+            font = ImageFont.load_default()
+        for i, (at, image) in enumerate(zip(moments, previews)):
+            x, y = (i%columns)*cell_width, (i//columns)*cell_height
+            sheet.paste(image, (x+(cell_width-image.width)//2, y))
+            draw.text((x+8, y+cell_height-24), f'{at:.6g} s | r{manifest["revision"]}', fill='#ebe4ec', font=font)
+        output = BytesIO();sheet.save(output, format='PNG');png=output.getvalue()
+        identity = uuid.uuid4().hex
+        destination = (self.folder(composition)/str(manifest['revision'])/'storyboards'/identity).resolve()
+        if not destination.is_relative_to(self.root):
+            raise LumiereError('Invalid storyboard folder.', code='html_motion')
+        destination.mkdir(parents=True, exist_ok=False)
+        base = f'/api/html-motion/{composition}/revisions/{manifest["revision"]}/storyboards/{identity}'
+        result = {'id':identity, 'composition':composition, 'revision':manifest['revision'], 'times':moments,
+                  'source_sha256':manifest['source_sha256'], 'image_sha256':hashlib.sha256(png).hexdigest(),
+                  'width':sheet.width, 'height':sheet.height, 'url':base+'/image', 'frames':[]}
+        # The receipt is the publication marker; failures remove only these new derived files.
+        try:
+            for i, (at, data) in enumerate(zip(moments, originals)):
+                (destination/f'frame-{i}.png').write_bytes(data)
+                result['frames'].append({'at_s':at, 'sha256':hashlib.sha256(data).hexdigest(), 'url':base+f'/frames/{i}'})
+            (destination/'sheet.png').write_bytes(png)
+            self._write(destination/'manifest.json', result)
+        except BaseException:
+            for file in destination.iterdir():file.unlink()
+            destination.rmdir()
+            raise
+        return result
+
+    def storyboard_image(self, composition: str, revision: int, storyboard: str, frame: int | None = None) -> bytes:
+        manifest = self.get(composition, revision)
+        if not _ID.fullmatch(storyboard):
+            raise LumiereError('Invalid storyboard id.', code='html_motion')
+        folder = (self.folder(composition)/str(revision)/'storyboards'/storyboard).resolve()
+        if not folder.is_relative_to(self.root):
+            raise LumiereError('Invalid storyboard folder.', code='html_motion')
+        receipt = folder/'manifest.json'
+        if not receipt.is_file():raise NotFound('Storyboard not found.')
+        result = json.loads(receipt.read_text(encoding='utf-8'))
+        if result['composition'] != composition or result['revision'] != revision or result['source_sha256'] != manifest['source_sha256']:
+            raise LumiereError('Storyboard source does not match its revision.', code='html_motion_integrity')
+        if frame is not None:
+            if frame < 0 or frame >= len(result['frames']):raise NotFound('Storyboard frame not found.')
+            path, expected = folder/f'frame-{frame}.png', result['frames'][frame]['sha256']
+        else:
+            path, expected = folder/'sheet.png', result['image_sha256']
+        if not path.is_file():raise NotFound('Storyboard image not found.')
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest()!=expected:
+            raise LumiereError('Storyboard image no longer matches its recorded hash.', code='html_motion_integrity')
+        return data
+
     def queue_render(self, svc, composition: str, revision: int | None = None) -> dict:
         manifest = self.get(composition, revision)
         if manifest["width"] % 2 or manifest["height"] % 2:

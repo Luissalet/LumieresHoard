@@ -1000,7 +1000,7 @@ def run_creative_film(svc: Services,a: CreativeFilmArgs):
 
 from .html_motion import HtmlMotion
 from .html_motion_args import (HtmlMotionSaveArgs, HtmlMotionRefArgs, HtmlMotionGetArgs,
-                               HtmlMotionFrameArgs, HtmlMotionRestoreArgs)
+                               HtmlMotionFrameArgs, HtmlMotionRestoreArgs, HtmlMotionStoryboardArgs)
 
 
 def run_html_motion_list(svc: Services, a: Empty):
@@ -1035,6 +1035,15 @@ def run_html_motion_render(svc: Services, a: HtmlMotionRefArgs):
     return HtmlMotion(svc.config.data_dir).queue_render(svc, a.composition, a.revision)
 
 
+def run_html_motion_storyboard(svc: Services, a: HtmlMotionStoryboardArgs):
+    store = HtmlMotion(svc.config.data_dir)
+    result = store.storyboard(a.composition, a.times, a.revision)
+    if a.show:
+        data = store.storyboard_image(a.composition, result['revision'], result['id'])
+        result['_image'] = {'mime':'image/png','data':base64.b64encode(data).decode('ascii')}
+    return result
+
+
 def run_html_motion_restore(svc: Services, a: HtmlMotionRestoreArgs):
     return HtmlMotion(svc.config.data_dir).restore(**a.model_dump())
 
@@ -1044,6 +1053,7 @@ TOOLS: list[Tool] = [
     Tool("html_motion_list", "List saved HTML motion compositions and browser runtime. Listar animaciones HTML.\nKeywords: compositions, motion graphics, browser renderer.", Empty, _ann(True), run_html_motion_list),
     Tool("html_motion_get", "Read an HTML composition and its editable source by character pages. Leer fuente HTML.\nUse next_offset for the complete source. Keywords: source, revision, composition, motion graphics.", HtmlMotionGetArgs, _ann(True), run_html_motion_get),
     Tool("html_motion_frame", "Render an exact-time PNG from an HTML composition. Revisar fotograma HTML.\nTime is seconds; returns an MCP image, source revision and frame hash. Keywords: snapshot, visual critique, storyboard, seek.", HtmlMotionFrameArgs, _ann(True), run_html_motion_frame),
+    Tool('html_motion_storyboard', 'Review multiple exact-time frames from one HTML revision. Revisar varios momentos.\nReturns a real contact-sheet MCP image, original PNG links, times and source/frame hashes. Keywords: storyboard, contact sheet, motion review, visual critique.', HtmlMotionStoryboardArgs, _ann(True), run_html_motion_storyboard),
     Tool("html_motion_render", "Queue an HTML composition as verified silent H264 MP4. Exportar animacion HTML a video.\nFollow job_status; use media_receive(path=result.render_path) to add the video to a timeline. Keywords: render, export, MP4, motion graphics.", HtmlMotionRefArgs, _ann(False, False, True), run_html_motion_render),
     Tool("html_motion_restore", "Restore a saved HTML composition revision as a new revision. Recuperar una animacion anterior.\nLater versions remain available. Keywords: undo, restore, revisions, HTML motion.", HtmlMotionRestoreArgs, _ann(False, False, False), run_html_motion_restore),
     Tool('creative_render_title_video','Render an editable Lumiere Motion title to verified H264 video. Renderizar cartela animada.\nReturns actual video path, metadata and media_receive_url. Keywords: animation, render title, mp4, motion graphics.',CreativeRenderArgs,_ann(False,False,True),run_creative_render),

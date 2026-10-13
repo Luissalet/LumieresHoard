@@ -1,6 +1,6 @@
 # HTML motion compositions
 
-The creative workshop on Projects saves editable HTML compositions, reviews exact-time PNG frames and exports silent H.264 MP4 videos. The six `html_motion_*` tools use the same service. Receive the resulting video with `media_receive` to put it in the ordinary media library or timeline, where sound, cuts, effects and titles remain available.
+The creative workshop on Projects saves editable HTML compositions, reviews exact-time PNG frames and exports silent H.264 MP4 videos. The seven `html_motion_*` tools use the same service. Receive the resulting video with `media_receive` to put it in the ordinary media library or timeline, where sound, cuts, effects and titles remain available.
 
 ## Runtime
 
@@ -43,3 +43,11 @@ The workshop keeps text typed during a pending save. A Faustus refresh updates t
 Tests cover source restoration, concurrent saves, invalid geometry, complete source pagination, out-of-order seek and a fresh browser producing identical PNGs, missing and throwing seek functions, queued-revision preservation and two independently authored DOM/canvas compositions. Real native MCP checks include all six tools, an image content block, video export and handoff into the existing timeline. Browser checks exercise save, reopen, frame review, export and library receipt, including the 390-pixel workshop layout.
 
 This is an added motion capability. Existing native creative engines and timeline tools remain available. It does not establish parity with other studios, capture Web Audio, convert arbitrary real-time pages automatically, or measure the autonomy of the global language model.
+
+## Contact sheets
+
+`html_motion_storyboard` / POST /api/html-motion/{composition}/storyboard captures caller-supplied `times` in seconds, or four evenly spaced moments including start/end. The body includes composition and optional revision; omitted revision is captured once before opening the renderer. All original PNGs come from that one revision and browser session. The sheet shows scaled previews and timestamps; the receipt includes exact times and SHA-256 for source, sheet and originals. Source HTML hashing does not freeze external resource changes or certify that user seek code is a pure function.
+
+Images are immutable derived artifacts under the revision: /storyboards/{id}/image and /storyboards/{id}/frames/{index}. GET verifies each image against its receipt and does not rerender the frame. Failed capture publishes no receipt; the owned browser worker closes on errors/timeouts. The saved composition and its source bytes remain unchanged. Each new sheet has a fresh identity; older results stay accessible. Concurrent edits preserve the inspected revision. The UI reports when a displayed sheet uses an earlier revision.
+
+The actual MCP PNG contains the sheet, not a text description. `show=false` returns metadata/links without the image. The same UI lets users download the sheet or individual full-size originals. It does not grade story quality, synthesize missing images, add audio capture or execute a reference application's CLI/MCP.

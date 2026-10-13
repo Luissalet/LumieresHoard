@@ -72,7 +72,9 @@
     "incorporated-compositor",
     "incorporated-editing-engine",
     "saved-native-compositions",
-    "native-source-snapshots"
+    "native-source-snapshots",
+    "html-motion-storyboard",
+    "multi-frame-visual-review"
   ],
   "placeholders": [
     "LUMIERE_DIR",

@@ -1,4 +1,5 @@
 """Shared HTML motion arguments for REST and MCP."""
+from typing import Annotated
 from pydantic import BaseModel, Field
 
 
@@ -27,6 +28,12 @@ class HtmlMotionGetArgs(HtmlMotionRefArgs):
 class HtmlMotionFrameArgs(HtmlMotionRefArgs):
     at: float = Field(0, ge=0, allow_inf_nan=False, description="Exact composition time in seconds.")
     show: bool = Field(True, description="Include the rendered PNG as an MCP image.")
+
+
+class HtmlMotionStoryboardArgs(HtmlMotionRefArgs):
+    times: list[Annotated[float, Field(ge=0, allow_inf_nan=False)]] | None = Field(None, min_length=1,
+        description="Exact times in seconds; omit for four evenly spaced moments including start/end.")
+    show: bool = Field(True, description="Include the actual contact sheet as one MCP PNG image.")
 
 
 class HtmlMotionRestoreArgs(BaseModel):

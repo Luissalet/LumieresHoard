@@ -12,6 +12,7 @@
 .html-motion figure { margin: 16px 0; }
 .html-motion img, .html-motion video { display: block; width: 100%; max-height: 360px; object-fit: contain; }
 .html-motion figcaption { margin-top: 6px; color: var(--muted); }
+.html-motion .html-motion-storyboard img { max-height: 560px; }
 .html-motion-file { position: relative; overflow: hidden; }
 .html-motion-file input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
 .html-motion-file:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }

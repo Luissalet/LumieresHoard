@@ -32,6 +32,8 @@ export default function HtmlMotionSection({ projectId = null, onReceived }) {
   const [error, setError] = useState("");
   const [at, setAt] = useState(0);
   const [preview, setPreview] = useState(null);
+  const [storyboard, setStoryboard] = useState(null);
+  const [moments, setMoments] = useState('');
   const [job, setJob] = useState(null);
   const [restoreRevision, setRestoreRevision] = useState(1);
   const [received, setReceived] = useState(false);
@@ -39,7 +41,7 @@ export default function HtmlMotionSection({ projectId = null, onReceived }) {
   current.current = { draft, saved };
   const active = job && !["done", "failed", "canceled"].includes(job.state);
   const dirty = !saved || Object.keys(initial).some((key) => draft[key] !== saved[key]);
-  useCopilotForm("html-motion-draft", { initial, current: { ...draft, composition: saved?.id, revision: saved?.revision, project_id: projectId } });
+  useCopilotForm("html-motion-draft", { initial, current: { ...draft, composition: saved?.id, revision: saved?.revision, project_id: projectId, at_s: at, storyboard_times_text: moments } });
 
   const refresh = useCallback(async () => {
     try {
@@ -80,10 +82,10 @@ export default function HtmlMotionSection({ projectId = null, onReceived }) {
     finally { setBusy(false); }
   };
   const load = (id) => operate(async () => {
-    if (!id) { setDraft(initial); setSaved(null); setPreview(null); setJob(null); return; }
+    if (!id) { setDraft(initial); setSaved(null); setPreview(null); setStoryboard(null); setJob(null); return; }
     const data = await request(`/api/html-motion/${id}`);
     setSaved(data); setDraft(Object.fromEntries(Object.keys(initial).map((key) => [key, data[key]])));
-    setPreview(null); setJob(null); setAt(0); setRestoreRevision(data.revisions[0]);
+    setPreview(null); setStoryboard(null); setJob(null); setAt(0); setRestoreRevision(data.revisions[0]);
   });
   const save = (event) => {
     event.preventDefault();
@@ -99,6 +101,13 @@ export default function HtmlMotionSection({ projectId = null, onReceived }) {
     if (!response.ok) { const result = await response.json(); throw new Error(result.error || result.detail); }
     const blob = await response.blob();
     setPreview({ url: URL.createObjectURL(blob), revision: saved.revision, at });
+  });
+  const reviewMoments = () => operate(async () => {
+    const times = moments.trim() ? moments.trim().split(/[\s,;]+/).map(Number) : undefined;
+    if (times?.some((value) => !Number.isFinite(value))) throw new Error(String(lang).startsWith('es') ? 'Introduce tiempos en segundos.' : 'Enter times in seconds.');
+    const result = await request(`/api/html-motion/${saved.id}/storyboard`, { method: 'POST',
+      body: JSON.stringify({ composition: saved.id, revision: saved.revision, times }) });
+    if (current.current.saved?.id === result.composition) setStoryboard(result);
   });
   const render = () => operate(async () => {
     const next = await request(`/api/html-motion/${saved.id}/render?revision=${saved.revision}`, { method: "POST", body: "{}" });
@@ -148,6 +157,18 @@ export default function HtmlMotionSection({ projectId = null, onReceived }) {
           <a href={saved.source_url} download>{t.download}</a>
         </div>
         {preview && <figure><img src={preview.url} alt={`${t.preview} · ${preview.at} s · ${t.saved} ${preview.revision}`} /><figcaption>{preview.at} s · {t.saved}: {preview.revision}</figcaption></figure>}
+        <div className="html-motion-actions">
+          <label className="field-label"><span>{String(lang).startsWith('es') ? 'Momentos (segundos)' : 'Moments (seconds)'}</span>
+            <input className="field" value={moments} placeholder={String(lang).startsWith('es') ? 'Vacío: cuatro momentos' : 'Empty: four moments'} onChange={(e) => setMoments(e.target.value)} /></label>
+          <button type="button" className="btn" disabled={busy || dirty || active} onClick={reviewMoments}>{String(lang).startsWith('es') ? 'Revisar varios momentos' : 'Review multiple moments'}</button>
+        </div>
+        {storyboard && storyboard.composition === saved.id && <figure className="html-motion-storyboard">
+          <img src={storyboard.url} alt={`${String(lang).startsWith('es') ? 'Hoja de fotogramas' : 'Frame sheet'} · ${t.saved} ${storyboard.revision}`} />
+          <figcaption>{t.saved}: {storyboard.revision} · {storyboard.times.length} {String(lang).startsWith('es') ? 'fotogramas' : 'frames'}</figcaption>
+          {storyboard.revision !== saved.revision && <p className="muted">{String(lang).startsWith('es') ? 'Esta hoja corresponde a una versión anterior.' : 'This sheet uses an earlier revision.'}</p>}
+          <div className="html-motion-actions"><a href={storyboard.url} download>{String(lang).startsWith('es') ? 'Descargar hoja' : 'Download sheet'}</a>
+            {storyboard.frames.map((frame, index) => <a key={index} href={frame.url} download>{frame.at_s.toLocaleString(String(lang).startsWith('es') ? 'es-ES' : 'en-GB', { maximumFractionDigits: 6 })} s</a>)}</div>
+        </figure>}
         {job && <div role="status" className="html-motion-actions"><span>{String(lang).startsWith("es") ? ({ queued: "En cola", running: "Exportando", done: "Vídeo listo", failed: "Exportación fallida", canceled: "Exportación cancelada" }[job.state] || job.state) : job.state} · {Math.round(job.progress * 100)}%</span>{active && <button type="button" className="btn" onClick={() => operate(async () => setJob(await appApi.jobCancel(job.id)))}>{t.cancel}</button>}</div>}
         {saved.render_url && <><video controls preload="metadata" src={saved.render_url} aria-label={saved.name} /><div className="html-motion-actions"><a href={saved.render_url} download>{t.video}</a><button type="button" className="btn" disabled={busy || active || dirty} onClick={receive}>{projectId ? t.timeline : t.receive}</button>{received && <span role="status">{t.received}</span>}</div></>}
         {saved.revisions?.length > 1 && <div className="html-motion-actions"><label className="field-label"><span>{t.restore}</span><select className="field" value={restoreRevision} onChange={(e) => setRestoreRevision(Number(e.target.value))}>{saved.revisions.map((revision) => <option key={revision} value={revision}>{revision}</option>)}</select></label><button className="btn" type="button" disabled={busy || active} onClick={restore}>{t.restore}</button></div>}

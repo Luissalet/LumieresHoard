@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from .. import family_events, projects
 from ..errors import NotFound
 from ..html_motion import HtmlMotion
-from ..html_motion_args import HtmlMotionSaveArgs, HtmlMotionRestoreArgs
+from ..html_motion_args import HtmlMotionSaveArgs, HtmlMotionRestoreArgs, HtmlMotionStoryboardArgs
 from .deps import services
 
 router = APIRouter(prefix="/api/html-motion", tags=["HTML motion"])
@@ -57,6 +57,25 @@ def frame(request: Request, composition: str, revision: int, at: float = Query(0
 @router.post("/{composition}/render")
 def render(request: Request, composition: str, revision: int | None = Query(None, ge=1)):
     return _store(request).queue_render(services(request), composition, revision)
+
+
+@router.post('/{composition}/storyboard')
+def storyboard(request: Request, composition: str, body: HtmlMotionStoryboardArgs):
+    if body.composition != composition:
+        raise NotFound('Storyboard composition does not match the request.')
+    return _store(request).storyboard(composition, body.times, body.revision)
+
+
+@router.get('/{composition}/revisions/{revision}/storyboards/{storyboard}/image')
+def storyboard_image(request: Request, composition: str, revision: int, storyboard: str):
+    data = _store(request).storyboard_image(composition, revision, storyboard)
+    return Response(data, media_type='image/png', headers={'Cache-Control':'no-store'})
+
+
+@router.get('/{composition}/revisions/{revision}/storyboards/{storyboard}/frames/{frame}')
+def storyboard_frame(request: Request, composition: str, revision: int, storyboard: str, frame: int):
+    data = _store(request).storyboard_image(composition, revision, storyboard, frame)
+    return Response(data, media_type='image/png', headers={'Cache-Control':'no-store'})
 
 
 @router.get("/{composition}/revisions/{revision}/render/{job}")

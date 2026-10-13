@@ -52,6 +52,100 @@ def test_concurrent_saves_preserve_winning_revision(tmp_path):
     assert store.source(first) == SOURCE
 
 
+@BROWSER
+def test_storyboard_captures_real_sheet_and_original_frames_from_one_revision(tmp_path):
+    store = HtmlMotion(tmp_path)
+    saved = save(store)
+    source = Path(saved['source_path']).read_bytes()
+    result = store.storyboard(saved['id'], [0,.25,.75,1])
+    assert result['revision']==1 and result['source_sha256']==saved['source_sha256']
+    assert result['times']==[0,.25,.75,1] and len(result['frames'])==4
+    sheet=store.storyboard_image(saved['id'],1,result['id'])
+    assert hashlib.sha256(sheet).hexdigest()==result['image_sha256']
+    with Image.open(BytesIO(sheet)) as image:assert image.size==(640,424)
+    for i,frame in enumerate(result['frames']):
+        data=store.storyboard_image(saved['id'],1,result['id'],i)
+        assert hashlib.sha256(data).hexdigest()==frame['sha256']
+        with Image.open(BytesIO(data)) as image:assert image.size==(320,180)
+    assert len({f['sha256'] for f in result['frames']})>1
+    assert Path(saved['source_path']).read_bytes()==source
+    assert store.get(saved['id'])==saved
+
+
+def test_storyboard_keeps_pinned_source_when_current_revision_changes(tmp_path,monkeypatch):
+    import lumiere_hoard.html_motion as module
+    store=HtmlMotion(tmp_path);old=save(store);seen=[]
+    def png(color):
+        out=BytesIO();Image.new('RGB',(320,180),color).save(out,format='PNG');return out.getvalue()
+    class Worker:
+        def __init__(self,manifest):seen.append(manifest['revision'])
+        def __enter__(self):return self
+        def __exit__(self,*args):seen.append('closed')
+        def frame(self,at):
+            if store.get(old['id'])['revision']==1:
+                store.save(composition=old['id'],expected_revision=1,html=SOURCE+'<!-- later -->')
+            return png('red' if at==0 else 'blue')
+    monkeypatch.setattr(module,'HtmlFrameWorker',Worker)
+    result=store.storyboard(old['id'],[0,1])
+    assert seen==[1,'closed'] and result['revision']==1
+    assert result['source_sha256']==old['source_sha256'] and store.get(old['id'])['revision']==2
+    assert store.source(old)==SOURCE
+    assert store.storyboard_image(old['id'],1,result['id'])
+
+
+@pytest.mark.parametrize('times', [[],[-1],[2],[float('nan')],[float('inf')]])
+def test_bad_storyboard_times_are_rejected_before_worker(tmp_path,monkeypatch,times):
+    import lumiere_hoard.html_motion as module
+    store=HtmlMotion(tmp_path);saved=save(store)
+    def forbidden(*args):raise AssertionError('must not start a worker')
+    monkeypatch.setattr(module,'HtmlFrameWorker',forbidden)
+    with pytest.raises(LumiereError):store.storyboard(saved['id'],times)
+    assert not (store.folder(saved['id'])/'1/storyboards').exists()
+
+
+def test_storyboard_failure_closes_worker_without_publishing_partial_images(tmp_path,monkeypatch):
+    import lumiere_hoard.html_motion as module
+    store=HtmlMotion(tmp_path);saved=save(store);closed=[]
+    class Worker:
+        def __init__(self,manifest):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):closed.append(True)
+        def frame(self,at):raise LumiereError('Injected render failure',code='html_motion_browser')
+    monkeypatch.setattr(module,'HtmlFrameWorker',Worker)
+    with pytest.raises(LumiereError):store.storyboard(saved['id'],[0,1])
+    assert closed==[True] and not (store.folder(saved['id'])/'1/storyboards').exists()
+
+
+@BROWSER
+def test_storyboard_api_mcp_image_and_exact_archive_downloads(client):
+    import base64
+    from lumiere_hoard.agent_tools import call_tool
+    created=client.post('/api/html-motion',json={'html':SOURCE,'width':320,'height':180,'duration':1}).json()
+    args={'composition':created['id'],'revision':1,'times':[0,.5,1]}
+    response=client.post(f"/api/html-motion/{created['id']}/storyboard",json=args)
+    assert response.status_code==200,response.text
+    result=response.json();download=client.get(result['url'])
+    assert download.status_code==200 and download.headers['cache-control']=='no-store'
+    assert hashlib.sha256(download.content).hexdigest()==result['image_sha256']
+    for frame in result['frames']:
+        original=client.get(frame['url']);assert original.status_code==200
+        assert hashlib.sha256(original.content).hexdigest()==frame['sha256']
+    native=call_tool(client.app.state.services,'html_motion_storyboard',args)
+    assert hashlib.sha256(base64.b64decode(native['_image']['data'])).hexdigest()==native['image_sha256']
+    assert native['_image']['mime']=='image/png'
+
+
+@BROWSER
+def test_storyboard_default_times_and_tampered_asset_are_explicit(tmp_path):
+    store=HtmlMotion(tmp_path);saved=save(store)
+    result=store.storyboard(saved['id'])
+    assert result['times'][0]==0 and result['times'][-1]==1 and len(result['frames'])==4
+    folder=store.folder(saved['id'])/'1/storyboards'/result['id']
+    (folder/'sheet.png').write_bytes(b'changed')
+    with pytest.raises(LumiereError,match='hash'):store.storyboard_image(saved['id'],1,result['id'])
+    with pytest.raises(LumiereError):store.storyboard_image(saved['id'],1,'../outside')
+
+
 @pytest.mark.parametrize("params", [{"fps": float("nan")}, {"duration": float("inf")}, {"duration": 0}, {"width": 0}])
 def test_invalid_geometry_and_timing(tmp_path, params):
     with pytest.raises(LumiereError):
