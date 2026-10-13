@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-13T10:08:42Z",
+  "title": "Design System: Lumiere — motores creativos incorporados",
+  "extensions": {
+    "colorMeta": {
+      "primary": { "role": "primary", "displayName": "Violeta Lumiere" },
+      "primary-hover": { "role": "primary", "displayName": "Violeta claro de interacción" },
+      "primary-ink": { "role": "neutral", "displayName": "Tinta de acción" },
+      "neutral-bg": { "role": "neutral", "displayName": "Fondo ciruela oscuro" },
+      "neutral-field": { "role": "neutral", "displayName": "Campo hundido" },
+      "neutral-panel": { "role": "neutral", "displayName": "Panel" },
+      "neutral-elevated": { "role": "neutral", "displayName": "Superficie elevada" },
+      "neutral-hover": { "role": "neutral", "displayName": "Superficie de interacción" },
+      "neutral-border": { "role": "neutral", "displayName": "Borde de separación" },
+      "neutral-border-hover": { "role": "neutral", "displayName": "Borde de interacción" },
+      "neutral-text": { "role": "neutral", "displayName": "Texto principal" },
+      "neutral-muted": { "role": "neutral", "displayName": "Texto auxiliar" },
+      "neutral-dim": { "role": "neutral", "displayName": "Texto tenue" }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "Cuerpo", "purpose": "Texto y etiquetas del formulario." },
+      "label": { "displayName": "Etiqueta", "purpose": "Etiquetas visibles que heredan el cuerpo." },
+      "button": { "displayName": "Acción", "purpose": "Botones compartidos del editor." },
+      "engine-status": { "displayName": "Estado", "purpose": "Versión, catálogo y ayudas compactas." },
+      "heading": { "displayName": "Cabecera", "purpose": "Título de sección; sin tamaño explícito atribuido." },
+      "diagnostic": { "displayName": "Ruta", "purpose": "Rutas de archivos con salto de línea." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "control-transition", "value": "background 0.12s, border-color 0.12s", "purpose": "Interacción de los botones compartidos." },
+      { "name": "busy-spinner", "value": "spin 0.8s linear infinite", "purpose": "Actividad del Spinner existente." },
+      { "name": "clipboard-feedback", "value": "1800ms", "purpose": "Duración del texto URL copiada; temporizador de estado, no animación visual." }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Crear cartela editable",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Acción principal del formulario; deshabilitada cuando falta texto, motor o hay actividad.",
+      "html": "<button type=\"button\" class=\"ds-btn ds-primary\">Crear cartela editable</button>",
+      "css": ".ds-btn{font-family:var(--hoard-font-sans,sans-serif);display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border-radius:6px;border:1px solid color-mix(in srgb,var(--hoard-border,#423543) 55%,var(--hoard-border-hover,#69576b));font-size:12.5px;font-weight:550;cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s}.ds-primary{background:var(--hoard-accent,#de6fe8);border-color:var(--hoard-accent,#de6fe8);color:var(--hoard-accent-ink,#1a131b);font-weight:650}.ds-primary:hover:not(:disabled){background:var(--hoard-accent-strong,#e692ee);border-color:var(--hoard-accent-strong,#e692ee)}.ds-btn:focus-visible{outline:2px solid var(--hoard-accent,#de6fe8);outline-offset:1px}.ds-btn:disabled{opacity:.45;cursor:not-allowed}"
+    },
+    {
+      "name": "Herramientas MCP nativas",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Botón secundario para consultar el catálogo del motor disponible.",
+      "html": "<button type=\"button\" class=\"ds-secondary\">Herramientas MCP nativas</button>",
+      "css": ".ds-secondary{font-family:var(--hoard-font-sans,sans-serif);display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border-radius:6px;border:1px solid color-mix(in srgb,var(--hoard-border,#423543) 55%,var(--hoard-border-hover,#69576b));background:var(--hoard-hover,#382b39);color:var(--hoard-text,#ebe1ec);font-size:12.5px;font-weight:550;cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s}.ds-secondary:hover:not(:disabled){background:var(--hoard-hover,#382b39);border-color:var(--hoard-border-hover,#69576b)}.ds-secondary:focus-visible{outline:2px solid var(--hoard-accent,#de6fe8);outline-offset:1px}.ds-secondary:disabled{opacity:.45;cursor:not-allowed}"
+    },
+    {
+      "name": "Texto de cartela",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Etiqueta visible y campo editable; el estilo de foco modifica el borde.",
+      "html": "<label class=\"ds-label\"><span>Texto de la cartela</span><input class=\"ds-field\" required maxlength=\"300\" value=\"Motor propio de Lumiere\"></label>",
+      "css": ".ds-label{display:grid;gap:5px;font-family:var(--hoard-font-sans,sans-serif);font-size:13px;line-height:1.4;color:var(--hoard-text,#ebe1ec)}.ds-field{box-sizing:border-box;width:100%;min-width:0;height:28px;padding:0 8px;border-radius:5px;border:1px solid color-mix(in srgb,var(--hoard-border,#423543) 55%,var(--hoard-border-hover,#69576b));background:var(--hoard-sunken,#161016);color:var(--hoard-text,#ebe1ec);font:inherit;font-size:12.5px}.ds-field:focus{border-color:var(--hoard-accent,#de6fe8);outline:none}.ds-field::placeholder{color:var(--hoard-text-dim,#a59ba6)}"
+    },
+    {
+      "name": "Composición guardada",
+      "kind": "input",
+      "refersTo": "saved-selector",
+      "description": "Selector nativo con nombre, motor y fecha. La muestra no consulta proyectos.",
+      "html": "<label class=\"ds-saved\">Composición guardada<select class=\"ds-select\"><option>Elegir composición</option><option selected>Motor propio de Lumiere · Lumiere Motion · 13/10/26, 11:39</option></select></label>",
+      "css": ".ds-saved{font-family:var(--hoard-font-sans,sans-serif);font-size:13px;line-height:1.4;color:var(--hoard-text,#ebe1ec)}.ds-select{box-sizing:border-box;width:100%;min-width:0;height:28px;padding:0 4px;appearance:auto;border-radius:5px;border:1px solid color-mix(in srgb,var(--hoard-border,#423543) 55%,var(--hoard-border-hover,#69576b));background:var(--hoard-sunken,#161016);color:var(--hoard-text,#ebe1ec);font:inherit;font-size:12.5px}.ds-select:focus{border-color:var(--hoard-accent,#de6fe8);outline:none}"
+    },
+    {
+      "name": "Estado de motores",
+      "kind": "custom",
+      "description": "Nombres propios, versión y número esperado, en fila adaptable al ancho.",
+      "html": "<div class=\"ds-engines\"><span><strong>Lumiere Motion</strong> · 1.0.0 · 21</span><span><strong>Lumiere Edit</strong> · 1.0.0 · 9</span></div>",
+      "css": ".ds-engines{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-family:var(--hoard-font-sans,sans-serif);font-size:12px;line-height:1.4;color:var(--hoard-text,#ebe1ec)}"
+    },
+    {
+      "name": "Archivos del resultado",
+      "kind": "custom",
+      "description": "Separación plana de resultado, enlaces distintos y ruta divisible. No incluye una imagen externa ni ejecuta descargas.",
+      "html": "<div class=\"ds-result\"><a href=\"#project\">Descargar proyecto editable</a><a href=\"#video\">Descargar vídeo renderizado</a><code>composiciones/cartela/cartela.lumotion</code></div>",
+      "css": ".ds-result{display:grid;gap:8px;border-top:1px solid var(--hoard-border,#423543);padding-top:14px;font-family:var(--hoard-font-sans,sans-serif);font-size:13px;line-height:1.4;color:var(--hoard-text,#ebe1ec)}.ds-result code{font-size:11px;overflow-wrap:anywhere}.ds-result a{color:inherit}.ds-result a:focus-visible{outline:2px solid var(--hoard-accent,#de6fe8);outline-offset:1px}"
+    },
+    {
+      "name": "Catálogo de herramientas",
+      "kind": "custom",
+      "description": "Disclosure nativo consultable con altura máxima y desplazamiento. Muestra estática de su estructura.",
+      "html": "<details class=\"ds-catalogue\" open><summary>motion · 21 live MCP tools</summary><ul><li><code>render_frame</code> — Renderizar un fotograma.</li></ul></details>",
+      "css": ".ds-catalogue{max-height:250px;overflow:auto;font-family:var(--hoard-font-sans,sans-serif);font-size:13px;line-height:1.4;color:var(--hoard-text,#ebe1ec)}.ds-catalogue>summary{cursor:pointer}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Taller existente de Lumiere",
+    "overview": "Extracción Operate de una extensión del editor oscuro y violeta existente. La descripción se infiere del código y las capturas; no es una identidad nueva elegida por Luis. Recuperar una composición, crear una cartela o secuencia, ver su resultado y acceder a archivos distintos define esta superficie.",
+    "keyCharacteristics": ["Selector guardado con nombre, motor y fecha", "Controles compactos", "Resultados próximos a sus acciones", "Filas adaptables y rutas divisibles", "Datos y formatos propios con originales preservados"],
+    "rules": [],
+    "dos": ["Do mantener tokens y controles Hoard de Lumiere.", "Do distinguir PNG, editable y vídeo y avisar de fuentes anteriores.", "Do preservar originales y licencias históricas.", "Do citar capturas recibidas como evidencia recibida."],
+    "donts": ["Don't transformar esta ficha en rediseño global.", "Don't presentar adaptadores renombrados como código incorporado.", "Don't inferir paridad universal, modelos instalados o pruebas en vivo.", "Don't afirmar que copiar una URL importa el vídeo."]
+  }
+}
