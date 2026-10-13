@@ -146,6 +146,56 @@ def test_storyboard_default_times_and_tampered_asset_are_explicit(tmp_path):
     with pytest.raises(LumiereError):store.storyboard_image(saved['id'],1,'../outside')
 
 
+@BROWSER
+def test_storyboard_reports_actual_source_bytes_changed_outside_saved_revision(tmp_path):
+    store=HtmlMotion(tmp_path)
+    red=b'<body style="margin:0;background:red"><script>window.seek=t=>{};</script></body>'
+    blue=red.replace(b'background:red',b'background:blue')
+    saved=store.save(html=red.decode(),width=64,height=36,duration=1)
+    Path(saved['source_path']).write_bytes(blue)
+    result=store.storyboard(saved['id'],[0])
+    assert result['source_sha256']==hashlib.sha256(blue).hexdigest()
+    assert result['saved_source_sha256']==hashlib.sha256(red).hexdigest()
+    assert result['source_matches_revision'] is False
+    with Image.open(BytesIO(store.storyboard_image(saved['id'],1,result['id'],0))) as image:
+        assert image.getpixel((10,10))[:3]==(0,0,255)
+    assert store.storyboard_source(saved['id'],1,result['id'])==blue
+    assert Path(saved['source_path']).read_bytes()==blue
+
+
+@BROWSER
+def test_storyboard_worker_load_is_bound_to_bytes_before_concurrent_file_edit(tmp_path,monkeypatch):
+    import lumiere_hoard.html_motion as module
+    store=HtmlMotion(tmp_path)
+    red=b'<body style="margin:0;background:red"><script>window.seek=t=>{};</script></body>'
+    blue=red.replace(b'background:red',b'background:blue')
+    saved=store.save(html=red.decode(),width=64,height=36,duration=1)
+    OriginalWorker=module.HtmlFrameWorker
+    class EditingWorker(OriginalWorker):
+        def __enter__(self):
+            Path(saved['source_path']).write_bytes(blue)
+            return super().__enter__()
+    monkeypatch.setattr(module,'HtmlFrameWorker',EditingWorker)
+    result=store.storyboard(saved['id'],[0,1])
+    assert result['source_sha256']==hashlib.sha256(red).hexdigest() and result['source_matches_revision'] is True
+    for i in range(2):
+        with Image.open(BytesIO(store.storyboard_image(saved['id'],1,result['id'],i))) as image:
+            assert image.getpixel((10,10))[:3]==(255,0,0)
+    assert store.storyboard_source(saved['id'],1,result['id'])==red
+    assert Path(saved['source_path']).read_bytes()==blue
+
+
+@BROWSER
+def test_captured_document_keeps_relative_resource_base(tmp_path):
+    store=HtmlMotion(tmp_path)
+    html='<body style="margin:0"><img src="asset.png"><script>window.seek=t=>{};</script></body>'
+    saved=store.save(html=html,width=64,height=36,duration=1)
+    Image.new('RGB',(64,36),'green').save(Path(saved['source_path']).parent/'asset.png')
+    result=store.storyboard(saved['id'],[0])
+    with Image.open(BytesIO(store.storyboard_image(saved['id'],1,result['id'],0))) as image:
+        assert image.getpixel((10,10))[:3]==(0,128,0)
+
+
 @pytest.mark.parametrize("params", [{"fps": float("nan")}, {"duration": float("inf")}, {"duration": 0}, {"width": 0}])
 def test_invalid_geometry_and_timing(tmp_path, params):
     with pytest.raises(LumiereError):

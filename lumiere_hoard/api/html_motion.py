@@ -78,6 +78,13 @@ def storyboard_frame(request: Request, composition: str, revision: int, storyboa
     return Response(data, media_type='image/png', headers={'Cache-Control':'no-store'})
 
 
+@router.get('/{composition}/revisions/{revision}/storyboards/{storyboard}/source')
+def storyboard_source(request: Request, composition: str, revision: int, storyboard: str):
+    data = _store(request).storyboard_source(composition, revision, storyboard)
+    return Response(data, media_type='text/html', headers={'Cache-Control':'no-store',
+        'Content-Disposition':'attachment; filename="composition-reviewed.html"'})
+
+
 @router.get("/{composition}/revisions/{revision}/render/{job}")
 def video(request: Request, composition: str, revision: int, job: str):
     store = _store(request)

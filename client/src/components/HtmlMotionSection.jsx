@@ -159,14 +159,17 @@ export default function HtmlMotionSection({ projectId = null, onReceived }) {
         {preview && <figure><img src={preview.url} alt={`${t.preview} · ${preview.at} s · ${t.saved} ${preview.revision}`} /><figcaption>{preview.at} s · {t.saved}: {preview.revision}</figcaption></figure>}
         <div className="html-motion-actions">
           <label className="field-label"><span>{String(lang).startsWith('es') ? 'Momentos (segundos)' : 'Moments (seconds)'}</span>
-            <input className="field" value={moments} placeholder={String(lang).startsWith('es') ? 'Vacío: cuatro momentos' : 'Empty: four moments'} onChange={(e) => setMoments(e.target.value)} /></label>
+            <input className="field" value={moments} aria-describedby="html-motion-moments-help" placeholder="0, 0.5, 1" onChange={(e) => setMoments(e.target.value)} /></label>
           <button type="button" className="btn" disabled={busy || dirty || active} onClick={reviewMoments}>{String(lang).startsWith('es') ? 'Revisar varios momentos' : 'Review multiple moments'}</button>
         </div>
+        <p className="muted" id="html-motion-moments-help">{String(lang).startsWith('es') ? 'Separa los momentos con comas y usa punto decimal: 0, 0.5, 1. Déjalo vacío para cuatro momentos.' : 'Separate moments with commas and use a decimal point: 0, 0.5, 1. Leave empty for four moments.'}</p>
         {storyboard && storyboard.composition === saved.id && <figure className="html-motion-storyboard">
           <img src={storyboard.url} alt={`${String(lang).startsWith('es') ? 'Hoja de fotogramas' : 'Frame sheet'} · ${t.saved} ${storyboard.revision}`} />
           <figcaption>{t.saved}: {storyboard.revision} · {storyboard.times.length} {String(lang).startsWith('es') ? 'fotogramas' : 'frames'}</figcaption>
           {storyboard.revision !== saved.revision && <p className="muted">{String(lang).startsWith('es') ? 'Esta hoja corresponde a una versión anterior.' : 'This sheet uses an earlier revision.'}</p>}
+          {storyboard.source_matches_revision === false && <p className="muted">{String(lang).startsWith('es') ? 'La fuente capturada difiere de la versión guardada. La hoja conserva el HTML que se ha renderizado.' : 'The captured source differs from the saved revision. The sheet keeps the HTML that was rendered.'}</p>}
           <div className="html-motion-actions"><a href={storyboard.url} download>{String(lang).startsWith('es') ? 'Descargar hoja' : 'Download sheet'}</a>
+            {storyboard.source_url && <a href={storyboard.source_url} download>{String(lang).startsWith('es') ? 'Descargar fuente revisada' : 'Download reviewed source'}</a>}
             {storyboard.frames.map((frame, index) => <a key={index} href={frame.url} download>{frame.at_s.toLocaleString(String(lang).startsWith('es') ? 'es-ES' : 'en-GB', { maximumFractionDigits: 6 })} s</a>)}</div>
         </figure>}
         {job && <div role="status" className="html-motion-actions"><span>{String(lang).startsWith("es") ? ({ queued: "En cola", running: "Exportando", done: "Vídeo listo", failed: "Exportación fallida", canceled: "Exportación cancelada" }[job.state] || job.state) : job.state} · {Math.round(job.progress * 100)}%</span>{active && <button type="button" className="btn" onClick={() => operate(async () => setJob(await appApi.jobCancel(job.id)))}>{t.cancel}</button>}</div>}

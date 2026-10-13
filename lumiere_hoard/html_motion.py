@@ -209,6 +209,14 @@ class HtmlMotion:
                                         device_scale_factor=1, locale="es-ES", timezone_id="Europe/Madrid")
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
+                if 'captured_source_b64' in manifest:
+                    import base64
+                    captured = base64.b64decode(manifest['captured_source_b64'], validate=True)
+                    if hashlib.sha256(captured).hexdigest() != manifest['source_sha256']:
+                        raise LumiereError('Captured HTML does not match its source hash.', code='html_motion_integrity')
+                    # Serve the verified in-memory document at its original URL:
+                    # relative resources and location semantics remain unchanged.
+                    page.route(Path(manifest['source_path']).as_uri(), lambda route: route.fulfill(body=captured, content_type='text/html; charset=utf-8'))
                 page.goto(Path(manifest["source_path"]).as_uri(), wait_until="load")
                 page.evaluate("async () => { await document.fonts.ready; await Promise.all([...document.images].map(i => i.decode())); }")
                 if not page.evaluate("typeof window.seek === 'function'"):
@@ -246,8 +254,15 @@ class HtmlMotion:
         moments = list(times) if times is not None else [manifest['duration']*i/3 for i in range(4)]
         if not moments or any(not math.isfinite(t) or t < 0 or t > manifest['duration'] for t in moments):
             raise LumiereError('Storyboard times must be within the composition, in seconds.', code='html_motion_time')
+        try:
+            captured_source = Path(manifest['source_path']).read_bytes()
+        except OSError:
+            raise LumiereError('HTML source could not be read.', code='html_motion_source') from None
+        source_hash = hashlib.sha256(captured_source).hexdigest()
+        import base64
+        worker_manifest = {**manifest, 'source_sha256':source_hash, 'captured_source_b64':base64.b64encode(captured_source).decode('ascii')}
         originals, previews = [], []
-        with HtmlFrameWorker(manifest) as worker:
+        with HtmlFrameWorker(worker_manifest) as worker:
             for at in moments:
                 data = worker.frame(at)
                 originals.append(data)
@@ -276,10 +291,13 @@ class HtmlMotion:
         destination.mkdir(parents=True, exist_ok=False)
         base = f'/api/html-motion/{composition}/revisions/{manifest["revision"]}/storyboards/{identity}'
         result = {'id':identity, 'composition':composition, 'revision':manifest['revision'], 'times':moments,
-                  'source_sha256':manifest['source_sha256'], 'image_sha256':hashlib.sha256(png).hexdigest(),
+                  'source_sha256':source_hash, 'saved_source_sha256':manifest['source_sha256'],
+                  'source_matches_revision':source_hash==manifest['source_sha256'], 'source_url':base+'/source',
+                  'image_sha256':hashlib.sha256(png).hexdigest(),
                   'width':sheet.width, 'height':sheet.height, 'url':base+'/image', 'frames':[]}
         # The receipt is the publication marker; failures remove only these new derived files.
         try:
+            (destination/'source.html').write_bytes(captured_source)
             for i, (at, data) in enumerate(zip(moments, originals)):
                 (destination/f'frame-{i}.png').write_bytes(data)
                 result['frames'].append({'at_s':at, 'sha256':hashlib.sha256(data).hexdigest(), 'url':base+f'/frames/{i}'})
@@ -301,7 +319,7 @@ class HtmlMotion:
         receipt = folder/'manifest.json'
         if not receipt.is_file():raise NotFound('Storyboard not found.')
         result = json.loads(receipt.read_text(encoding='utf-8'))
-        if result['composition'] != composition or result['revision'] != revision or result['source_sha256'] != manifest['source_sha256']:
+        if result['composition'] != composition or result['revision'] != revision or result.get('saved_source_sha256',result['source_sha256']) != manifest['source_sha256']:
             raise LumiereError('Storyboard source does not match its revision.', code='html_motion_integrity')
         if frame is not None:
             if frame < 0 or frame >= len(result['frames']):raise NotFound('Storyboard frame not found.')
@@ -312,6 +330,17 @@ class HtmlMotion:
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest()!=expected:
             raise LumiereError('Storyboard image no longer matches its recorded hash.', code='html_motion_integrity')
+        return data
+
+    def storyboard_source(self, composition: str, revision: int, storyboard: str) -> bytes:
+        self.storyboard_image(composition, revision, storyboard)
+        folder = (self.folder(composition)/str(revision)/'storyboards'/storyboard).resolve()
+        result = json.loads((folder/'manifest.json').read_text(encoding='utf-8'))
+        source = folder/'source.html'
+        if not source.is_file():raise NotFound('Captured HTML is not available for this older sheet.')
+        data=source.read_bytes()
+        if hashlib.sha256(data).hexdigest()!=result['source_sha256']:
+            raise LumiereError('Captured HTML no longer matches its recorded hash.', code='html_motion_integrity')
         return data
 
     def queue_render(self, svc, composition: str, revision: int | None = None) -> dict:
