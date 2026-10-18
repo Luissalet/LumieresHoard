@@ -83,3 +83,25 @@ def test_ui_route_downloads_only_a_finished_compression(client, source):
     assert job["state"] == "done", job
     download = client.get(job["result"]["url"])
     assert download.status_code == 200 and len(download.content) <= 150000
+
+
+def test_publish_when_app_work_and_output_are_on_different_drives(source, tmp_path):
+    import tempfile
+    from conftest import make_services
+    # Windows CI/local worktrees commonly live on another volume than pytest's temp.
+    workspace = Path.cwd()
+    if workspace.anchor.lower() == tmp_path.anchor.lower():
+        pytest.skip("This regression requires two mounted volumes")
+    cache = workspace / ".pytest_cache"
+    cache.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="compression-drive-", dir=cache) as data:
+        svc = make_services(Path(data))
+        svc.start()
+        try:
+            assert svc.config.work_dir.anchor.lower() != source.anchor.lower()
+            job = compression.start(svc, str(source), .15)
+            assert job["state"] == "done", job
+            result = Path(job["result"]["path"])
+            assert result.parent == source.parent and result.stat().st_size <= 150000
+        finally:
+            svc.stop()

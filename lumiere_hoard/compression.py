@@ -59,7 +59,8 @@ def run(svc, ctx) -> dict:
     if destination.exists():
         raise LumiereError("The output already exists; start a new compression job.")
     handle = ctx.handle()
-    with tempfile.TemporaryDirectory(prefix="compress-", dir=svc.config.work_dir) as scratch:
+    # Keep the encoded temporary on the destination volume for atomic publication.
+    with tempfile.TemporaryDirectory(prefix="compress-", dir=folder) as scratch:
         work = Path(scratch)
         encoded = work / "output.mp4"
         for attempt in range(2):
