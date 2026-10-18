@@ -24,6 +24,7 @@ from .ops import OP_NAMES, PRESETS, RAMP_PRESETS, op_reference
 from .render import filters as fx
 from .render import formats as formats_mod
 from .render import runner
+from . import compression
 from .services import Services
 from .timeline import TRANSITIONS
 from .util import ms_to_tc, parse_time
@@ -1169,6 +1170,11 @@ TOOLS: list[Tool] = [
          "Matches what clips say, their names and tags; place='best' puts them as muted overlays; add_overlay op places one.\n"
          "Sinónimos: planos de recurso, imágenes de apoyo, cubrir con vídeo.\nKeywords: b-roll, cutaway, overlay, stock footage, keywords.",
          BrollArgs, _ann(False), run_broll),
+    Tool("video_compress", "Compress a local video under a maximum MB size, preserving the original. Comprimir vídeo.\n"
+         "Two-pass H.264, same picture size (odd dimensions padded by one pixel), first audio track; AAC audio is copied unchanged. "
+         "A job with progress, cancellation and a checked byte limit. max_mb uses decimal MB. No loudness change. "
+         "Keywords: compress, smaller video, 25 MB, file size limit.", compression.CompressArgs, _ann(False),
+         lambda s, a: compression.start(s, **a.model_dump())),
     Tool("render_start", "Export the project to a video file (MP4, HEVC, ProRes, GIF, MP3...). Exportar vídeo.\n"
          "GPU encoder when available. Sinónimos: renderizar, sacar el vídeo, descargar, varios formatos a la vez, 16:9 y 9:16, subtítulos traducidos.\n"
          "Keywords: render, export, mp4, multi-format, aspect ratios, burned translated captions.", RenderArgs, _ann(False), run_render),

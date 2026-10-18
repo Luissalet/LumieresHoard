@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { go, useApp } from "../App.jsx";
 import { ConfirmButton, Field, Icon, Modal, Spinner } from "../components/ui.jsx";
+import VideoCompress from "../components/VideoCompress.jsx";
 import ImportDialog from "../components/ImportDialog.jsx";
 import TimelineImportDialog from "../components/TimelineImportDialog.jsx";
 import CompositionsSection from "../components/CompositionsSection.jsx";
@@ -163,6 +164,7 @@ export default function Home() {
   const [projects, setProjects] = useState(null);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [compressing, setCompressing] = useState(false);
   const [importingTimeline, setImportingTimeline] = useState(false);
   const [creativeMediaId, setCreativeMediaId] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(null);
@@ -202,7 +204,8 @@ export default function Home() {
 
         <div className="section-title">
           <h2>{t("media_library")} {media ? <span className="muted" style={{ fontWeight: 400 }}>({media.length})</span> : null}</h2>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button type="button" className="btn" onClick={() => setCompressing(true)}>{t("compress_title")}</button>
             <button type="button" className="btn" onClick={pickUpload}><Icon name="upload" size={14} />{t("upload_files")}</button>
             <button type="button" className="btn" onClick={() => setImporting(true)}><Icon name="folder" size={14} />{t("import_media")}</button>
           </div>
@@ -227,6 +230,7 @@ export default function Home() {
       {creating ? <NewProject onClose={() => setCreating(false)} /> : null}
       {importingTimeline ? <TimelineImportDialog onClose={() => { setImportingTimeline(false); load(); }} /> : null}
       {savingTemplate ? <SaveTemplateDialog project={savingTemplate} onClose={() => setSavingTemplate(null)} onSaved={() => { setTplKey((k) => k + 1); load(); }} /> : null}
+      {compressing ? <VideoCompress media={media || []} onClose={() => setCompressing(false)} /> : null}
       {importing ? <ImportDialog onClose={() => setImporting(false)} onImported={refreshMedia} /> : null}
     </div>
   );

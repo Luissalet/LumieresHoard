@@ -1,5 +1,9 @@
-// UI strings. Spanish (Spain) is the default; English is used when the browser language is English.
+// UI strings. English is the default; an explicit saved language takes precedence.
 const es = {
+  compress_title: "Comprimir vídeo", compress_help: "Crea un MP4 bajo el tamaño máximo. Conserva el original y la resolución; no cambia el volumen. Se usa la primera pista de audio.",
+  compress_library: "Vídeo de la biblioteca", compress_pick: "Elige un vídeo o pega su ruta abajo…", compress_path: "Ruta del vídeo",
+  compress_limit: "Tamaño máximo (MB)", compress_mb_help: "1 MB = 1.000.000 bytes. Se guarda junto al original con otro nombre.", compress_download: "Descargar MP4",
+
   creative_video_source: "Vídeo para el taller creativo", creative_video_pick: "Elige un vídeo de la biblioteca…",
   timeline_import: "Importar montaje…", timeline_open: "Abrir montaje", timeline_path: "Ruta del archivo de montaje", timeline_format: "Formato",
   timeline_name_auto: "Nombre del archivo original", timeline_media_dirs: "Carpetas de los medios (opcional)", timeline_media_dirs_help: "Una carpeta por línea, si los vídeos o sonidos han cambiado de lugar.",
@@ -197,6 +201,10 @@ copied_n: "{n} clips copiados", copied_n_1: "1 clip copiado", pasted_n: "{n} cli
 };
 
 const en = {
+  compress_title: "Compress video", compress_help: "Create an MP4 under the maximum size. Keeps the original and picture size; volume is unchanged. Uses the first audio track.",
+  compress_library: "Library video", compress_pick: "Choose a video or paste its path below…", compress_path: "Video path",
+  compress_limit: "Maximum size (MB)", compress_mb_help: "1 MB = 1,000,000 bytes. Saved beside the original with a new name.", compress_download: "Download MP4",
+
   creative_video_source: "Video for the creative workshop", creative_video_pick: "Choose a library video…",
   timeline_import: "Import montage…", timeline_open: "Open montage", timeline_path: "Timeline file path", timeline_format: "Format",
   timeline_name_auto: "Original file name", timeline_media_dirs: "Media folders (optional)", timeline_media_dirs_help: "One folder per line, if the video or audio files have moved.",
@@ -400,9 +408,9 @@ export function initialLang() {
     const saved = localStorage.getItem(KEY);
     if (saved === "es" || saved === "en") return saved;
   } catch {
-    // storage may be blocked; Spanish is the default
+    // storage may be blocked; English is the default
   }
-  return "es";
+  return "en";
 }
 
 export function saveLang(lang) {

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from ..compression import CompressArgs
 from .. import ffmpeg as ff
 from ..errors import LumiereError, NotFound, Refused
 from ..render import runner
@@ -34,6 +35,22 @@ def job(request: Request, job_id: str):
 @router.post("/jobs/{job_id}/cancel")
 def cancel(request: Request, job_id: str):
     return services(request).jobs.cancel(job_id)
+
+
+@router.post("/video/compress")
+def compress_video(request: Request, body: CompressArgs):
+    return tool(request, "video_compress", **body.model_dump())
+
+
+@router.get("/jobs/{job_id}/file")
+def compressed_file(request: Request, job_id: str):
+    job = services(request).jobs.get(job_id)
+    if job["kind"] != "video_compress" or job["state"] != "done":
+        raise NotFound("That compression has no finished output.")
+    path = Path(job["result"]["path"])
+    if not path.is_file():
+        raise NotFound("The compressed video is no longer on disk.")
+    return FileResponse(path, filename=path.name)
 
 
 @router.get("/renders")

@@ -93,6 +93,8 @@ class Services:
         self.jobs.register("analyze", lambda ctx: analyze.analyze_job(self, ctx))
         self.jobs.register("transcribe", lambda ctx: analyze.transcribe_job(self, ctx))
         self.jobs.register("diarize", lambda ctx: speakers_mod.diarize_job(self, ctx))
+        from . import compression
+        self.jobs.register("video_compress", lambda ctx: compression.run(self, ctx))
         self.jobs.register("render", lambda ctx: runner.render_job(self, ctx))
         self.jobs.register("copy_cut", lambda ctx: runner.copy_cut_job(self, ctx))
         self.jobs.register("stabilize", lambda ctx: derive.stabilize_job(self, ctx))

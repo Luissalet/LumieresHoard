@@ -39,6 +39,7 @@ async function request(method, path, { params, body, form } = {}) {
 const e = encodeURIComponent;
 
 export const api = {
+  videoCompress: (body) => request("POST", "/api/video/compress", { body }),
   health: () => request("GET", "/api/health"),
   status: () => request("GET", "/api/status"),
   presets: () => request("GET", "/api/presets"),

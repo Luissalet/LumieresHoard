@@ -19,7 +19,7 @@ from .util import dumps, new_id
 
 log = logging.getLogger("lumiere.jobs")
 
-RENDER_KINDS = {"render", "preview_render", "html_motion"}
+RENDER_KINDS = {"video_compress", "render", "preview_render", "html_motion"}
 
 
 @dataclass
