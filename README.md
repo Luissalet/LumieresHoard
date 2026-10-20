@@ -1,3 +1,7 @@
+> **Absorbed by [Prospero's Hoard](https://github.com/Luissalet/ProsperosHoard).**
+> This project's capabilities are maintained in the merged Hoard, with independent modules initially disabled.
+> The code and instructions below remain as historical reference; use the linked repository for the current installation.
+
 <p align="center"><img src="app-icon.png" width="128" alt="Lumiere's Hoard icon"></p>
 
 # Lumiere's Hoard

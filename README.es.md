@@ -1,3 +1,7 @@
+> **Absorbido por [Prospero's Hoard](https://github.com/Luissalet/ProsperosHoard).**
+> Las funciones de este proyecto se mantienen en el Hoard fusionado, con módulos independientes y apagados inicialmente.
+> El código y las instrucciones siguientes se conservan como referencia histórica; usa el repositorio enlazado para la instalación actual.
+
 <p align="center"><img src="app-icon.png" width="128" alt="Icono de Lumiere's Hoard"></p>
 
 # Lumiere's Hoard
